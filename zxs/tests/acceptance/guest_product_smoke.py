@@ -266,19 +266,71 @@ class Smoke:
                 f"Authorization: {self.authorization}\r\n"
                 + "".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n").encode("ascii")
 
+    def probe_original_receipt(self, operation, deadline):
+        def remaining():
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError
+            return left
+
+        # This probe talks directly to the same guest binary, never to a proxy.
+        # Read to EOF so a false Content-Length: 0 cannot hide bytes after a 503.
+        endpoint = self.container + "/operations/" + operation
+        wire = bytearray()
+        with socket.create_connection((HOST, PORT), timeout=remaining()) as probe:
+            probe.settimeout(remaining())
+            probe.sendall(self.wire_head("GET", endpoint, {}))
+            while True:
+                probe.settimeout(remaining())
+                block = probe.recv(4096)
+                if not block:
+                    break
+                require(len(wire) + len(block) <= BODY_LIMIT + 256, "oversized receipt probe response")
+                wire.extend(block)
+        remaining()
+
+        framing = b"\r\nConnection: close\r\nCache-Control: no-store\r\n"
+        if wire == b"HTTP/1.1 503 Service Unavailable" + framing + b"Content-Length: 0\r\n\r\n":
+            return 503, None  # availability only; says nothing about the operation
+        head, end, body = wire.partition(b"\r\n\r\n")
+        require(end and len(body) <= BODY_LIMIT, "invalid receipt probe extent")
+        fields = framing + b"Content-Type: application/json\r\nContent-Length: " + str(len(body)).encode("ascii")
+        if head == b"HTTP/1.1 404 Not Found" + fields:
+            require(body == b'{"state":"not_found"}', "invalid negative receipt evidence")
+            return 404, None
+        require(head == b"HTTP/1.1 200 OK" + fields, "unexpected receipt probe status or framing")
+        try:
+            return 200, json.loads(body)
+        except (ValueError, RecursionError):
+            raise RuntimeError("invalid successful receipt JSON") from None
+
     def send_without_reading(self, method, target, fields, body, operation):
+        stage = {"POST": "append-receipt", "DELETE": "recycle-receipt"}[method]
+        print(f"ZXS-PRODUCT-SMOKE stage={stage} polling original operation after unretrieved reply", flush=True)
+        busy = absent = 0
         with socket.create_connection((HOST, PORT), timeout=15) as discarded:
             discarded.sendall(self.wire_head(method, target, fields) + body)
             deadline = time.monotonic() + 40
             while time.monotonic() < deadline:
-                status, raw = self.request("GET", self.container + "/operations/" + operation,
-                                           (200, 404))
-                receipt = json.loads(raw)
+                try:
+                    status, receipt = self.probe_original_receipt(operation, deadline)
+                except TimeoutError:
+                    break
                 if status == 200:
                     return receipt
-                require(receipt == {"state": "not_found"}, "unknown operation state")
-                time.sleep(0.2)
-        raise RuntimeError("receipt not visible after reply was discarded")
+                if status == 503:
+                    # The still-concurrent mutation can hold the one Argon2
+                    # verifier slot longer than this probe's server wait budget.
+                    # Other unavailable causes share the wire shape, so do not
+                    # infer absence or resend the mutation here.
+                    busy += 1
+                    if busy == 1:
+                        print(f"ZXS-PRODUCT-SMOKE stage={stage} receipt temporarily unavailable", flush=True)
+                else:
+                    absent += 1  # only the exact 404 from the selected ledger
+                time.sleep(max(0, min(0.2, deadline - time.monotonic())))
+        reason = "after unavailable responses" if busy else "without seeing the original receipt"
+        raise RuntimeError(f"{stage}: receipt poll timed out {reason} (503={busy}, 404={absent})")
 
     def interrupt_append(self, endpoint, append, before, after, original_receipt):
         staging = self.physical_container(self.container).parents[1] / "staging"
@@ -398,6 +450,7 @@ class Smoke:
         new = b"whole replacement \n\x01\x00" * 37
         first = self.save_headers(self.first_operation, self.first_node, base)
         append = self.save_headers(self.next_operation, self.next_node, new, self.first_node)
+        print("ZXS-PRODUCT-SMOKE stage=first-save", flush=True)
         _, raw = self.request("POST", endpoint, 200, headers=first, body=base)
         receipt = json.loads(raw)
         first_target = {"kind": "first_main", "name": "fixture.bin"}
@@ -406,6 +459,7 @@ class Smoke:
         require(self.receipt(self.next_operation, 404) == {"state": "not_found"},
                 "new operation is not absent")
 
+        print("ZXS-PRODUCT-SMOKE stage=interrupted-append", flush=True)
         self.interrupt_append(endpoint, append, base, new, receipt)
 
         # Retry the same operation with exactly the originally declared body.
@@ -463,12 +517,14 @@ def main():
     require(sys.argv[1:] in ([], ["--workspace-h2"], ["--workspace-fuse"]), "unknown fixture mode")
     guard()
     password = secrets.token_hex(24).encode("ascii")
+    print("ZXS-PRODUCT-SMOKE stage=helper-setup", flush=True)
     issue_setup(password)
     smoke = Smoke(password)
     try:
         smoke.start()
         smoke.run()
         if sys.argv[1:]:
+            print("ZXS-PRODUCT-SMOKE stage=workspace", flush=True)
             run_workspace_fixture(smoke, password, fuse=sys.argv[1:] == ["--workspace-fuse"])
     finally:
         smoke.stop()
