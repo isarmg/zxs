@@ -152,7 +152,7 @@ fn capture(
         },
         scope,
     )?;
-    let packet = channel.wait_offline(KIND, &digest, || worker.live())?;
+    let packet = channel.wait_offline(KIND, &digest, &worker)?;
     let verification = Verification::decode(packet, &id)?;
     worker.finish_verify(&channel)?;
     require_installed()?;

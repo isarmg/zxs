@@ -103,7 +103,7 @@ fn exchange(
     )?;
     let mut nonce = 0_u64;
     loop {
-        let packet = channel.wait_offline(Kind::InitData, &digest, || worker.live())?;
+        let packet = channel.wait_offline(Kind::InitData, &digest, &worker)?;
         if nonce != 0 && packet == step(3, nonce) {
             break;
         }

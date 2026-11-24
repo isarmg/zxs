@@ -85,7 +85,7 @@ fn exchange(
     let mut source: Option<ExternalSource> = None;
     let mut nonce = 0_u64;
     let prior = loop {
-        let payload = channel.wait_import(digest, || worker.live())?;
+        let payload = channel.wait_import(digest, worker)?;
         match payload[0] {
             1 if source.is_none() && payload == step(1, 0) => {
                 ticket.require_target(session)?;

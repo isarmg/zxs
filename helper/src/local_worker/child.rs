@@ -13,7 +13,7 @@ use rustix::{
 use std::{
     fs::File,
     io,
-    os::fd::AsFd,
+    os::fd::{AsFd, BorrowedFd},
     process::{Child, Command, Stdio},
     thread,
     time::{Duration, Instant},
@@ -97,6 +97,9 @@ impl Worker {
                 Err(e.into())
             }
         }
+    }
+    pub(super) fn wait_descriptor(&self) -> BorrowedFd<'_> {
+        self.fd.as_fd()
     }
     fn peek(&self) -> io::Result<Option<i32>> {
         loop {

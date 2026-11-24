@@ -1,9 +1,10 @@
 //! Dedicated original-maintenance control, not an externally callable service.
-//! Every receive is from the other still-live process of this one invocation,
+//! Every receive is from the exact held peer of this invocation,
 //! with `SCM_CREDENTIALS` and exactly the descriptors fixed by this stage.
-use super::bad;
+use super::{Worker, bad};
 use rustix::{
-    fd::{AsFd, OwnedFd},
+    event::{PollFd, PollFlags, poll},
+    fd::{AsFd, BorrowedFd, OwnedFd},
     net::{
         AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, ReturnFlags,
         SendAncillaryBuffer, SendAncillaryMessage, SendFlags, SocketFlags, SocketType, UCred,
@@ -14,7 +15,6 @@ use std::{
     fs::File,
     io::{self, IoSlice, IoSliceMut},
     mem::MaybeUninit,
-    time::Duration,
 };
 const MAGIC: &[u8; 8] = b"ZXSAMW1\0";
 const WIRE: usize = 8 + 1 + 32 + 32 + 65;
@@ -186,57 +186,122 @@ impl Channel {
             fds.map(File::from),
         ))
     }
-    pub(crate) fn wait_import(
-        &self,
-        digest: &[u8; 32],
-        live: impl Fn() -> io::Result<()>,
-    ) -> io::Result<Payload> {
-        self.wait_offline(Kind::ImportStep, digest, live)
+    pub(crate) fn wait_import(&self, digest: &[u8; 32], worker: &Worker) -> io::Result<Payload> {
+        self.wait_offline(Kind::ImportStep, digest, worker)
     }
     pub(crate) fn wait_offline(
         &self,
         kind: Kind,
         digest: &[u8; 32],
-        live: impl Fn() -> io::Result<()>,
+        worker: &Worker,
     ) -> io::Result<Payload> {
-        loop {
-            match self.receive::<0>(kind, digest) {
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    if let Err(exited) = live() {
-                        // A terminal packet may have arrived between EAGAIN and observing exit.
-                        return match self.receive::<0>(kind, digest) {
-                            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Err(exited),
-                            result => result.map(|(payload, _)| payload),
-                        };
-                    }
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                result => return result.map(|(payload, _)| payload),
-            }
-        }
-    }
-    pub(crate) fn eof(&self) -> io::Result<()> {
-        let mut buffer = [0];
-        let mut ctl = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1), ScmCredentials(1))];
-        let mut extras = RecvAncillaryBuffer::new(&mut ctl);
-        let msg = recvmsg(
-            &self.fd,
-            &mut [IoSliceMut::new(&mut buffer)],
-            &mut extras,
-            RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
-        )?;
-        if msg.bytes != 0
-            || msg
-                .flags
-                .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
-            || extras.drain().next().is_some()
-        {
+        if self.peer.pid != worker.pid {
             return Err(bad(
-                "offline maintenance worker did not close its exact result channel",
+                "offline maintenance channel is not the original worker's",
             ));
         }
-        Ok(())
+        wait_packet(
+            || self.receive::<0>(kind, digest).map(|(payload, _)| payload),
+            || poll_ready(self.fd.as_fd(), worker.wait_descriptor()),
+        )
+    }
+    pub(crate) fn eof(&self) -> io::Result<()> {
+        retry_interrupted(|| {
+            let mut buffer = [0];
+            let mut ctl =
+                [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1), ScmCredentials(1))];
+            let mut extras = RecvAncillaryBuffer::new(&mut ctl);
+            let msg = recvmsg(
+                &self.fd,
+                &mut [IoSliceMut::new(&mut buffer)],
+                &mut extras,
+                RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
+            )?;
+            if msg.bytes != 0
+                || msg
+                    .flags
+                    .intersects(ReturnFlags::TRUNC | ReturnFlags::CTRUNC)
+                || extras.drain().next().is_some()
+            {
+                return Err(bad(
+                    "offline maintenance worker did not close its exact result channel",
+                ));
+            }
+            Ok(())
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Readiness {
+    Input,
+    WorkerExited,
+    Unusable,
+}
+impl Readiness {
+    fn from_events(socket: PollFlags, worker: PollFlags) -> io::Result<Self> {
+        if (socket | worker).intersects(PollFlags::ERR | PollFlags::NVAL) {
+            Ok(Self::Unusable)
+        } else if worker.intersects(PollFlags::IN | PollFlags::HUP) {
+            Ok(Self::WorkerExited)
+        } else if socket.contains(PollFlags::HUP) {
+            Ok(Self::Unusable)
+        } else if socket.contains(PollFlags::IN) {
+            Ok(Self::Input)
+        } else {
+            Err(bad(
+                "no readiness for the original maintenance channel or worker",
+            ))
+        }
+    }
+
+    fn require_waitable(self) -> io::Result<()> {
+        match self {
+            Self::Input => Ok(()),
+            Self::WorkerExited => Err(bad(
+                "the original maintenance worker ended before the next step",
+            )),
+            Self::Unusable => Err(bad(
+                "the original maintenance channel or worker became unusable",
+            )),
+        }
+    }
+}
+
+fn poll_ready(socket: BorrowedFd<'_>, worker: BorrowedFd<'_>) -> io::Result<Readiness> {
+    let mut held = [
+        PollFd::from_borrowed_fd(socket, PollFlags::IN),
+        PollFd::from_borrowed_fd(worker, PollFlags::IN),
+    ];
+    poll(&mut held, None)?;
+    Readiness::from_events(held[0].revents(), held[1].revents())
+}
+
+fn retry_interrupted<T>(mut call: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    loop {
+        match call() {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            result => return result,
+        }
+    }
+}
+
+fn wait_packet(
+    mut receive: impl FnMut() -> io::Result<Payload>,
+    mut wait: impl FnMut() -> io::Result<Readiness>,
+) -> io::Result<Payload> {
+    let mut readiness = Readiness::Input;
+    loop {
+        // Read the exact packet even if the socket hung up or the original
+        // pidfd was reported ready. A queued terminal takes precedence;
+        // callers still require the exact child's exit and channel EOF.
+        match retry_interrupted(&mut receive) {
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                readiness.require_waitable()?;
+                readiness = retry_interrupted(&mut wait)?;
+            }
+            result => return result,
+        }
     }
 }
 
@@ -279,5 +344,78 @@ mod tests {
         assert!(worker.receive::<0>(Kind::ImportStep, &digest).is_err());
         drop(root);
         worker.eof().unwrap();
+    }
+
+    #[test]
+    fn queued_terminal_wins_after_simultaneous_hangup_and_exit_despite_interruptions() {
+        let terminal = [0x42; 65];
+        let mut packets = [
+            Err(io::ErrorKind::WouldBlock.into()),
+            Err(io::ErrorKind::Interrupted.into()),
+            Ok(terminal),
+        ]
+        .into_iter();
+        let mut events = [
+            Err(io::ErrorKind::Interrupted.into()),
+            Readiness::from_events(PollFlags::IN | PollFlags::HUP, PollFlags::IN),
+        ]
+        .into_iter();
+        assert_eq!(
+            wait_packet(|| packets.next().unwrap(), || events.next().unwrap()).unwrap(),
+            terminal
+        );
+        assert!(packets.next().is_none() && events.next().is_none());
+    }
+
+    #[test]
+    fn terminal_wake_with_no_packet_or_invalid_envelope_cannot_spin_or_succeed() {
+        for (socket, worker) in [
+            (PollFlags::empty(), PollFlags::IN),
+            (PollFlags::HUP, PollFlags::empty()),
+            (PollFlags::NVAL, PollFlags::empty()),
+        ] {
+            let mut wake = Some(Readiness::from_events(socket, worker));
+            assert!(
+                wait_packet(
+                    || Err(io::ErrorKind::WouldBlock.into()),
+                    || wake.take().unwrap(),
+                )
+                .is_err()
+            );
+            assert!(wake.is_none());
+        }
+
+        let mut packets = [
+            Err(io::ErrorKind::WouldBlock.into()),
+            Err(bad("invalid exact packet")),
+        ]
+        .into_iter();
+        let err =
+            wait_packet(|| packets.next().unwrap(), || Ok(Readiness::WorkerExited)).unwrap_err();
+        assert_eq!(err.to_string(), "invalid exact packet");
+    }
+
+    #[test]
+    fn queued_socket_input_on_held_synthetic_descriptors_is_not_eof() {
+        let (a, b) = pair().unwrap();
+        let credentials = UCred {
+            uid: getuid(),
+            gid: getgid(),
+            pid: getpid(),
+        };
+        let receiver = Channel::from_owned_child_session(a, credentials, [8; 32]).unwrap();
+        let sender = Channel::from_owned_child_session(b, credentials, [8; 32]).unwrap();
+        let (ended, signal) = rustix::pipe::pipe().unwrap();
+        drop(signal); // Synthetic readiness FD; no child or actual process is created.
+        sender
+            .send(Kind::VerifyContainer, &[3; 32], &[4; 65])
+            .unwrap();
+        drop(sender);
+        assert_eq!(
+            poll_ready(receiver.fd.as_fd(), ended.as_fd()).unwrap(),
+            Readiness::WorkerExited
+        );
+        assert!(receiver.eof().is_err()); // Reject and drain the surplus exact packet.
+        receiver.eof().unwrap();
     }
 }

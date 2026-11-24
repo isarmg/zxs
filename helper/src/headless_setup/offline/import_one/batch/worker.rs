@@ -147,9 +147,7 @@ impl Handoff<'_> {
         };
         let mut source = None;
         let (mut confirmed, prior) = loop {
-            let packet = self
-                .channel
-                .wait_offline(KIND, &digest, || self.worker.live())?;
+            let packet = self.channel.wait_offline(KIND, &digest, &self.worker)?;
             match row.accept(packet)? {
                 Next::Source => {
                     self.require(ticket, None)?;
@@ -190,9 +188,7 @@ impl Handoff<'_> {
 
     fn finish(&mut self, digest: &[u8; 32], count: usize) -> io::Result<()> {
         let count = u64::try_from(count).map_err(|_| refused())?;
-        let terminal = self
-            .channel
-            .wait_offline(KIND, digest, || self.worker.live())?;
+        let terminal = self.channel.wait_offline(KIND, digest, &self.worker)?;
         require_end(terminal, count)?;
         self.worker.finish_import(&self.channel)?;
         (self.require_installed)()
