@@ -1,4 +1,6 @@
-//! Private READY: no DATA arrival, CR1 candidate publication, or source retirement.
+//! Private READY and no-clobber arrivals. Never select CR1 or retire source.
+#[path = "arrival.rs"]
+mod arrival;
 #[path = "ready_tree.rs"]
 mod tree;
 
@@ -11,6 +13,7 @@ use super::{
     BoundJournal, Checked, Digest, File, HeldDir, HeldGuard, I, OpaquePin, PROOF, Pending, Route,
     Selected, absent, birth, create, intend, invalid, pin, positions, read_raw, same_file,
 };
+use arrival::Place;
 use std::{ffi::CStr, io};
 use tree::Tree;
 
@@ -34,14 +37,17 @@ impl Armed<'_, '_> {
     }
 
     fn require_bound(&self, layout: &[&CStr]) -> io::Result<()> {
+        self.require_scope(layout)?;
+        Place::Private.require_absence(self)
+    }
+
+    fn require_scope(&self, layout: &[&CStr]) -> io::Result<()> {
         let selected = self.plan.selected;
         self.plan.require_bound()?;
         require_layout(&self.plan.journal.directory, layout)?;
         self.guard
             .require(selected.roots.state, &selected.names.active)?;
-        absent(selected.roots.state, &selected.names.inactive)?;
-        absent(&selected.routes, &selected.names.route_stage)?;
-        absent(&selected.target_data, &selected.names.cid)
+        absent(selected.roots.state, &selected.names.inactive)
     }
 
     fn require_leaf(&self, at: &HeldDir) -> io::Result<()> {
@@ -62,11 +68,11 @@ struct Draft {
 }
 
 impl Draft {
-    fn require(&self, armed: &Armed<'_, '_>, expected: &Ready) -> io::Result<()> {
+    fn require(&self, armed: &Armed<'_, '_>, place: Place, expected: &Ready) -> io::Result<()> {
         let journal = &armed.plan.journal.directory;
         self.sidecar.require(journal, TARGET)?;
-        require_candidate(&self.candidate, journal, expected)?;
-        self.target.require(armed)?;
+        require_candidate(&self.candidate, place.candidate_site(armed), expected)?;
+        self.target.require(place.tree_site(armed.plan.selected))?;
         if expected.guard != armed.guard.checked.value().birth
             || expected.target_inode != self.target.at.entity.inode
         {
@@ -80,6 +86,7 @@ impl Draft {
 
 pub(super) struct HeldReady<'held, 'scope> {
     armed: Armed<'held, 'scope>,
+    place: Place,
     draft: Draft,
     ready: OpaquePin,
     checked: Checked<Ready>,
@@ -114,11 +121,12 @@ impl<'held, 'scope> Pending<'held, 'scope> {
         HeldReady {
             checked: Ready::decode(&raw, &journal.original)?,
             armed,
+            place: Place::Private,
             draft,
             ready,
             raw,
         }
-        .settle_with(sync_ready_parent)
+        .settle_with(sync_ready_parent, File::sync_all)
     }
 }
 
@@ -128,13 +136,13 @@ fn stage_ready_inputs(
 ) -> io::Result<(OpaquePin, OpaquePin, Ready)> {
     let journal = &armed.plan.journal.directory;
     armed.require(BEFORE_COPY)?;
-    target.require(armed)?;
+    target.require(Place::Private.tree_site(armed.plan.selected))?;
     let sidecar = create(journal, TARGET, &target.bytes)?;
     let i = armed.plan.journal.original.value();
     let raw = encode_route(i.scope.container, i.target)?;
     armed.require(HAS_TARGET_PROOF)?;
     sidecar.require(journal, TARGET)?;
-    target.require(armed)?;
+    target.require(Place::Private.tree_site(armed.plan.selected))?;
     let candidate = create(journal, CANDIDATE, &raw)?;
     let ready = Ready {
         guard: armed.guard.checked.value().birth,
@@ -149,11 +157,11 @@ fn stage_ready_inputs(
 fn recheck_pending(armed: &Armed<'_, '_>, draft: &Draft, planned: &Ready) -> io::Result<()> {
     let journal = &armed.plan.journal.directory;
     armed.require(HAS_CANDIDATE)?;
-    draft.require(armed, planned)?;
+    draft.require(armed, Place::Private, planned)?;
     draft.target.require_metadata(armed)?;
-    draft.target.settle(armed)?;
+    draft.target.settle(armed, Place::Private)?;
     armed.require_bound(HAS_CANDIDATE)?;
-    draft.require(armed, planned)?;
+    draft.require(armed, Place::Private, planned)?;
     journal.file.sync_all()?; // Both prerequisite names precede creation of READY.
     armed
         .plan
@@ -163,17 +171,18 @@ fn recheck_pending(armed: &Armed<'_, '_>, draft: &Draft, planned: &Ready) -> io:
     armed.require(HAS_CANDIDATE)?;
     draft.target.require_metadata(armed)?;
     armed.require_bound(HAS_CANDIDATE)?;
-    draft.require(armed, planned)
+    draft.require(armed, Place::Private, planned)
 }
 
 impl<'held, 'scope> HeldReady<'held, 'scope> {
-    /// The exact before-arrival layout only. Later published names and any
-    /// unproved pre-READY material are preserved and never repaired here.
+    /// Exact READY before CR1 selection: fully private, target arrived, or
+    /// target and candidate arrived. No pre-READY or mixed material is adopted.
     pub(super) fn reopen(selected: &'held Selected<'scope>) -> io::Result<Self> {
         selected.pre_ready_names()?;
         let route = Route::original(selected)?;
         let (parent, directory, _) = positions(selected, true)?;
-        require_layout(&directory, HAS_READY)?;
+        let place = Place::observe(selected, &directory)?;
+        require_layout(&directory, place.layout())?;
         let source = selected.observe_source()?;
         let intent = intend(selected, &route, &source, &directory)?;
         let inputs = (pin(&directory, I)?, pin(&directory, PROOF)?);
@@ -186,7 +195,9 @@ impl<'held, 'scope> HeldReady<'held, 'scope> {
         };
         let guard = plan.active()?;
         let armed = Armed { plan, guard };
-        armed.require(HAS_READY)?;
+        selected.pre_ready_names()?;
+        armed.require_scope(place.layout())?;
+        place.require_absence(&armed)?;
         let directory = &armed.plan.journal.directory;
         let ready = pin(directory, R)?;
         let raw: [u8; READY_BYTES] = read_raw(&ready, READY_BYTES)?
@@ -200,25 +211,27 @@ impl<'held, 'scope> HeldReady<'held, 'scope> {
             done: None,
         })?;
         let checked = Ready::decode(&raw, chain.intent())?;
-        let draft = reopen_draft(&armed, &chain, checked.value())?;
+        let draft = reopen_draft(&armed, place, &chain, checked.value())?;
         Self {
             armed,
+            place,
             draft,
             ready,
             checked,
             raw,
         }
-        .settle_with(File::sync_all)
+        .settle_with(File::sync_all, File::sync_all)
     }
 
     fn settle_with(
         self,
         sync_ready_parent: impl FnOnce(&File) -> io::Result<()>,
+        sync_routes: impl FnOnce(&File) -> io::Result<()>,
     ) -> io::Result<Self> {
         self.require()?;
         let plan = &self.armed.plan;
         let journal = &plan.journal;
-        self.draft.target.settle(&self.armed)?;
+        self.draft.target.settle(&self.armed, self.place)?;
         self.draft.sidecar.file.sync_all()?;
         self.draft.candidate.file.sync_all()?;
         self.ready.file.sync_all()?;
@@ -229,20 +242,27 @@ impl<'held, 'scope> HeldReady<'held, 'scope> {
         // Recovery might be seeing a visible but previously unconfirmed READY.
         // Only exact named evidence under the same current authority can settle.
         self.require()?;
+        self.sync_candidate_parent(sync_routes)?;
         self.draft.target.require_metadata(&self.armed)?;
-        self.armed.require_bound(HAS_READY)?;
-        self.require_records()?;
+        self.require_position()?;
         Ok(self)
     }
 
     fn require(&self) -> io::Result<()> {
-        self.armed.require(HAS_READY)?;
+        self.armed.plan.selected.pre_ready_names()?;
+        self.require_position()
+    }
+
+    fn require_position(&self) -> io::Result<()> {
+        self.armed.require_scope(self.place.layout())?;
+        self.place.require_absence(&self.armed)?;
         self.require_records()
     }
 
     fn require_records(&self) -> io::Result<()> {
         let directory = &self.armed.plan.journal.directory;
-        self.draft.require(&self.armed, self.checked.value())?;
+        self.draft
+            .require(&self.armed, self.place, self.checked.value())?;
         self.ready.require(directory, R)?;
         if read_raw(&self.ready, READY_BYTES)? != self.raw {
             return Err(invalid("the exact DATA move READY bytes changed"));
@@ -255,16 +275,27 @@ impl<'held, 'scope> HeldReady<'held, 'scope> {
     }
 }
 
-fn reopen_draft(armed: &Armed<'_, '_>, chain: &Journal, expected: &Ready) -> io::Result<Draft> {
+fn reopen_draft(
+    armed: &Armed<'_, '_>,
+    place: Place,
+    chain: &Journal,
+    expected: &Ready,
+) -> io::Result<Draft> {
     let directory = &armed.plan.journal.directory;
-    let candidate = pin(directory, CANDIDATE)?;
-    require_candidate(&candidate, directory, expected)?;
+    let site = place.candidate_site(armed);
+    let candidate = pin(site.0, site.1)?;
+    require_candidate(&candidate, site, expected)?;
     let sidecar = pin(directory, TARGET)?;
     let expect = Expect::target(chain)?;
     let bytes = read_raw(&sidecar, expect.extent()?)?;
     let proof = Proof::decode(&bytes, &expect)?;
     sidecar.require(directory, TARGET)?;
-    let target = Tree::cold(armed, (&proof, &bytes))?;
+    let target = Tree::cold(
+        armed,
+        (&proof, &bytes),
+        place.tree_site(armed.plan.selected),
+        expected.target_inode,
+    )?;
     Ok(Draft {
         target,
         sidecar,
@@ -272,8 +303,12 @@ fn reopen_draft(armed: &Armed<'_, '_>, chain: &Journal, expected: &Ready) -> io:
     })
 }
 
-fn require_candidate(candidate: &OpaquePin, journal: &HeldDir, expected: &Ready) -> io::Result<()> {
-    candidate.require(journal, CANDIDATE)?;
+fn require_candidate(
+    candidate: &OpaquePin,
+    (directory, name): (&HeldDir, &CStr),
+    expected: &Ready,
+) -> io::Result<()> {
+    candidate.require(directory, name)?;
     if read_raw(candidate, ROUTE_BYTES)? != expected.new_route
         || birth(&candidate.file)? != expected.new_birth
     {
@@ -281,7 +316,7 @@ fn require_candidate(candidate: &OpaquePin, journal: &HeldDir, expected: &Ready)
             "the exact prepared DATA move CR1 candidate changed",
         ));
     }
-    candidate.require(journal, CANDIDATE)
+    candidate.require(directory, name)
 }
 
 fn require_layout(directory: &HeldDir, layout: &[&CStr]) -> io::Result<()> {

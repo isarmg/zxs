@@ -313,3 +313,254 @@ fn cold_ready_checks_actual_target_sha_even_with_matching_native_proof() {
     assert_eq!(fs::read(journal.join("READY")).unwrap(), modeled);
     no_selection(&f);
 }
+
+fn final_data(f: &Fixture) -> PathBuf {
+    f.target.root.path.join("data").join(hex(C))
+}
+
+fn incoming_route(f: &Fixture) -> PathBuf {
+    f.system
+        .path
+        .join("container-routes")
+        .join(format!(".{}.incoming", hex(C)))
+}
+
+fn unchanged_authority(f: &Fixture) {
+    assert_eq!(
+        fs::read(f.route()).unwrap(),
+        crate::container_store::routes::encode(C, FROM).unwrap()
+    );
+    assert_eq!(fs::read(f.entry().join("payload")).unwrap(), RAW);
+    assert!(f.marker(true).is_file());
+    assert!(!f.journal().join("SWITCHED").exists());
+    assert!(!f.journal().join("DONE").exists());
+}
+
+#[test]
+fn both_arrivals_keep_exact_native_instances_and_leave_original_cr1_selected() {
+    use std::os::unix::fs::MetadataExt;
+
+    let f = Fixture::new();
+    let live = || f.state.require_named();
+    let selected = f.selected(&live);
+    let ready = Pending::prepare(&selected)
+        .unwrap()
+        .copy_to_ready()
+        .unwrap();
+    let old_tree = fs::metadata(f.stage_path()).unwrap().ino();
+    let private = f.journal().join("new-route");
+    let paper = fs::metadata(&private).unwrap().ino();
+    let paper_bytes = fs::read(&private).unwrap();
+    let ready_id = ready.id();
+    assert_eq!(ready.arrive().unwrap().id(), ready_id);
+    assert_eq!(fs::metadata(final_data(&f)).unwrap().ino(), old_tree);
+    let routes = incoming_route(&f);
+    assert_eq!(fs::metadata(&routes).unwrap().ino(), paper);
+    assert_eq!(fs::read(&routes).unwrap(), paper_bytes);
+    assert_eq!(
+        fs::read(
+            final_data(&f)
+                .join(f.entry().file_name().unwrap())
+                .join("payload")
+        )
+        .unwrap(),
+        RAW
+    );
+    assert!(!f.stage_path().exists());
+    assert!(!private.exists());
+    assert_eq!(
+        HeldReady::reopen(&selected).unwrap().arrive().unwrap().id(),
+        ready_id
+    );
+    unchanged_authority(&f);
+}
+
+#[test]
+fn cold_after_target_arrival_is_the_only_legal_intermediate_position() {
+    use std::os::unix::fs::MetadataExt;
+
+    let f = Fixture::new();
+    let arrived = final_data(&f);
+    let block = Cell::new(true);
+    let live = || {
+        f.state.require_named()?;
+        if block.get() && arrived.exists() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        Ok(())
+    };
+    let selected = f.selected(&live);
+    let ready = Pending::prepare(&selected)
+        .unwrap()
+        .copy_to_ready()
+        .unwrap();
+    let id = ready.id();
+    let original_inode = fs::metadata(f.stage_path()).unwrap().ino();
+    let result = ready.arrive();
+    assert_eq!(result.err().unwrap().kind(), io::ErrorKind::TimedOut);
+    assert_eq!(fs::metadata(&arrived).unwrap().ino(), original_inode);
+    assert!(!f.stage_path().exists());
+    assert!(f.journal().join("new-route").is_file());
+    assert!(!incoming_route(&f).exists());
+    unchanged_authority(&f);
+
+    block.set(false);
+    assert_eq!(
+        HeldReady::reopen(&selected).unwrap().arrive().unwrap().id(),
+        id
+    );
+    assert!(incoming_route(&f).is_file());
+    assert!(!f.journal().join("new-route").exists());
+    assert_eq!(fs::metadata(&arrived).unwrap().ino(), original_inode);
+    unchanged_authority(&f);
+}
+
+#[test]
+fn exact_both_arrived_can_settle_after_scoped_routes_parent_flush_failure() {
+    let f = Fixture::new();
+    let live = || f.state.require_named();
+    let selected = f.selected(&live);
+    let ready = Pending::prepare(&selected)
+        .unwrap()
+        .copy_to_ready()
+        .unwrap();
+    let id = ready.id();
+    let raw = fs::read(f.journal().join("new-route")).unwrap();
+    let attempted = Cell::new(false);
+    let result = ready.arrive_with(|file| {
+        same_file(&selected.routes, &selected.routes.file, file).unwrap();
+        assert!(final_data(&f).is_dir());
+        assert!(incoming_route(&f).is_file());
+        assert!(!f.journal().join("new-route").exists());
+        assert!(!f.stage_path().exists());
+        attempted.set(true);
+        Err(io::Error::other("fixture exact routes parent flush cut"))
+    });
+    assert!(result.is_err());
+    assert!(attempted.get());
+    assert_eq!(fs::read(incoming_route(&f)).unwrap(), raw);
+    assert_eq!(
+        HeldReady::reopen(&selected).unwrap().arrive().unwrap().id(),
+        id
+    );
+    unchanged_authority(&f);
+}
+
+#[test]
+fn an_unexpected_target_or_out_of_order_candidate_is_not_adopted() {
+    let f = Fixture::new();
+    let foreign = final_data(&f);
+    let insert = Cell::new(false);
+    let live = || {
+        f.state.require_named()?;
+        if insert.replace(false) {
+            ensure_dir(&foreign)?;
+            write_file(&foreign.join("foreign"), b"retain without replacing")?;
+        }
+        Ok(())
+    };
+    let selected = f.selected(&live);
+    let ready = Pending::prepare(&selected)
+        .unwrap()
+        .copy_to_ready()
+        .unwrap();
+    insert.set(true);
+    assert!(ready.arrive().is_err());
+    assert!(!insert.get());
+    assert!(HeldReady::reopen(&selected).is_err());
+    assert_eq!(
+        fs::read(foreign.join("foreign")).unwrap(),
+        b"retain without replacing"
+    );
+    assert_eq!(
+        fs::read(stage_entry(&f, 1, FIRST).join("payload")).unwrap(),
+        RAW
+    );
+    assert!(!incoming_route(&f).exists());
+    unchanged_authority(&f);
+
+    let f = Fixture::new();
+    let live = || f.state.require_named();
+    let selected = f.selected(&live);
+    Pending::prepare(&selected)
+        .unwrap()
+        .copy_to_ready()
+        .unwrap();
+    let private = f.journal().join("new-route");
+    let raw = fs::read(&private).unwrap();
+    fs::rename(&private, incoming_route(&f)).unwrap();
+    assert!(HeldReady::reopen(&selected).is_err());
+    assert_eq!(fs::read(incoming_route(&f)).unwrap(), raw);
+    assert!(!private.exists());
+    assert!(!final_data(&f).exists());
+    assert!(f.stage_path().is_dir());
+    unchanged_authority(&f);
+}
+
+#[test]
+fn a_same_byte_replacement_old_cr1_blocks_routes_sync_after_candidate_arrival() {
+    let f = Fixture::new();
+    let original = f.route();
+    let kept = f.system.path.join("kept-old-CR1");
+    let raw = fs::read(&original).unwrap();
+    let swap = Cell::new(true);
+    let live = || {
+        f.state.require_named()?;
+        if incoming_route(&f).exists() && swap.replace(false) {
+            fs::rename(&original, &kept)?;
+            write_file(&original, &raw)?;
+        }
+        Ok(())
+    };
+    let selected = f.selected(&live);
+    let ready = Pending::prepare(&selected)
+        .unwrap()
+        .copy_to_ready()
+        .unwrap();
+    let observed = Cell::new(false);
+    let result = ready.arrive_with(|_| {
+        observed.set(true);
+        Ok(())
+    });
+    assert!(result.is_err());
+    assert!(!swap.get());
+    assert!(!observed.get());
+    assert!(HeldReady::reopen(&selected).is_err());
+    assert_eq!(fs::read(&kept).unwrap(), raw);
+    assert_eq!(
+        fs::read(incoming_route(&f)).unwrap(),
+        crate::container_store::routes::encode(C, TO).unwrap()
+    );
+    assert!(final_data(&f).is_dir());
+    unchanged_authority(&f);
+}
+
+#[test]
+fn a_recreated_arrived_tree_is_not_the_ready_inode_even_with_same_bytes() {
+    let f = Fixture::new();
+    let live = || f.state.require_named();
+    let selected = f.selected(&live);
+    Pending::prepare(&selected)
+        .unwrap()
+        .copy_to_ready()
+        .unwrap();
+
+    let destination = final_data(&f);
+    let kept = f.target.root.path.join("data").join("kept-ready-tree");
+    fs::rename(f.stage_path(), &kept).unwrap();
+    ensure_dir(&destination).unwrap();
+    let leaf = crate::container_store::entry_leaf(1, FIRST);
+    let duplicate = destination.join(&leaf);
+    ensure_dir(&duplicate).unwrap();
+    for name in ["receipt", "payload"] {
+        fs::copy(kept.join(&leaf).join(name), duplicate.join(name)).unwrap();
+    }
+    let error = HeldReady::reopen(&selected).err().unwrap();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("exact READY inode"));
+    assert_eq!(fs::read(duplicate.join("payload")).unwrap(), RAW);
+    assert_eq!(fs::read(kept.join(leaf).join("payload")).unwrap(), RAW);
+    assert!(f.journal().join("new-route").exists());
+    assert!(!incoming_route(&f).exists());
+    unchanged_authority(&f);
+}

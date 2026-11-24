@@ -1,5 +1,5 @@
 //! One verified raw-content pass; a fresh copy never reads its bodies back.
-use super::{Armed, CStr, File, HeldDir, OpaquePin, invalid, io, pin, same_file};
+use super::{Armed, CStr, File, HeldDir, OpaquePin, Place, invalid, io, pin, same_file};
 use crate::container_store::{Body, Change, Error, Receipt, codec, entry_leaf};
 
 use super::super::super::{
@@ -53,10 +53,13 @@ impl Tree {
     pub(super) fn cold(
         armed: &Armed<'_, '_>,
         (proof, expected): (&Proof<'_>, &[u8]),
+        (parent, name): (&HeldDir, &CStr),
+        inode: u64,
     ) -> io::Result<Self> {
-        let selected = armed.plan.selected;
-        let at =
-            super::super::super::child(&selected.target_staging, &selected.names.target_stage)?;
+        let at = super::super::super::child(parent, name)?;
+        if at.entity.inode != inode {
+            return Err(invalid("the cold DATA target is not the exact READY inode"));
+        }
         let bytes = observe(armed, &at, Some(proof))?;
         if bytes != expected {
             return Err(invalid("the cold DATA move target differs from READY"));
@@ -71,23 +74,29 @@ impl Tree {
         Ok(())
     }
 
-    pub(super) fn require(&self, armed: &Armed<'_, '_>) -> io::Result<()> {
-        let selected = armed.plan.selected;
-        selected.target_staging.require_named()?;
+    pub(super) fn require(&self, (parent, name): (&HeldDir, &CStr)) -> io::Result<()> {
+        parent.require_named()?;
         self.at.require_named()?;
-        if !selected.target_staging.same_mount(&self.at)? {
+        if self.at.path != parent.checked_child_path(name)? || !parent.same_mount(&self.at)? {
             return Err(invalid(
-                "DATA move target is not on its exact staging mount",
+                "DATA move target is not at its exact held position",
             ));
         }
         Ok(())
     }
 
-    pub(super) fn settle(&self, armed: &Armed<'_, '_>) -> io::Result<()> {
-        self.require(armed)?;
+    pub(super) fn settle(&self, armed: &Armed<'_, '_>, place: Place) -> io::Result<()> {
+        let selected = armed.plan.selected;
+        let site = place.tree_site(selected);
+        self.require(site)?;
         self.at.file.sync_all()?;
-        armed.plan.selected.target_staging.file.sync_all()?;
-        self.require(armed)
+        if place != Place::Private {
+            selected.target_staging.require_named()?;
+            selected.target_staging.file.sync_all()?;
+            self.require(site)?;
+        }
+        site.0.file.sync_all()?;
+        self.require(site)
     }
 }
 
