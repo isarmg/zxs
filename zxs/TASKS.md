@@ -25,7 +25,7 @@
 | [外部文件导入](../helper/docs/guides/offline-imports.md) | [仅静态] [固定批次](docs/specs/offline-import-batch.md)仍需跨进程验父进程失答、原回执无源重放和半批恢复。保留来源；不就地覆盖非空盘，不迁移旧池。 |
 | 运行时断电、掉盘与权限变化 | [仅静态] 验缺盘冷启动、原盘恢复、其他容器独立可用、离线盘相关全局结果拒绝、掉电后的确定回执以及撤权不误报未找到。 |
 | [会话与后端复用](docs/specs/sessions.md) | [仅静态] 待已验证的 HTTPS/H2 入口确认新旧模式、到期、重启与只读原回执找回。 |
-| [分块上传与续传](docs/specs/resumable-uploads.md) | [仅静态] [剩余流式链路](docs/guides/resumable-upload-installed-qualification.md#流式链路待验)仍待验超过固定入站时限的拒绝和正文截断。服务端重启、会话到期和桌面断点续传也未验。 |
+| [分块上传与续传](docs/specs/resumable-uploads.md) | [仅静态] [剩余流式链路](docs/guides/resumable-upload-installed-qualification.md#流式链路待验)仍待验超过固定入站时限的拒绝和正文截断。服务端重启和会话到期也未验。另见[客户端 X11 客机的一次断线续传](../zxs-core/docs/guides/resumable-upload.md#x11-客机验收)。 |
 
 ## 可复核的验收入口
 

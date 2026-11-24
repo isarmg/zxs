@@ -18,6 +18,7 @@
 | Linux X11 离线丢弃封存 | 同一隔离客机。只丢弃选定的未尝试封存，未建立 TCP 连接，工作文件和原映射不变。 |
 | Linux X11 冲突归档与重新提交 | 同一隔离客机。旧基线提交实际返回 `409`；离线归档同一原号 `O`，不联网。另存已核定的当前头至新路径，显式提交生成新节点 `N3`；旧工作文件、封存和映射保留。 |
 | Linux CLI 单文件断点上传 | [隔离 Ubuntu/ext4 客机实测：`d75a1fe` 与 `cbe375c`](../zxs/docs/guides/resumable-upload-installed-qualification.md#已核对的-cli-客机验收)。覆盖真实回环 HTTPS/2 的断线、首块确认答复丢失后的显式续传及默认整文件对照。 |
+| Linux X11 桌面断点续传 | [`6a4b51d` 隔离 Ubuntu/ext4 客机实测](docs/guides/resumable-upload.md#x11-客机验收)。收到首块确认后断线，冷重开和核对原回执未自动发送；显式继续只发末尾 137 字节，原回执、唯一节点和正文准确。 |
 
 归档结果区只在登录后显示原号 `O` 的回执查询入口；本次实测只确认入口出现，未执行查询。
 
@@ -30,7 +31,7 @@
 | 真实 HTTPS/2 与安装后的冷恢复 | [仅静态] 仅含本项目的源码独立安装。对真实隔离服务完成签出、原子编辑、完整提交和读回；服务器耐久写入后丢回复，重开只查原回执。留存第二次本机编辑且仍显示未提交。 |
 | 错误与待决正文 | [仅静态] 在真实服务和 TLS 前端区分错账号、非 H2、空 503、错误 404、假回执；原正文丢失仍可查，但不发。控制组确认未提交时也不自动上传。 |
 | Linux 桌面其他环境 | Wayland、密码页输入法组合、登录后的切窗仍待测。 |
-| 流式分块与桌面断点续传 | [一个合法 8 MiB 流式上传](../zxs/docs/guides/resumable-upload-installed-qualification.md#已核对的单块流式上传)已在隔离客机通过。[仅静态] 仍待验[超时拒绝和截断](../zxs/docs/guides/resumable-upload-installed-qualification.md#流式链路待验)、会话到期、服务端重启、大文件吞吐及[桌面断点续传](docs/guides/resumable-upload.md)。 |
+| 分块传输待验边界 | [一个合法 8 MiB 流式上传](../zxs/docs/guides/resumable-upload-installed-qualification.md#已核对的单块流式上传)已在隔离客机通过。[仅静态] 仍待验[超时拒绝和截断](../zxs/docs/guides/resumable-upload-installed-qualification.md#流式链路待验)、会话到期、服务端重启和大文件吞吐。 |
 | 归档原号的迟到回执 | [仅静态] [离线确认与恢复](docs/guides/conflict-archive.md)。另验按归档原号实际查询，确认迟到的精确回执只记入归档，不修改当前基线。 |
 | 新接口与人机壳 | [设计中] 多区间的 ZIP/媒体读取、ZIP 远端差异、历史分叉 CLI 与其他平台壳。 |
 | 交付 | [设计中] 核对准确许可和版本库存、独立安装/签名/各端运行。未删除旧路径或旧历史。 |
