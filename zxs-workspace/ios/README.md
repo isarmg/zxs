@@ -57,6 +57,8 @@
 
 独立打开 `ZipPreview.xcodeproj`，应用及 XCTest 源目标均包含在 `ZipPreview` 方案内。最低系统为 iOS / iPadOS 16；源码使用 UIKit、Foundation、Uniform Type Identifiers、Darwin、系统 CryptoKit（SHA-256）和 SDK 自带的 libz（仅取 CRC-32），远程提交使用子目录内的 SwiftNIO 传输与锁定依赖，首次使用 Xcode 构建需要可取得这些 Swift 软件包。工程不预设开发团队、证书、云容器或发布账户。 参见[版本化本地归档候选与签发门槛](RELEASE.md)：当前 App 目标已有共享版本、独立图标和原选档文件元数据的隐私清单；不注册外部文件处理。
 
+Debug 为选定目标构建当前架构。托管验收选择固定的 iOS 26.5 模拟器及 Apple Silicon 原生 arm64，让应用、XCTest 和 Swift 包使用同一架构，不混入同一 UDID 下的 Rosetta 构建。此设置不改变 Release、部署目标或依赖锁。
+
 **本次只编写/静审：** 没有用 Xcode 构建、运行测试、安装到设备或生成签名包。可发行前须在获准的 macOS/Xcode 环境独立构建并签名，在真实 iPhone/iPad 上验证本机和外部文件提供方、无授权/失联/等待下载、取消/换选/转入后台、外部改名/删除/占用、目录导航、读不完和 CRC 不符、文本的 32 KiB+1、256 KiB、真实大文件的前部及全文跳读确认、整项读量与取消、末页直达/多段读量/跨块四字节 UTF-8 与 CRLF、未展示尾部 CRC 或触块摘要失败、大字号密集换行下实际翻到末页、页码输入和 VoiceOver、协调等待时关闭或失效须能先撤下旧正文，迟到页不作用，以及超过 4 GiB 的 ZIP64。查找另验同名跨目录（其中一个在第 2 页）、输入法组合与长路径/大字号、返回保留原页、结果页关闭动画期间换档/权限失效不能装入旧结果、旧目录表点按不能作用以及再次点文件才出现确认；整包检查另验项目实际生成的 .zxs（含空目录、两个代数和可移植 UTF-8 名），修改正文并重算 CRC、替换标记或提供方撤权都不能报通过；取消后不显示旧结果。另核图标、隐私披露与发行配置。
 
 设计依据：[Apple 文档选择器](https://developer.apple.com/documentation/uikit/uidocumentpickerviewcontroller)、[安全作用域](https://developer.apple.com/documentation/foundation/url/startaccessingsecurityscopedresource())、[文件协调和取消](https://developer.apple.com/documentation/foundation/nsfilecoordinator/cancel())、[Apple CryptoKit SHA-256](https://developer.apple.com/documentation/cryptokit/sha256/update(bufferpointer:))、[PKWARE ZIP 规范](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT)。

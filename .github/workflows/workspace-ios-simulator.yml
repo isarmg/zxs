@@ -52,13 +52,16 @@ jobs:
       - name: Build and run Workspace app fixtures on the pinned simulator
         run: |
           set -euo pipefail
+          # Xcode 26.5 advertises both arm64 and Rosetta for the same UDID.
+          # Keep the app, hosted XCTest target and SwiftPM modules on the
+          # same architecture; this setting applies only to this test build.
           xcodebuild test -project ZipPreview.xcodeproj -scheme ZipPreview \
-            -destination "platform=iOS Simulator,id=$WORKSPACE_IOS_SIMULATOR" \
+            -destination "platform=iOS Simulator,id=$WORKSPACE_IOS_SIMULATOR,arch=arm64" \
             -derivedDataPath "$RUNNER_TEMP/workspace-ios-app" \
             -clonedSourcePackagesDirPath "$RUNNER_TEMP/workspace-ios-packages" \
             -disableAutomaticPackageResolution \
             -parallel-testing-enabled NO \
-            CODE_SIGNING_ALLOWED=NO
+            ARCHS=arm64 CODE_SIGNING_ALLOWED=NO
 
       - name: Audit actual package checkout revisions
         if: success()
