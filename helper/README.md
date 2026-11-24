@@ -4,7 +4,7 @@ Helper 是 Linux x86_64 命令行程序，负责 ZXS 首设、离线盘管理、
 
 ## 首设和离线维护
 
-先挂载所选目录；按 [ZXS 部署要求](../zxs/docs/headless-activation.md)准备专用非 root 服务账号。初始选择一个 SYSTEM、一个 RECYCLE 和 1–62 个 DATA；后续按原登记顺序给出全部目录。
+先挂载所选目录；按 [ZXS 部署要求](../zxs/docs/guides/headless-activation.md)准备专用非 root 服务账号。初始选择一个 SYSTEM、一个 RECYCLE 和 1–62 个 DATA；后续按原登记顺序给出全部目录。
 
 ```sh
 helper setup-headless check SYSTEM RECYCLE DATA [DATA ...]

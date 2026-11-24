@@ -22,6 +22,6 @@
 
 ## 进一步阅读
 
-- [首次部署](docs/guides/quickstart.md) · [启动和反代要求](docs/headless-activation.md) · [构建独立二进制](BUILD.md)
+- [首次部署](docs/guides/quickstart.md) · [启动和反代要求](docs/guides/headless-activation.md) · [构建独立二进制](BUILD.md)
 - [Workspace 容器操作](../zxs-workspace/docs/guides/remote-files.md) · [Helper 离线维护](../helper/README.md)
 - [架构](ARCHITECTURE.md) · [交付与验收](TASKS.md) · [原启动参考（固定版本）](https://github.com/isarmg/zxs/blob/011c58f2e0f5df80e939fcae058e94d045b5ff68/zxs/docs/headless-activation.md)

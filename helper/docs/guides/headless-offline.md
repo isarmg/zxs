@@ -19,7 +19,7 @@
 - 角色目录及固定状态目录互不包含；不同拼写不能绕过这个限制。共用父目录的兄弟目录不因此被拒绝。
 
 先运行首设检查，再运行 `new`。核对前台终端中的角色和登录名，键入 `SETUP`，然后输入两次不回显的密码。
-首设成功后，以同一服务账号运行 `/zxs/bin/zxs --listen IP:PORT`，见 [ZXS 部署说明](../../../zxs/docs/headless-activation.md)。
+首设成功后，以同一服务账号运行 `/zxs/bin/zxs --listen IP:PORT`，见 [ZXS 部署说明](../../../zxs/docs/guides/headless-activation.md)。
 
 Helper 不挂载或格式化磁盘。路径、锁和中断时的处理见[原件与离线权限](../invariants/offline-authority.md)。
 

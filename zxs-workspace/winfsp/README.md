@@ -30,7 +30,7 @@ Windows Server x64 托管作业使用固定的 [WinFsp 2.1 头文件](https://gi
 
 `tests/test_winfsp_sealed.py` 的原生用例在普通环境跳过，要求已知合成包和独立的服务启动同意；资格扩展由 `lifecycle.c` 与 `provider.c` 对应的厂商 SDK/CPython 单独构建。未编译或运行。
 
-另有独立的[远端节点本机编辑正文源码](../docs/windows-remote-draft.md)，在已核私用 NTFS 保存一个原节点，并提供按偏移读写、停接新上下文和完整正文审阅。它不接入此只读提供方或封闭生命周期，不创建 WinFsp 卷，不向服务器提交。
+另有独立的[远端节点本机编辑正文源码](../docs/invariants/windows-remote-edit.md)，在已核私用 NTFS 保存一个原节点，并提供按偏移读写、停接新上下文和完整正文审阅。它不接入此只读提供方或封闭生命周期，不创建 WinFsp 卷，不向服务器提交。
 
 ## 远程工作文件的 Write/Close 数据接口（不创建卷）
 
@@ -69,4 +69,4 @@ R3 单文件目录挂载的数据文件允许普通 `GENERIC_READ | GENERIC_WRIT
 
 只处理 [WinFsp 2.1 经典 FileRenameInformation](https://github.com/winfsp/winfsp/blob/v2.1/src/sys/fileinfo.c#L1609-L1798) 的同目录正向覆盖：目的只可能是所选原别名。通常在关写后用只有改名权而无正文写权的句柄。另一条只在普通同步、不共享的精确 `CREATE_NEW` 上接纳读写及 DELETE 的组合，要求保持原创建上下文，不能从后来的打开借用其改名权或刷新证据。验证这次原请求的登录令牌和确切上下文；只在 SDK 当次目标核验中提供对原名的 DELETE 检查，不给普通原文件打开授予 DELETE。显式拦截 FileDispositionInformation／Ex、RenameEx 和 DeleteOnClose；其他改名、硬链接、ACL、EA、执行和删除照旧不支持。原文件或其他正文／来源流上下文未最终 Close、临时写没有实际 Flush 或不再可证时拒绝；任何情况下都不删除原实物。只在双原件核实及同步后一次改变所选别名指向。物理目录不进行破坏式改名。独占原创建句柄在改名后的延迟写与 EOF 变更仍落到同一实物，并使原刷新证据失效；关闭前若未从该句柄再次刷新，后来任何句柄都不能恢复审阅资格。
 
-用户停止时（先关闭编辑器和相关资源管理器引用），宿主独立从已验证原卷重开所选名，核对真实 FileInternalInformation 与内核路径，确认虚拟临时名不存在；再走真实 Close/原卷正常撤下证明。没有重开证据或临时内容未成功替换时不能审阅、准备或上载。保留两份文件及其位置。源例 `windows_winfsp_live_draft.py --consent-live-winfsp-scratch-replace-and-retain-both-private-files` 要求独立可丢弃原生环境及专用构建；以真实 Win32 `SetFileInformationByHandle(FileRenameInfo)` 和同一原号的本机封存验证窄路径，拒绝未刷/忙句柄、其他名字/权限；不向服务器发送数据。未运行。正式验证仍需覆盖编辑器具体版本、失答/停止、来源流复制与真实签名包；另有单独同意的 Qt 6.11.2 实库源例（禁原位回退），覆盖成功及取消保留两件。均不等于已验收 QSaveFile、ReplaceFileW、MoveFileExW、WPS 或 Office；实际 API 差别见[桌面正文说明](../docs/windows-remote-draft.md#可选一次同目录临时文件替换)。
+用户停止时（先关闭编辑器和相关资源管理器引用），宿主独立从已验证原卷重开所选名，核对真实 FileInternalInformation 与内核路径，确认虚拟临时名不存在；再走真实 Close/原卷正常撤下证明。没有重开证据或临时内容未成功替换时不能审阅、准备或上载。保留两份文件及其位置。源例 `windows_winfsp_live_draft.py --consent-live-winfsp-scratch-replace-and-retain-both-private-files` 要求独立可丢弃原生环境及专用构建；以真实 Win32 `SetFileInformationByHandle(FileRenameInfo)` 和同一原号的本机封存验证窄路径，拒绝未刷/忙句柄、其他名字/权限；不向服务器发送数据。未运行。正式验证仍需覆盖编辑器具体版本、失答/停止、来源流复制与真实签名包；另有单独同意的 Qt 6.11.2 实库源例（禁原位回退），覆盖成功及取消保留两件。均不等于已验收 QSaveFile、ReplaceFileW、MoveFileExW、WPS 或 Office；实际 API 差别见[桌面正文说明](../docs/invariants/windows-remote-edit.md#可选一次同目录临时文件替换)。

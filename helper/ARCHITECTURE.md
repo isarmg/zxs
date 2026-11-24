@@ -24,7 +24,7 @@ flowchart LR
 - **输出与恢复：**每项回执输出前后重验原件，确认后才开始下一项；整批还需确切结束和正常退出。批量不是事务，只重放原计划，不删除来源。
 
 [首设、重置与盘管理](docs/guides/headless-offline.md)和[导入指南](docs/guides/offline-imports.md)说明操作前提。
-首设之后的监听与部署见 [ZXS 部署说明](../zxs/docs/headless-activation.md)。
+首设之后的监听与部署见 [ZXS 部署说明](../zxs/docs/guides/headless-activation.md)。
 
 ## 核心不变量
 
