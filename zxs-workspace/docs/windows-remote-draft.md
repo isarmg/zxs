@@ -46,14 +46,14 @@ WindowsOriginalSaveChoice 只读取用户选择的同一私用目录和原操作
 
 勾选高级选项时，同意保留原工作文件及**最多一个**新本机临时正文（各自受本次字节上限约束；封存另需一份完整正文）。为避免与 Win32/驱动的大小写对名规则冲突，磁盘内两个名称仅用长度 1–120 的 ASCII 字母、数字及 `._~-`，仍拒绝设备名、尾点及原别名（包括大小写变体）。服务器名称没有这个限制，也不会改变。选择短一些的私有目录，以便包含来源流的普通 Windows 完整路径也能表示。
 
-支持的保存序列很窄：编辑器用 `CREATE_NEW` 创建新的同目录普通临时文件，写入完整内容，`FlushFileBuffers` 后关闭写句柄；全部旧文件、临时文件和来源流句柄都完成原生 Close 后，才允许用仅具所需改名权的原临时文件打开，通过经典 `FileRenameInfo` 同目录覆盖且目的恰好是该次所选别名。没有真正的磁盘替换：两个私有文件的真实 FileID、路径、权限和来源标记都保留，核验并同步过才切换虚拟别名。系统策略要求标记时，临时文件从第一段正文以前就带实际原来源标记，不能改动它。不能用未刷新临时文件、多个临时文件、其他目录/目标、重命名扩展/POSIX 或 `CREATE_ALWAYS` 代替。保留正常的只读 Zone.Identifier，不接受复制外部标记、删除、修改 ACL/EA、备份或运行程序。
+支持的保存序列很窄：编辑器用 `CREATE_NEW` 创建同目录普通临时文件，写完后须成功刷新。通常先关写，再以不写正文的改名句柄打开原临时文件；另一种只接受不共享、同步的 `GENERIC_READ | GENERIC_WRITE | DELETE` 新建，可由**同一原创建句柄**刷新并改名。后一种若先关闭，就不能另开句柄接手。两种都要求其他正文和来源流上下文已最终 Close；经典 `FileRenameInfo` 的目的只能是该次所选的同目录别名。独占创建句柄改名后仍写到同一正文；如实际写入或更改长度，须在最终 Close 前用该句柄再次刷新，否则保留两份、拒绝审阅。没有真正的磁盘替换：两个私有文件的真实 FileID、路径、权限和来源标记都保留，核验并同步过才切换虚拟别名。系统策略要求标记时，临时文件从第一段正文以前就带实际原来源标记，不能改动它。不能用未刷新临时文件、多个临时文件、其他目录/目标、重命名扩展/POSIX 或 `CREATE_ALWAYS` 代替。保留正常的只读 Zone.Identifier，不接受复制外部标记、删除、修改 ACL/EA、备份或运行程序。
 
 编辑器和资源管理器窗口须先关闭，再请求正常停止。原宿主确认打开的是同一驱动卷中实际的新文件编号，且旧临时别名已经不见，再按原流程排空全部引用、卸载并通读选中正文。无法核实临时正文确已在原虚拟卷上成为所选名、原来的挂载/权限/来源证明失效时，不产生可提交审阅；两个私有实物不覆盖、不删除，界面提示保留位置。重新按名打开不是编辑器已经收到成功响应的证明。若编辑器提示保存失败，先核对两处保留文件，不直接提交；不能从崩溃留下的名称取得原编辑或提交权限。明确准备、提交及断线按同号核对不变。
 
 不声称支持任意编辑器的保存。尤其 [ReplaceFileW](https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-replacefilew) 还涉及原文件删除、修改另一个 ACL、流/属性合并和备份，某些错误发生在命名或元数据改变之后，不能由同目录覆盖改名回调代替；WPS/Office 备用保存模式、重复临时替换和 `MoveFileExW` 不算已验证。需要依次核对实际编辑器的公开 Windows 操作路线和最终签名包。现有原位模式保持默认，未开放发布。
 
 
-Qt 6.11.2 的 [QSaveFile](https://github.com/qt/qtbase/blob/v6.11.2/src/corelib/io/qsavefile.cpp#L224-L249) 也不符合上述序列。其 Windows 专用路径 [独占新建时同时请求读、写和 DELETE](https://github.com/qt/qtbase/blob/v6.11.2/src/corelib/io/qtemporaryfile.cpp#L175-L195)，[保持同一写句柄到提交](https://github.com/qt/qtbase/blob/v6.11.2/src/corelib/io/qtemporaryfile.cpp#L388-L417)，用它[执行经典改名](https://github.com/qt/qtbase/blob/v6.11.2/src/corelib/io/qfsfileengine_win.cpp#L400-L425)后才关闭，不是通用 MoveFileEx 路径；还会尝试应用目标权限，失败或取消时删除临时名。不能用打开已有文件直接覆盖当作该项通过。将来的签名包资格须禁用直接写回退，单独证明这个独占句柄的成功刷新/晚到写、权限保持和只对原临时条目的取消，并重新核对提交前后原名、来源流、完整正文及同一操作号。
+上述独占路径依据 Qt 6.11.2 的 [QSaveFile](https://github.com/qt/qtbase/blob/v6.11.2/src/corelib/io/qsavefile.cpp#L224-L249)：其 Windows 实现[新建时不共享并请求读、写和 DELETE](https://github.com/qt/qtbase/blob/v6.11.2/src/corelib/io/qtemporaryfile.cpp#L175-L195)，[保留该写句柄](https://github.com/qt/qtbase/blob/v6.11.2/src/corelib/io/qtemporaryfile.cpp#L388-L417)并用它[执行经典改名](https://github.com/qt/qtbase/blob/v6.11.2/src/corelib/io/qfsfileengine_win.cpp#L400-L425)。这只匹配一条原生调用路线，**没有验证 Qt 或任何 Office/WPS 版本**。Qt 还会尝试复制权限、在失败或取消后删除临时名。本卷不改 ACL 或删除文件：取消须保留旧别名和两份本机原件，不得通过重开已取消的临时文件继续改名或准备提交。除原有 Win32 资格选项外，`tests/qualification/windows_winfsp_live_draft.py --consent-live-winfsp-qt-save-and-retain-both-private-files`（再接专用 NTFS 目录）另有 Qt 6.11.2 实际保存和取消的源例，禁用直接写回退；尚未运行。最终仍须分别核验真实权限、来源、晚到写、签名宿主及完整投递。
 
 
 ## 首次提交一个普通本机文件

@@ -197,7 +197,20 @@ static NTSTATUS scoped_create(FSP_FILE_SYSTEM *fs, PWSTR path, UINT32 opts, UINT
     if (!req || req->Kind != FspFsctlTransactCreateKind || req->Req.Create.OpenTargetDirectory ||
         (opts >> 24) != FILE_CREATE || alloc || (attrs & ~(FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_ARCHIVE)))
         return STATUS_ACCESS_DENIED;
-    return finish_open(fs, path, opts, granted, TRUE, FALSE, FALSE, ctx, info);
+    BOOL rename_writer = 0 != (granted & DELETE);
+    if (rename_writer) {
+        /* WinFsp CreateCheck grants a new file's requested + previously granted rights.
+         * Examine the real request's share mode as well: Create's callback lacks it.
+         * Only the synchronous nonshared CREATE_NEW may keep DELETE on its writer. */
+        const UINT32 rights = FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE;
+        if (path != (PWSTR)request_path(req, req->FileName) ||
+            opts != req->Req.Create.CreateOptions ||
+            (opts & 0xffffff) != (FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT) ||
+            req->Req.Create.ShareAccess || (attrs & ~FILE_ATTRIBUTE_NORMAL) ||
+            (req->Req.Create.DesiredAccess | req->Req.Create.GrantedAccess) != rights || granted != rights)
+            return STATUS_ACCESS_DENIED;
+    }
+    return finish_open(fs, path, opts, granted, TRUE, FALSE, FALSE, rename_writer, ctx, info);
 }
 
 static NTSTATUS scoped_rename(FSP_FILE_SYSTEM *fs, PVOID ctx, PWSTR old, PWSTR dest, BOOLEAN replace)

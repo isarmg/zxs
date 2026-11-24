@@ -103,7 +103,8 @@ static const FSP_FSCTL_TRANSACT_REQ *real_request(FSP_FILE_SYSTEM *fs)
 }
 
 static NTSTATUS finish_open(FSP_FILE_SYSTEM *fs, PWSTR name, UINT32 opts, UINT32 granted,
-                            BOOL create, BOOL target, BOOL probe, PVOID *ctx, FSP_FSCTL_FILE_INFO *info)
+                            BOOL create, BOOL target, BOOL probe, BOOL rename_writer,
+                            PVOID *ctx, FSP_FSCTL_FILE_INFO *info)
 {
     *ctx = NULL;
     PyObject *plane = owner(fs);
@@ -113,7 +114,8 @@ static NTSTATUS finish_open(FSP_FILE_SYSTEM *fs, PWSTR name, UINT32 opts, UINT32
     PyGILState_STATE gil = PyGILState_Ensure();
     PyObject *path = PyUnicode_FromWideChar(name, (Py_ssize_t)length);
     PyObject *r = !path ? NULL : create ?
-        PyObject_CallMethod(plane, "create_scratch", "Okk", path, (unsigned long)opts, (unsigned long)granted) :
+        PyObject_CallMethod(plane, "create_scratch", "OkkO", path, (unsigned long)opts, (unsigned long)granted,
+                            rename_writer ? Py_True : Py_False) :
         PyObject_CallMethod(plane, "open_file", "OkkOO", path, (unsigned long)opts, (unsigned long)granted,
                             target ? Py_True : Py_False, probe ? Py_True : Py_False);
     Py_XDECREF(path);
@@ -147,7 +149,7 @@ static NTSTATUS open_file(FSP_FILE_SYSTEM *fs, PWSTR name, UINT32 opts, UINT32 g
     BOOL target = create && req->Req.Create.OpenTargetDirectory;
     BOOL probe = create && !target && (opts & FILE_COMPLETE_IF_OPLOCKED) &&
         FSP_FSCTL_TRANSACT_REQ_TOKEN_PID(req->Req.Create.AccessToken) == GetCurrentProcessId();
-    return finish_open(fs, name, opts, granted, FALSE, target, probe, ctx, info);
+    return finish_open(fs, name, opts, granted, FALSE, target, probe, FALSE, ctx, info);
 }
 
 static NTSTATUS information(FSP_FILE_SYSTEM *fs, PVOID ctx, FSP_FSCTL_FILE_INFO *info)
