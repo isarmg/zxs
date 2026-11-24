@@ -1,4 +1,6 @@
 //! One immutable INTENT and one native inactive-to-active interlock.
+#[path = "early_intent.rs"]
+mod early;
 #[path = "publish.rs"]
 mod publish;
 #[path = "ready.rs"]
@@ -19,10 +21,7 @@ use ready::{
 };
 pub(crate) use retire::Completion;
 pub(super) use retire::{HistoryRequest, history};
-use std::{
-    ffi::CStr,
-    io::{self, Write},
-};
+use std::{ffi::CStr, io};
 
 const I: &CStr = c"INTENT";
 const PROOF: &CStr = c"source-proof";
@@ -115,23 +114,23 @@ impl BoundJournal {
         has_guard: bool,
         resuming: bool,
     ) -> io::Result<Self> {
-        let (parent, directory, fresh) = positions(selected, has_guard)?;
-        let candidate = intend(selected, route, source, &directory)?;
-        let raw = candidate.encode()?;
-        let (record, sidecar) = if fresh {
-            require_before_intent(selected, route, source)?;
-            let sidecar = create(&directory, PROOF, &source.bytes)?;
-            // Source proof can be larger than INTENT. Recheck its original
-            // named inode, real prerequisites and durable emptiness after I/O.
-            source.require_same(&selected.observe_source()?)?;
-            require_before_intent(selected, route, source)?;
-            sidecar.require(&directory, PROOF)?;
-            (create(&directory, I, &raw)?, sidecar)
-        } else {
-            require_pre_ready_files(&directory, resuming)?;
-            (pin(&directory, I)?, pin(&directory, PROOF)?)
+        let parent = journal_parent(selected, has_guard)?;
+        let work = early::journal_name(selected.scope)?;
+        let (directory, record, sidecar) = match parent
+            .child_directory(&selected.names.operation)?
+        {
+            Some(directory) => {
+                absent(&parent, &work)?;
+                require_pre_ready_files(&directory, resuming)?;
+                let record = pin(&directory, I)?;
+                let sidecar = pin(&directory, PROOF)?;
+                (directory, record, sidecar)
+            }
+            None if has_guard => return Err(invalid("a guard has no original DATA move intent")),
+            None => early::prepare(selected, &parent, &work, route, source)?,
         };
         require_pre_ready_files(&directory, resuming)?;
+        let candidate = intend(selected, route, source, &directory)?;
         Self::bind((parent, directory), (record, sidecar), &candidate, source)
     }
 
@@ -210,26 +209,25 @@ impl BoundJournal {
     }
 }
 
-fn positions(selected: &Selected<'_>, has_guard: bool) -> io::Result<(HeldDir, HeldDir, bool)> {
+fn journal_parent(selected: &Selected<'_>, has_guard: bool) -> io::Result<HeldDir> {
     let system = selected.roots.system;
-    let parent = match system.child_directory(MOVE_PARENT)? {
-        Some(existing) => existing,
-        None if has_guard => return Err(invalid("a guard has no original DATA move journal")),
-        None => {
-            (selected.outer)()?;
-            system.new_child_directory(MOVE_PARENT)?
-        }
-    };
-    let name = &selected.names.operation;
-    let (directory, fresh) = match parent.child_directory(name)? {
-        Some(existing) => (existing, false),
-        None if has_guard => return Err(invalid("a guard has no original DATA move intent")),
-        None => {
-            (selected.outer)()?;
-            (parent.new_child_directory(name)?, true)
-        }
-    };
-    Ok((parent, directory, fresh))
+    match system.child_directory(MOVE_PARENT)? {
+        Some(existing) => Ok(existing),
+        None if has_guard => Err(invalid("a guard has no original DATA move journal")),
+        None => system.new_child_directory_when(MOVE_PARENT, selected.outer),
+    }
+}
+
+/// READY or later can only reopen its original named journal. A hidden
+/// early candidate can never supply a late-phase authority.
+fn positions(selected: &Selected<'_>) -> io::Result<(HeldDir, HeldDir)> {
+    let parent = journal_parent(selected, true)?;
+    absent(&parent, &early::journal_name(selected.scope)?)?;
+    absent(selected.roots.state, &selected.names.guard_spool)?;
+    let directory = parent
+        .child_directory(&selected.names.operation)?
+        .ok_or_else(|| invalid("a guard has no original DATA move intent"))?;
+    Ok((parent, directory))
 }
 
 fn require_pre_ready_files(directory: &HeldDir, resuming: bool) -> io::Result<()> {
@@ -268,16 +266,8 @@ fn require_before_intent(
 }
 
 fn create(parent: &HeldDir, name: &CStr, bytes: &[u8]) -> io::Result<OpaquePin> {
-    let mut output = parent.create_opaque_record(name)?;
-    output.write_all(bytes)?;
-    output.sync_all()?;
-    let selected = pin(parent, name)?;
-    same_file(parent, &output, &selected.file)?;
-    if read_raw(&selected, bytes.len())? != bytes {
-        return Err(invalid("the prepared original DATA move record changed"));
-    }
-    selected.require(parent, name)?;
-    Ok(selected)
+    // Still used for receipts within the guarded, not-yet-READY DATA copy.
+    publish::create((parent, name), &|_| Ok(bytes))
 }
 
 fn intend(
@@ -333,7 +323,9 @@ impl<'held, 'scope> Pending<'held, 'scope> {
         }
         let state = selected.roots.state;
         let active = state.pin_record(&selected.names.active)?.is_some();
-        let has_guard = active || state.pin_record(&selected.names.inactive)?.is_some();
+        let has_guard = active
+            || state.pin_record(&selected.names.inactive)?.is_some()
+            || state.pin_record(&selected.names.guard_spool)?.is_some();
         let resuming_copy = selected
             .target_staging
             .pin_record(&selected.names.target_stage)?
@@ -377,10 +369,12 @@ impl<'held, 'scope> Pending<'held, 'scope> {
         let state = selected.roots.state;
         let intent = &self.journal.original;
         if HeldGuard::open(state, &selected.names.active, intent)?.is_some() {
-            absent(state, &selected.names.inactive)
-        } else {
-            HeldGuard::open(state, &selected.names.inactive, intent).map(|_| ())
+            absent(state, &selected.names.inactive)?;
+            absent(state, &selected.names.guard_spool)?;
+        } else if HeldGuard::open(state, &selected.names.inactive, intent)?.is_some() {
+            absent(state, &selected.names.guard_spool)?;
         }
+        Ok(())
     }
 
     fn require_held(&self) -> io::Result<()> {
@@ -421,6 +415,7 @@ impl<'held, 'scope> Pending<'held, 'scope> {
         let holding =
             if let Some(original) = HeldGuard::open(state, active, &self.journal.original)? {
                 absent(state, draft)?;
+                absent(state, &selected.names.guard_spool)?;
                 original
             } else {
                 if self.resuming_copy {
@@ -438,6 +433,7 @@ impl<'held, 'scope> Pending<'held, 'scope> {
                 self.require_held()?;
                 selected.vacancies(false)?;
                 prior.require(state, draft)?;
+                absent(state, &selected.names.guard_spool)?;
                 absent(state, active)?;
                 no_replace(state, draft, active)?;
                 let installed = self.active()?;
@@ -451,11 +447,13 @@ impl<'held, 'scope> Pending<'held, 'scope> {
             };
         holding.require(state, active)?;
         absent(state, draft)?;
+        absent(state, &selected.names.guard_spool)?;
         holding.pin.file.sync_all()?;
         sync_parent(&state.file)?;
         self.require_held()?;
         holding.require(state, active)?;
         absent(state, draft)?;
+        absent(state, &selected.names.guard_spool)?;
         Ok(holding)
     }
 
@@ -469,18 +467,25 @@ impl<'held, 'scope> Pending<'held, 'scope> {
     }
 
     fn stage_guard(&self, state: &HeldDir, draft: &CStr) -> io::Result<HeldGuard> {
-        (self.selected.outer)()?;
-        let mut original = state.create_opaque_record(draft)?;
-        original.write_all(
-            &Guard {
-                birth: birth(&original)?,
-            }
-            .encode(&self.journal.original)?,
+        let selected = self.selected;
+        let staged = publish::publish_bound(
+            (state, &selected.names.guard_spool),
+            (state, draft),
+            |file| {
+                Guard {
+                    birth: birth(file)?,
+                }
+                .encode(&self.journal.original)
+            },
+            || {
+                self.require_held()?;
+                absent(state, &selected.names.active)?;
+                selected.vacancies(false)
+            },
         )?;
-        original.sync_all()?;
         let named = HeldGuard::open(state, draft, &self.journal.original)?
             .ok_or_else(|| invalid("the original inactive DATA move guard disappeared"))?;
-        same_file(state, &original, &named.pin.file)?;
+        same_file(state, &staged.file, &named.pin.file)?;
         named.require(state, draft)?;
         Ok(named)
     }

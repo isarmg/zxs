@@ -196,7 +196,7 @@ impl<'held, 'scope> HeldReady<'held, 'scope> {
     pub(super) fn reopen(selected: &'held Selected<'scope>) -> io::Result<Self> {
         selected.pre_ready_names()?;
         let route = Route::original(selected)?;
-        let (parent, directory, _) = positions(selected, true)?;
+        let (parent, directory) = positions(selected)?;
         let place = Place::observe(selected, &directory)?;
         require_layout(&directory, place.layout())?;
         let source = selected.observe_source()?;

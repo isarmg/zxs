@@ -108,7 +108,7 @@ struct Chosen<'held, 'scope, Origin = Source> {
 
 impl<'held, 'scope> Chosen<'held, 'scope> {
     fn recover(selected: &'held Selected<'scope>, candidate: OpaquePin) -> io::Result<Self> {
-        let (parent, directory, _) = positions(selected, true)?;
+        let (parent, directory) = positions(selected)?;
         let marker = directory.pin_record(S)?.is_some();
         require_layout(&directory, layout(marker))?;
         require_pending_absence(selected, &directory)?;
@@ -310,7 +310,7 @@ impl<'held, 'scope> HeldSwitch<'held, 'scope> {
             return Err(invalid("canonical DATA move route has the wrong container"));
         }
         if token == source.token {
-            let (_, journal, _) = positions(selected, true)?;
+            let (_, journal) = positions(selected)?;
             if Place::observe(selected, &journal)? != Place::BothArrived {
                 return Err(invalid("old DATA route is not ready for exact selection"));
             }

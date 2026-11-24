@@ -1,8 +1,13 @@
 //! Small immutable phase records must never be visible under their
 //! authoritative name as an empty or partly written file.
 use super::super::{ACCESS, native_name, renameat2};
-use super::{BoundJournal, HeldDir, OpaquePin, absent, create, invalid, pin, read_raw, same_file};
-use std::{ffi::CStr, io, os::fd::AsRawFd};
+use super::{BoundJournal, HeldDir, OpaquePin, absent, invalid, pin, read_raw, same_file};
+use std::{
+    ffi::CStr,
+    fs::File,
+    io::{self, Write},
+    os::fd::AsRawFd,
+};
 
 pub(super) fn scoped_leaf(
     scope: super::super::Scope,
@@ -58,6 +63,17 @@ pub(super) fn publish(
     expected: &[u8],
     require: impl Fn() -> io::Result<()>,
 ) -> io::Result<OpaquePin> {
+    publish_bound(from, into, |_| Ok(expected), require)
+}
+
+/// Some records include the birth of the same file that will be renamed.
+/// Render against the held draft, and again if a known short prefix is replaced.
+pub(super) fn publish_bound<B: AsRef<[u8]>>(
+    from: (&HeldDir, &CStr),
+    into: (&HeldDir, &CStr),
+    encode: impl Fn(&File) -> io::Result<B>,
+    require: impl Fn() -> io::Result<()>,
+) -> io::Result<OpaquePin> {
     from.0.checked_child_path(from.1)?;
     into.0.checked_child_path(into.1)?;
     if !from.0.same_mount(into.0)? {
@@ -69,7 +85,7 @@ pub(super) fn publish(
     absent(into.0, into.1)?;
     let staged = match from.0.opaque_pin_with(from.1, ACCESS)? {
         Some(draft) => {
-            if prefix_matches(from, &draft, expected)? {
+            if prefix_matches(from, &draft, encode(&draft.file)?.as_ref())? {
                 draft.file.sync_all()?;
                 draft
             } else {
@@ -77,11 +93,13 @@ pub(super) fn publish(
                 absent(into.0, into.1)?;
                 from.0.unlink_opaque_original(from.1, &draft)?;
                 require()?;
-                create(from.0, from.1, expected)?
+                create(from, &encode)?
             }
         }
-        None => create(from.0, from.1, expected)?,
+        None => create(from, &encode)?,
     };
+    let expected = encode(&staged.file)?;
+    let expected = expected.as_ref();
     require()?;
     staged.require(from.0, from.1)?;
     absent(into.0, into.1)?;
@@ -107,6 +125,24 @@ pub(super) fn publish(
     final_pin.require(into.0, into.1)?;
     absent(from.0, from.1)?;
     Ok(final_pin)
+}
+
+pub(super) fn create<B: AsRef<[u8]>>(
+    (parent, name): (&HeldDir, &CStr),
+    encode: &impl Fn(&File) -> io::Result<B>,
+) -> io::Result<OpaquePin> {
+    let mut output = parent.create_opaque_record(name)?;
+    let expected = encode(&output)?;
+    let expected = expected.as_ref();
+    output.write_all(expected)?;
+    output.sync_all()?;
+    let staged = pin(parent, name)?;
+    same_file(parent, &output, &staged.file)?;
+    if read_raw(&staged, expected.len())? != expected {
+        return Err(invalid("the prepared original DATA move record changed"));
+    }
+    staged.require(parent, name)?;
+    Ok(staged)
 }
 
 pub(super) fn prefix_matches(

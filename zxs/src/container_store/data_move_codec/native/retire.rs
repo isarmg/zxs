@@ -79,7 +79,7 @@ pub(in crate::container_store) fn history(request: HistoryRequest<'_>) -> io::Re
 impl<'held, 'scope> Retiring<'held, 'scope> {
     fn recover(selected: &'held Selected<'scope>) -> io::Result<Self> {
         selected.pre_ready_names()?;
-        let (parent, directory, _) = positions(selected, true)?;
+        let (parent, directory) = positions(selected)?;
         require_layout(&directory, HAS_SWITCHED)?;
         require_pending_absence(selected, &directory)?;
         let record = pin(&directory, I)?;

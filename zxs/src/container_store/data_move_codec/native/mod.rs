@@ -78,6 +78,7 @@ struct Names {
     operation: CString,
     route_stage: CString,
     target_stage: CString,
+    guard_spool: CString,
     inactive: CString,
     active: CString,
 }
@@ -94,6 +95,7 @@ impl Names {
             operation: native_name(&pair)?,
             route_stage: native_name(&format!(".{cid}.incoming"))?,
             target_stage: native_name(&format!("move-{pair}"))?,
+            guard_spool: native_name(&format!(".move-guard-draft-{pair}.incoming"))?,
             inactive: native_name(&format!(".move-guard-draft-{pair}"))?,
             active: native_name(&format!("{ACTIVE_PREFIX}{pair}"))?,
         })
