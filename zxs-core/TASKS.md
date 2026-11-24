@@ -30,7 +30,7 @@
 | 真实 HTTPS/2 与安装后的冷恢复 | [仅静态] 仅含本项目的源码独立安装。对真实隔离服务完成签出、原子编辑、完整提交和读回；服务器耐久写入后丢回复，重开只查原回执。留存第二次本机编辑且仍显示未提交。 |
 | 错误与待决正文 | [仅静态] 在真实服务和 TLS 前端区分错账号、非 H2、空 503、错误 404、假回执；原正文丢失仍可查，但不发。控制组确认未提交时也不自动上传。 |
 | Linux 桌面其他环境 | Wayland、密码页输入法组合、登录后的切窗仍待测。 |
-| 流式分块与桌面断点续传 | [仅静态] [流式链路](../zxs/docs/guides/resumable-upload-installed-qualification.md#流式链路待验)待验真实慢块边收边转、会话到期、服务端重启和大文件吞吐；[桌面断点续传](docs/guides/resumable-upload.md)未纳入实测。 |
+| 流式分块与桌面断点续传 | [一个合法 8 MiB 流式上传](../zxs/docs/guides/resumable-upload-installed-qualification.md#已核对的单块流式上传)已在隔离客机通过。[仅静态] 仍待验[超时拒绝和截断](../zxs/docs/guides/resumable-upload-installed-qualification.md#流式链路待验)、会话到期、服务端重启、大文件吞吐及[桌面断点续传](docs/guides/resumable-upload.md)。 |
 | 归档原号的迟到回执 | [仅静态] [离线确认与恢复](docs/guides/conflict-archive.md)。另验按归档原号实际查询，确认迟到的精确回执只记入归档，不修改当前基线。 |
 | 新接口与人机壳 | [设计中] 多区间的 ZIP/媒体读取、ZIP 远端差异、历史分叉 CLI 与其他平台壳。 |
 | 交付 | [设计中] 核对准确许可和版本库存、独立安装/签名/各端运行。未删除旧路径或旧历史。 |
