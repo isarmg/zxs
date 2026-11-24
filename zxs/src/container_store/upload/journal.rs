@@ -1,7 +1,7 @@
 //! The exact selected SYSTEM UR1 is authority. Unselected candidates are never
 //! used as progress, adopted, unlinked or overwritten by this journal.
 use super::{
-    native::{promote_control, require_same},
+    native::{promote_control, remove_control, require_same},
     record::{ChunkUse, MAX_RECORD, Phase, Record, chunk_use},
 };
 use crate::{
@@ -256,6 +256,21 @@ impl Slot {
         // announced. Confirm this exact selected record, never a candidate.
         directory.file.sync_all()?;
         self.pin.require(directory, &name)
+    }
+
+    pub(super) fn retire(
+        &self,
+        directory: &HeldDir,
+        prove_original_absent: impl FnOnce() -> io::Result<()>,
+        authorize: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
+        let name = slot_name(self.record.intent.mutation.container)?;
+        prove_original_absent()?;
+        self.pin.require(directory, &name)?;
+        authorize()?;
+        remove_control(directory, &name)?;
+        directory.file.sync_all()?;
+        directory.confirm_absence(&name)
     }
 
     pub(super) fn require(&self, directory: &HeldDir) -> io::Result<()> {

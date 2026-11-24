@@ -482,3 +482,6 @@ fn either_control_name_replaced_during_long_proof_refuses_native_selection() {
         Fixture::assert_not_published(&store);
     }
 }
+
+#[path = "resumable_finalize.rs"]
+mod finalize;

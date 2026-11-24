@@ -17,6 +17,7 @@ use std::{
 unsafe extern "C" {
     fn zxs_upload_birth(fd: c_int, inode: *mut u64, seconds: *mut i64, nanos: *mut u32) -> c_int;
     fn zxs_open_pinned_record(pin: c_int, write: c_int) -> c_int;
+    fn zxs_remove_name(parent: c_int, name: *const c_char) -> c_int;
     fn renameat2(
         source_fd: c_int,
         source: *const c_char,
@@ -101,20 +102,66 @@ pub(super) fn promote_control(
     original: &CStr,
     replace: bool,
 ) -> io::Result<()> {
-    // The Linux RENAME_NOREPLACE flag is exactly 1.
-    let flags = c_uint::from(!replace);
-    // SAFETY: the directory is held, both names are checked single components,
-    // and the authorized compare/mutation cut is serialized by the caller.
+    rename(
+        directory,
+        temporary,
+        directory,
+        original,
+        c_uint::from(!replace),
+    )
+}
+
+pub(super) fn move_fresh(
+    origin: &HeldDir,
+    source: &CStr,
+    destination: &HeldDir,
+    name: &CStr,
+    prove_source: impl FnOnce() -> io::Result<()>,
+    authorize: impl FnOnce() -> io::Result<()>,
+) -> io::Result<()> {
+    origin.checked_child_path(source)?;
+    destination.checked_child_path(name)?;
+    if !origin.same_mount(destination)? {
+        return Err(invalid(
+            "resumed publication must stay on the original mount",
+        ));
+    }
+    prove_source()?;
+    origin.require_named()?;
+    destination.confirm_absence(name)?;
+    authorize()?;
+    rename(origin, source, destination, name, 1)
+}
+
+fn rename(
+    origin: &HeldDir,
+    source: &CStr,
+    destination: &HeldDir,
+    name: &CStr,
+    flags: c_uint,
+) -> io::Result<()> {
+    // SAFETY: the held descriptors and exact checked NUL-terminated leaf
+    // names remain live; the private publisher has checked its own authority.
     if unsafe {
         renameat2(
-            directory.file.as_raw_fd(),
-            temporary.as_ptr(),
-            directory.file.as_raw_fd(),
-            original.as_ptr(),
+            origin.file.as_raw_fd(),
+            source.as_ptr(),
+            destination.file.as_raw_fd(),
+            name.as_ptr(),
             flags,
         )
     } < 0
     {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+pub(super) fn remove_control(directory: &HeldDir, name: &CStr) -> io::Result<()> {
+    // SAFETY: the caller has just reproved the exact small authorized
+    // control record inside this held parent, under the cooperative gate.
+    if unsafe { zxs_remove_name(directory.file.as_raw_fd(), name.as_ptr()) } < 0 {
         Err(io::Error::last_os_error())
     } else {
         Ok(())

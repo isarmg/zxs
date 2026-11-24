@@ -27,7 +27,7 @@ pub(crate) use operation::OperationReceipt;
 use placement::{Intake, Placement, Sample};
 pub(crate) use recycle::RecycleReceipt;
 use routes::Routes;
-use stage::FlatStage;
+use stage::{FlatStage, Publication};
 use std::{
     collections::BTreeMap,
     ffi::CString,
@@ -574,6 +574,18 @@ impl Store {
         let mut memory = object
             .lock()
             .map_err(|_| invalid("container selection unavailable"))?;
+        self.publish_under_gate(mutation, change, (volume, &mut memory), stage, authorize)
+    }
+
+    fn publish_under_gate(
+        &self,
+        mutation: Mutation,
+        change: Change,
+        (volume, memory): (&DataVolume, &mut Option<State>),
+        stage: &mut impl Publication,
+        authorize: impl Fn() -> io::Result<()>,
+    ) -> Result<Receipt, Error> {
+        let id = mutation.container;
         if self.recycled(id)?.is_some() {
             authorize()?;
             return Err(Conflict::MissingContainer.into());
@@ -586,7 +598,7 @@ impl Store {
         };
         let mut first = State::default();
         let selected = if reserved {
-            volume.load(id, &mut memory)?
+            volume.load(id, memory)?
         } else {
             &mut first
         };
@@ -602,8 +614,7 @@ impl Store {
             }
         };
         let receipt = pending.receipt();
-        stage.write(c"receipt", &codec::encode(receipt)?)?;
-        stage.directory.file.sync_all()?;
+        stage.stage_receipt(receipt, &authorize)?;
 
         let wanted = match &receipt.change {
             Change::Save {
@@ -628,14 +639,13 @@ impl Store {
         }
         let directory = if !reserved {
             volume.require_vacant(id)?;
-            authorize()?;
-            self.routes.reserve(id, volume.token)?;
-            volume.create_container(id)?
+            stage.reserve_first(&self.routes, id, volume.token, &authorize)?;
+            stage.create_first(volume, id, &authorize)?
         } else if let Some(original) = volume.held_container(id)? {
             original
         } else if receipt.sequence == 1 {
             // The SYSTEM reservation can survive an interrupted first save.
-            volume.create_container(id)?
+            stage.create_first(volume, id, &authorize)?
         } else {
             return Err(invalid("recorded DATA container is absent").into());
         };
@@ -647,11 +657,12 @@ impl Store {
         let destination = receipt_name(receipt)?;
         volume.require_named()?;
         directory.require_named()?;
-        stage.publish_directory(&directory, &destination, authorize)?;
+        stage.install(&directory, &destination, authorize)?;
         if let Err(e) = directory
             .file
             .sync_all()
             .and_then(|()| volume.sync_staging())
+            .and_then(|()| stage.confirm_moved(&directory, &destination))
         {
             *memory = None;
             return Err(Error::Uncertain(e));

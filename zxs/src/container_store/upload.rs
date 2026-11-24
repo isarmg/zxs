@@ -1,4 +1,5 @@
 //! Held resumable intake, disconnected from the listener until paired review.
+mod adoption;
 mod journal;
 mod material;
 mod native;
@@ -73,6 +74,7 @@ pub(super) struct Shared {
     gates: Mutex<BTreeMap<Id, Weak<Gate>>>,
     admission: Gate,
     readers: AtomicUsize,
+    verifiers: AtomicUsize,
 }
 
 struct Uploads<'a> {
@@ -403,7 +405,7 @@ impl<'a> Uploads<'a> {
             })?
         };
         // Never hold upload or selected-container locks over network reads.
-        let _read = Reader::take(&self.store.uploads.readers)?;
+        let _read = Reader::take(&self.store.uploads.readers, READERS)?;
         let bytes = read_block(chunk, input, authorize)?;
         let _serial = gate.lock().map_err(|_| unavailable())?;
         self.under_chunk(chunk, authorize, |directory, slot, mut stage, usage| {
@@ -668,10 +670,10 @@ fn select_volume<'a>(
 struct Reader<'a>(&'a AtomicUsize);
 
 impl<'a> Reader<'a> {
-    fn take(count: &'a AtomicUsize) -> io::Result<Self> {
+    fn take(count: &'a AtomicUsize, limit: usize) -> io::Result<Self> {
         count
             .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                (n < READERS).then_some(n + 1)
+                (n < limit).then_some(n + 1)
             })
             .map_err(|_| unavailable())?;
         Ok(Self(count))

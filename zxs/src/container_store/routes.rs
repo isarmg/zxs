@@ -29,6 +29,11 @@ unsafe extern "C" {
     ) -> c_int;
 }
 
+struct BeforeRoute<'a> {
+    prove: &'a dyn Fn() -> io::Result<()>,
+    authorize: &'a dyn Fn() -> io::Result<()>,
+}
+
 pub(super) struct Routes {
     directory: HeldDir,
     // Serialize the small SYSTEM publication cut, never DATA intake or copy.
@@ -104,6 +109,26 @@ impl Routes {
     /// Call after validating bootstrap and the complete staged DATA body, but
     /// before making any part of that container visible on DATA.
     pub(super) fn reserve(&self, id: Id, token: [u8; 32]) -> io::Result<()> {
+        self.reserve_using(id, token, None)
+    }
+
+    #[cfg(test)]
+    pub(super) fn reserve_upload(
+        &self,
+        id: Id,
+        token: [u8; 32],
+        prove: &impl Fn() -> io::Result<()>,
+        authorize: &impl Fn() -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.reserve_using(id, token, Some(&BeforeRoute { prove, authorize }))
+    }
+
+    fn reserve_using(
+        &self,
+        id: Id,
+        token: [u8; 32],
+        gate: Option<&BeforeRoute<'_>>,
+    ) -> io::Result<()> {
         let name = route_name(id)?;
         let raw = encode(id, token)?;
         let mut unsure = self.cut()?;
@@ -115,6 +140,10 @@ impl Routes {
             };
         }
 
+        if let Some(gate) = gate {
+            (gate.prove)()?;
+            (gate.authorize)()?;
+        }
         let stage = CString::new(format!(".{}.incoming", hex(id)))
             .map_err(|_| invalid("invalid container route stage name"))?;
         if let Some(remnant) = self.directory.opaque_pin(&stage)? {
@@ -142,7 +171,14 @@ impl Routes {
         if (original.dev(), original.ino()) != (named.dev(), named.ino()) {
             return Err(invalid("container route stage was replaced"));
         }
+        if let Some(gate) = gate {
+            (gate.prove)()?;
+        }
         pin.require(&self.directory, &stage)?;
+        if let Some(gate) = gate {
+            self.directory.confirm_absence(&name)?;
+            (gate.authorize)()?;
+        }
         // SAFETY: both names are checked single components within the same
         // held private directory; the kernel must never replace a destination.
         if unsafe {

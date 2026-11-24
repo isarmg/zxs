@@ -102,6 +102,16 @@ impl DataVolume {
         self.data.new_child_directory(&leaf(id)?)
     }
 
+    #[cfg(test)]
+    pub(super) fn create_upload_container(
+        &self,
+        id: Id,
+        before: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<HeldDir> {
+        self.require_named()?;
+        self.data.new_child_directory_when(&leaf(id)?, before)
+    }
+
     pub(super) fn read(&self, id: Id) -> io::Result<State> {
         let Some(container) = self.held_container(id)? else {
             return Ok(State::default());

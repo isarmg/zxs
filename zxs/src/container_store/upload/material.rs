@@ -1,14 +1,21 @@
 //! One resumable raw file on the already qualified DATA. Stable births
 //! identify it across process cuts; live original handles fence each exchange.
 use super::{
-    native::{birth, open_payload_writer, require_owner, require_same},
-    record::{Birth, Phase, Record, valid_raw_extent},
+    native::{birth, move_fresh, open_payload_writer, require_owner, require_same},
+    record::{Birth, Intent, Phase, Record, valid_raw_extent},
 };
 use crate::{
-    container_store::{hex, invalid, volume::DataVolume},
-    fs::{HeldDir, OpaquePin},
+    container_store::{
+        Body, Conflict, Error, Receipt, Store, codec, hex, invalid, volume::DataVolume,
+    },
+    fs::{HeldDir, OpaquePin, ReadAccess},
 };
-use std::{ffi::CString, fs::File, io, os::unix::fs::FileExt};
+use std::{
+    ffi::{CStr, CString},
+    fs::File,
+    io::{self, Read},
+    os::unix::fs::FileExt,
+};
 
 fn leaf(record: &Record) -> io::Result<CString> {
     CString::new(format!("u-{}", hex(record.intent.upload_id()?)))
@@ -40,6 +47,61 @@ pub(super) fn require_unused(volume: &DataVolume, record: &Record) -> io::Result
     volume.staging().confirm_absence(&leaf(record)?)
 }
 
+struct DraftReceipt {
+    pin: OpaquePin,
+    value: Receipt,
+}
+
+impl DraftReceipt {
+    fn read(directory: &HeldDir) -> io::Result<Option<Self>> {
+        let Some(pin) = directory.opaque_pin(c"receipt")? else {
+            return Ok(None);
+        };
+        let mut bytes = Vec::new();
+        (&pin.file).take(1025).read_to_end(&mut bytes)?;
+        pin.require(directory, c"receipt")?;
+        if bytes.len() > 1024 {
+            return Err(invalid("provisional upload receipt too long"));
+        }
+        let value = codec::decode(&bytes)?;
+        if value.sequence == 0 || codec::encode(&value)? != bytes {
+            return Err(invalid("unqualified provisional upload receipt"));
+        }
+        Ok(Some(Self { pin, value }))
+    }
+
+    fn require_intent(&self, intent: &Intent) -> io::Result<()> {
+        if self.value.mutation != intent.mutation || self.value.change != super::change(intent) {
+            return Err(invalid(
+                "provisional receipt differs from its original upload",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn layout(directory: &HeldDir, receipt: Option<&DraftReceipt>) -> io::Result<()> {
+    if let Some(receipt) = receipt {
+        directory.each_name(ReadAccess::Ordinary, |name| {
+            if matches!(name, b"payload" | b"receipt") {
+                Ok(())
+            } else {
+                Err(invalid("unknown member in provisional upload"))
+            }
+        })?;
+        receipt.pin.require(directory, c"receipt")
+    } else {
+        directory.only(Some(c"payload"))
+    }
+}
+
+pub(super) fn source_exists(volume: &DataVolume, record: &Record) -> io::Result<bool> {
+    on_volume(volume, record)?;
+    let present = volume.staging().pin_record(&leaf(record)?)?.is_some();
+    volume.staging().require_named()?;
+    Ok(present)
+}
+
 pub(super) struct Stage<'a> {
     volume: &'a DataVolume,
     name: CString,
@@ -47,6 +109,7 @@ pub(super) struct Stage<'a> {
     pin: OpaquePin,
     directory_birth: Birth,
     payload_birth: Birth,
+    draft: Option<DraftReceipt>,
 }
 
 pub(super) struct Custody {
@@ -92,7 +155,7 @@ impl<'a> Stage<'a> {
             authorize()?;
             directory.create_opaque_record(c"payload")?;
         }
-        let stage = Self::capture(volume, name, directory)?;
+        let stage = Self::capture(volume, name, directory, None)?;
         if stage.pin.file.metadata()?.len() != 0 {
             return Err(invalid("unconfirmed DATA preparation contains bytes"));
         }
@@ -118,7 +181,8 @@ impl<'a> Stage<'a> {
             .staging()
             .child_directory(&name)?
             .ok_or_else(|| invalid("original ready DATA stage is absent"))?;
-        let stage = Self::capture(volume, name, original)?;
+        let complete = (offset == record.intent.body.length).then_some(&record.intent);
+        let stage = Self::capture(volume, name, original, complete)?;
         if stage.directory_birth != directory
             || stage.payload_birth != payload
             || !valid_raw_extent(
@@ -134,8 +198,23 @@ impl<'a> Stage<'a> {
         Ok(stage)
     }
 
-    fn capture(volume: &'a DataVolume, name: CString, directory: HeldDir) -> io::Result<Self> {
-        directory.only(Some(c"payload"))?;
+    fn capture(
+        volume: &'a DataVolume,
+        name: CString,
+        directory: HeldDir,
+        completed_intent: Option<&Intent>,
+    ) -> io::Result<Self> {
+        let draft = match completed_intent {
+            Some(intent) => {
+                let draft = DraftReceipt::read(&directory)?;
+                if let Some(receipt) = &draft {
+                    receipt.require_intent(intent)?;
+                }
+                draft
+            }
+            None => None,
+        };
+        layout(&directory, draft.as_ref())?;
         let pin = directory
             .opaque_pin(c"payload")?
             .ok_or_else(|| invalid("original staged raw file is absent"))?;
@@ -151,6 +230,7 @@ impl<'a> Stage<'a> {
             pin,
             directory_birth,
             payload_birth,
+            draft,
         };
         stage.require()?;
         Ok(stage)
@@ -184,8 +264,140 @@ impl<'a> Stage<'a> {
         {
             return Err(invalid("original DATA stage or raw file was replaced"));
         }
-        self.directory.only(Some(c"payload"))?;
+        layout(&self.directory, self.draft.as_ref())?;
         self.pin.require(&self.directory, c"payload")
+    }
+
+    pub(super) fn verify_whole(
+        &self,
+        body: &Body,
+        authorize: impl Fn() -> io::Result<()>,
+    ) -> Result<(), Error> {
+        authorize()?;
+        self.require()?;
+        body.copy_exact(&mut &self.pin.file, &mut io::sink(), &authorize)?;
+        self.require()?;
+        authorize()?;
+        Ok(())
+    }
+
+    pub(super) fn prepare_receipt(
+        &mut self,
+        store: &Store,
+        expected: &Receipt,
+        prove: &impl Fn() -> io::Result<()>,
+        authorize: &impl Fn() -> io::Result<()>,
+    ) -> Result<(), Error> {
+        prove()?;
+        self.require()?;
+        authorize()?;
+        self.pin.file.sync_all()?;
+        if let Some(draft) = &self.draft {
+            if draft.value == *expected {
+                draft.pin.file.sync_all()?;
+                self.directory.file.sync_all()?;
+                self.require()?;
+                return Ok(());
+            }
+            if draft.value.mutation == expected.mutation && draft.value.change == expected.change {
+                return Err(Conflict::SequenceChanged(expected.sequence).into());
+            }
+            return Err(invalid("unrecognized provisional receipt cannot be replaced").into());
+        }
+        self.install_receipt(store, expected, prove, authorize)?;
+        self.require()?;
+        Ok(())
+    }
+
+    fn install_receipt(
+        &mut self,
+        store: &Store,
+        expected: &Receipt,
+        prove: &impl Fn() -> io::Result<()>,
+        authorize: &impl Fn() -> io::Result<()>,
+    ) -> Result<(), Error> {
+        prove()?;
+        self.require()?;
+        authorize()?;
+        let mut transient = store.stage(self.volume)?;
+        transient.write(c"receipt", &codec::encode(expected)?)?;
+        let original = transient.held_receipt()?;
+        move_fresh(
+            &transient.directory,
+            c"receipt",
+            &self.directory,
+            c"receipt",
+            || {
+                prove()?;
+                self.require()?;
+                original.require(&transient.directory, c"receipt")
+            },
+            authorize,
+        )?;
+        let now = DraftReceipt::read(&self.directory)?
+            .ok_or_else(|| invalid("provisional upload receipt disappeared"))?;
+        require_same(&self.directory, &original.file, &now.pin.file)?;
+        if now.value != *expected {
+            return Err(invalid("installed provisional receipt differs from its original").into());
+        }
+        self.draft = Some(now);
+        self.directory.file.sync_all()?;
+        transient.directory.file.sync_all()?;
+        Ok(())
+    }
+
+    pub(super) fn require_prepared(&self) -> io::Result<()> {
+        if self.draft.is_none() {
+            return Err(invalid("upload requires its exact provisional receipt"));
+        }
+        self.require()
+    }
+
+    pub(super) fn choose(
+        &self,
+        target: &HeldDir,
+        name: &CStr,
+        prove: &impl Fn() -> io::Result<()>,
+        authorize: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
+        if self.draft.is_none() {
+            return Err(invalid("upload requires an exact provisional receipt"));
+        }
+        move_fresh(
+            self.volume.staging(),
+            &self.name,
+            target,
+            name,
+            || {
+                prove()?;
+                self.require()
+            },
+            authorize,
+        )
+    }
+
+    pub(super) fn confirm_moved(&self, target: &HeldDir, name: &CStr) -> io::Result<()> {
+        let draft = self
+            .draft
+            .as_ref()
+            .ok_or_else(|| invalid("published upload receipt is not held"))?;
+        custody(self.volume)?;
+        let selected = target
+            .child_directory(name)?
+            .ok_or_else(|| invalid("published upload entry lost its new name"))?;
+        if selected.entity != self.directory.entity
+            || !selected.same_mount(&self.directory)?
+            || birth(&selected.file)? != self.directory_birth
+        {
+            return Err(invalid(
+                "published upload differs from its original directory",
+            ));
+        }
+        layout(&selected, Some(draft))?;
+        self.pin.require(&selected, c"payload")?;
+        self.volume.staging().confirm_absence(&self.name)?;
+        target.require_named()?;
+        selected.require_named()
     }
 
     /// After verified bytes are accepted, pwrite only that exact next extent.

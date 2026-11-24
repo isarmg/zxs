@@ -1,5 +1,5 @@
 //! Per-operation custody of original private staging directories and records.
-use super::invalid;
+use super::{Error, Id, Receipt, codec, invalid, routes::Routes, volume::DataVolume};
 mod sealed;
 
 use crate::fs::{HeldDir, OpaquePin};
@@ -112,6 +112,18 @@ impl<'a> FlatStage<'a> {
             .rename_child_if_absent(original, parent, name, authorize)
     }
 
+    #[cfg(test)]
+    pub(super) fn held_receipt(&self) -> io::Result<OpaquePin> {
+        self.require_named()?;
+        let (_, file) = self
+            .files
+            .iter()
+            .find(|(name, _)| *name == c"receipt")
+            .ok_or_else(|| invalid("receipt was not registered in its private stage"))?;
+        self.current_file(c"receipt", file)?
+            .ok_or_else(|| invalid("receipt lost its original private name"))
+    }
+
     pub(super) fn seal(mut self) -> io::Result<SealedStage> {
         self.directory.file.sync_all()?;
         self.require_named()?;
@@ -139,6 +151,69 @@ impl<'a> FlatStage<'a> {
         // Unknown leaves stay put. Only remove the original empty stage.
         self.parent
             .unlink_empty_opaque_original(&self.name, &self.directory)
+    }
+}
+
+/// The selection and durability sequence is shared; the original legacy flat
+/// stage and an exactly verified upload are independently qualified sources.
+pub(super) trait Publication {
+    fn stage_receipt(
+        &mut self,
+        receipt: &Receipt,
+        authorize: &impl Fn() -> io::Result<()>,
+    ) -> Result<(), Error>;
+
+    fn install(
+        &self,
+        parent: &HeldDir,
+        name: &CStr,
+        authorize: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()>;
+
+    fn reserve_first(
+        &self,
+        routes: &Routes,
+        id: Id,
+        token: [u8; 32],
+        authorize: &impl Fn() -> io::Result<()>,
+    ) -> io::Result<()> {
+        authorize()?;
+        routes.reserve(id, token)
+    }
+
+    fn create_first(
+        &self,
+        volume: &DataVolume,
+        id: Id,
+        _authorize: &impl Fn() -> io::Result<()>,
+    ) -> io::Result<HeldDir> {
+        volume.create_container(id)
+    }
+
+    fn confirm_moved(&self, _parent: &HeldDir, _name: &CStr) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Publication for FlatStage<'_> {
+    fn stage_receipt(
+        &mut self,
+        receipt: &Receipt,
+        _authorize: &impl Fn() -> io::Result<()>,
+    ) -> Result<(), Error> {
+        // Preserve the legacy path's exact file write, sync, and auth cuts.
+        self.write(c"receipt", &codec::encode(receipt)?)?;
+        self.directory.file.sync_all()?;
+        Ok(())
+    }
+
+    fn install(
+        &self,
+        parent: &HeldDir,
+        name: &CStr,
+        authorize: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.publish_directory(parent, name, authorize)
     }
 }
 

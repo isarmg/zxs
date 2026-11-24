@@ -94,8 +94,17 @@ impl HeldDir {
         Ok(Some(held))
     }
     pub(crate) fn new_child_directory(&self, name: &CStr) -> io::Result<HeldDir> {
+        self.new_child_directory_when(name, || Ok(()))
+    }
+
+    pub(crate) fn new_child_directory_when(
+        &self,
+        name: &CStr,
+        before: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<HeldDir> {
         check_path(&self.path.join(leaf(name)?))?;
         self.require_named()?;
+        before()?;
         // SAFETY: name is a bounded single component and the parent FD is held.
         os_result(unsafe { zxs_mkdir_private(self.file.as_raw_fd(), name.as_ptr()) })?;
         self.child_directory(name)?
