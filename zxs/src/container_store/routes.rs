@@ -328,3 +328,7 @@ fn decode(raw: [u8; BYTES]) -> io::Result<(Id, [u8; 32])> {
 #[cfg(test)]
 #[path = "../../tests/unit/container_routes.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "data_move_codec/record.rs"]
+mod data_move_codec;
