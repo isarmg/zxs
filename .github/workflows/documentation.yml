@@ -1,0 +1,76 @@
+name: Documentation boundaries
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['*.md', '**/*.md', '.github/workflows/documentation.yml']
+  push:
+    branches: [main]
+    paths: ['*.md', '**/*.md', '.github/workflows/documentation.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check changed documentation (manual runs check all)
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+
+          PROJECTS = {"zxs", "helper", "zxs-workspace", "zxs-core"}
+          CATEGORIES = {"guides", "specs", "invariants", "archive"}
+
+          event, base = os.environ["EVENT"], os.environ.get("BASE", "")
+          if event == "workflow_dispatch" or base == "0" * 40:
+              command = ["git", "ls-files", "-z"]
+          elif re.fullmatch(r"[0-9a-f]{40}", base):
+              command = ["git", "diff", "--name-only", "-z", "--diff-filter=ACMR", base, "HEAD", "--"]
+          else:
+              sys.exit("Could not determine the base commit for documentation checks")
+          paths = subprocess.check_output(command).split(b"\0")
+          problems = []
+          for raw in filter(None, paths):
+              path = Path(os.fsdecode(raw))
+              parts = path.parts
+              if path.suffix != ".md":
+                  continue
+              if parts == ("README.md",):
+                  cap = 40
+              elif len(parts) == 2 and parts[0] in PROJECTS and parts[1] == "README.md":
+                  cap = 120
+              elif len(parts) == 2 and parts[0] in PROJECTS and parts[1] in {"ARCHITECTURE.md", "TASKS.md", "STATUS.md"}:
+                  cap = 150
+              elif len(parts) >= 3 and parts[0] in PROJECTS and parts[1] == "docs":
+                  if len(parts) < 4 or parts[2] not in CATEGORIES:
+                      problems.append(f"{str(path)!r}: move this topic to guides, specs, invariants, or archive")
+                  cap = 200
+              else:
+                  continue
+              if path.is_symlink() or not path.is_file():
+                  problems.append(f"{str(path)!r}: documentation must be a regular file")
+                  continue
+              body = path.read_bytes()
+              lines = len(body.splitlines())
+              if lines > cap:
+                  problems.append(f"{str(path)!r}: {lines} lines, limit {cap}")
+              if cap == 120 and len(body) > 5000:
+                  problems.append(f"{str(path)!r}: {len(body)} bytes, limit 5000")
+          if problems:
+              sys.exit("\n".join(problems))
+          print("Documentation placement and length checks passed.")
+          PY
