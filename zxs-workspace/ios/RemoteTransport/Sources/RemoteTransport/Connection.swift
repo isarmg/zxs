@@ -67,10 +67,7 @@ struct NegotiatedHTTP2 {
             .flatMap { channel in
                 let verified = channel.getMetadata(definition: NWProtocolTLS.definition).flatMapThrowing { metadata in
                     guard let tlsMetadata = metadata as? NWProtocolTLS.Metadata,
-                          let token = sec_protocol_metadata_copy_negotiated_protocol(tlsMetadata.securityProtocolMetadata)
-                    else { throw TransportFailure.invalidALPN }
-                    defer { free(UnsafeMutableRawPointer(mutating: token)) }
-                    guard matchesHTTP2(String(validatingCString: token)) else { throw TransportFailure.invalidALPN }
+                          matchesHTTP2(negotiatedProtocol(tlsMetadata)) else { throw TransportFailure.invalidALPN }
                 }
                 return verified.flatMap {
                     var settings = NIOHTTP2Handler.ConnectionConfiguration()
@@ -90,6 +87,22 @@ struct NegotiatedHTTP2 {
                     return channel.eventLoop.makeFailedFuture(error)
                 }
             }
+    }
+
+    private static func negotiatedProtocol(_ tls: NWProtocolTLS.Metadata) -> String? {
+        let metadata = tls.securityProtocolMetadata
+        if #available(iOS 18.5, macOS 15.5, tvOS 18.5, watchOS 11.5, visionOS 2.5, *) {
+            guard let token = sec_protocol_metadata_copy_negotiated_protocol(metadata) else { return nil }
+            defer { free(UnsafeMutableRawPointer(mutating: token)) }
+            return String(validatingCString: token)
+        } else {
+            // The older accessor borrows its C string from this exact handshake's metadata.
+            // Copy it into Swift storage while its owner is alive; do not free the borrow.
+            return withExtendedLifetime(metadata) {
+                guard let token = sec_protocol_metadata_get_negotiated_protocol(metadata) else { return nil }
+                return String(validatingCString: token)
+            }
+        }
     }
 
     static func matchesHTTP2(_ negotiated: String?) -> Bool { negotiated == "h2" }
