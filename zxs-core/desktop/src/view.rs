@@ -1,7 +1,10 @@
 //! One window with explicit typed actions; no networking or SQLite on the UI thread.
-use std::{path::PathBuf, time::Instant};
+use std::{
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
-use eframe::egui::{self, Context, PointerButton, RawInput, Ui};
+use eframe::egui::{self, Context, Event, Key, PointerButton, RawInput, Response, Ui};
 use tokio::sync::{mpsc, watch};
 use zxs_core::{
     Result,
@@ -10,7 +13,9 @@ use zxs_core::{
 
 use crate::{
     actor::{self, Action, Card, Claim, Effect, Message, Snapshot},
-    secret::{Password, native_interrupted},
+    clipboard::{Queue as Clipboard, Target as PasteTarget},
+    picker::{self, Field},
+    secret::{NativeFrame, Password, clipboard_chord},
 };
 
 enum Gate {
@@ -42,14 +47,19 @@ struct ApprovalFrames {
 
 impl ApprovalFrames {
     /// Called before the toolkit runs logic or lays out any widget.
-    fn begin(&mut self, admitted: bool, existing: Option<&Claim>) {
+    fn begin(&mut self, frame: NativeFrame, existing: Option<&Claim>, gesture: Option<&Claim>) {
         self.native = self.native.wrapping_add(1);
-        self.admitted = admitted;
-        if !admitted {
-            if let Some(existing) = existing {
-                existing.revoke();
+        self.admitted = frame.active();
+        if !self.admitted {
+            if let Some(gesture) = gesture {
+                gesture.revoke();
             }
             self.seen = None;
+        }
+        if frame.explicit_end()
+            && let Some(existing) = existing
+        {
+            existing.revoke();
         }
     }
 
@@ -75,10 +85,19 @@ pub struct Desktop {
     view: Snapshot,
     waiting: bool,
     approved_send: bool,
+    gesture: Option<Claim>,
     approvals: ApprovalFrames,
+    chooser: Option<picker::Selection>,
+    local_notice: Option<&'static str>,
+    form_enter: Option<egui::Id>,
+    ordinary_paste: Option<egui::Id>,
+    clipboard: Clipboard,
+    password_paste: bool,
+    password_enter: bool,
     gate: Gate,
     password: Password,
     rejected_input: bool,
+    clipboard_unavailable: bool,
     state_path: String,
     origin: String,
     account: String,
@@ -96,10 +115,19 @@ impl Desktop {
             view: Snapshot::default(),
             waiting: false,
             approved_send: false,
+            gesture: None,
             approvals: ApprovalFrames::default(),
+            chooser: None,
+            local_notice: None,
+            form_enter: None,
+            ordinary_paste: None,
+            clipboard: Clipboard::default(),
+            password_paste: false,
+            password_enter: false,
             gate: Gate::Idle,
             password: Password::default(),
             rejected_input: false,
+            clipboard_unavailable: false,
             state_path: String::new(),
             origin: String::new(),
             account: String::new(),
@@ -128,7 +156,58 @@ impl Desktop {
         }
         self.password.clear();
         self.rejected_input = false;
+        self.clipboard_unavailable = false;
+        self.password_enter = false;
+        self.password_paste = false;
         self.gate = Gate::Retiring;
+    }
+
+    fn choose_path(&mut self, ctx: &Context, field: Field) {
+        match picker::Selection::ask(ctx, self.view.epoch, field) {
+            Ok(chooser) => {
+                self.chooser = Some(chooser);
+                self.local_notice = None;
+            }
+            Err(_) => {
+                self.local_notice =
+                    Some("Could not open the native chooser. Enter the absolute path instead.")
+            }
+        }
+    }
+
+    fn poll_chooser(&mut self) {
+        let Some(chooser) = &self.chooser else {
+            return;
+        };
+        let Some(path) = chooser.poll() else {
+            return;
+        };
+        let epoch = chooser.epoch;
+        let field = chooser.field;
+        self.chooser = None;
+        if epoch != self.view.epoch || !matches!(self.gate, Gate::Idle) || self.view.card.is_some()
+        {
+            return;
+        }
+        let Some(path) = path else {
+            self.local_notice =
+                Some("No path selected. If the chooser is unavailable, enter the path directly.");
+            return;
+        };
+        let Some(path) = path.to_str().filter(|p| Path::new(p).is_absolute()) else {
+            self.local_notice = Some("The chooser did not return a local absolute UTF-8 path.");
+            return;
+        };
+        match field {
+            Field::Workspace => self.state_path = path.to_owned(),
+            Field::CheckoutFolder => {
+                self.destination = format!("{}/", path.trim_end_matches('/'));
+                self.local_notice = Some(
+                    "Append the exact new filename. Checkout never replaces an existing file.",
+                );
+            }
+            Field::WorkingFile => self.working = path.to_owned(),
+        }
     }
 
     fn update_view(&mut self) {
@@ -138,6 +217,10 @@ impl Desktop {
             Err(_) => {
                 self.waiting = false;
                 self.approved_send = false;
+                if let Some(gesture) = self.gesture.take() {
+                    gesture.revoke();
+                }
+                self.chooser = None;
                 self.view.connected = false;
                 self.view.card = None;
                 self.view.notice = "The workspace worker stopped. No new result is known. Restart to check original receipts.";
@@ -158,6 +241,12 @@ impl Desktop {
         }
         if next.epoch != self.view.epoch {
             self.approvals.seen = None;
+            self.chooser = None;
+            self.local_notice = None;
+            self.password.clear();
+            if let Some(gesture) = self.gesture.take() {
+                gesture.revoke();
+            }
             if !matches!(self.gate, Gate::Idle) {
                 self.retire();
             }
@@ -167,6 +256,7 @@ impl Desktop {
         if next.serial != self.view.serial {
             self.waiting = false;
             self.approved_send = false;
+            self.gesture = None;
         }
         self.view = next;
         match &self.gate {
@@ -210,7 +300,7 @@ impl Desktop {
                 if ui.button("Cancel").clicked() {
                     self.retire();
                 } else if ui
-                    .button("Verify HTTPS/2")
+                    .add_enabled(self.approvals.admitted, egui::Button::new("Verify HTTPS/2"))
                     .clicked_by(PointerButton::Primary)
                 {
                     let claim = Claim::new();
@@ -242,23 +332,49 @@ impl Desktop {
                 ui.heading("Protected password entry");
                 ui.label(format!("Verified HTTPS origin: {}", ready.authority));
                 ui.label(format!("Account: {}", ready.account));
-                ui.label("Type directly. Paste, IME and password reveal are not supported.");
-                ui.label(if self.password.has_value() {
+                ui.label(
+                    "Type or deliberately paste here. Enter signs in after composition finishes.",
+                );
+                let field = ui.label(if self.password.has_value() {
                     "Password entered (hidden)"
                 } else {
                     "No password entered"
                 });
-                if self.rejected_input {
-                    ui.label("Input was discarded. Retype directly; do not paste.");
+                if self.approvals.admitted {
+                    ui.output_mut(|output| {
+                        output.ime = Some(egui::output::IMEOutput {
+                            purpose: egui::IMEPurpose::Password,
+                            rect: field.rect,
+                            cursor_rect: egui::Rect::from_min_size(
+                                field.rect.left_bottom(),
+                                egui::vec2(1.0, field.rect.height()),
+                            ),
+                            should_interrupt_composition: false,
+                        });
+                    });
                 }
+                if self.rejected_input {
+                    ui.label("Input was discarded: the password is too long or contains control characters.");
+                } else if self.clipboard_unavailable {
+                    ui.label("Could not read clipboard text. Type the password or use a supported desktop clipboard.");
+                }
+                let target = PasteTarget::Protected(claim.clone());
+                if was_shown && self.approvals.admitted && std::mem::take(&mut self.password_paste)
+                {
+                    self.clipboard.request(ui.ctx(), target.clone());
+                }
+                let enter = std::mem::take(&mut self.password_enter);
+                let ready = self.approvals.admitted
+                    && !self.clipboard.waiting_for(&target)
+                    && was_shown
+                    && self.password.ready_to_submit()
+                    && !self.waiting;
+                let sign_in =
+                    ui.add_enabled(ready, egui::Button::new("Sign in to this exact workspace"));
                 if ui.button("Cancel").clicked() {
                     self.retire();
-                } else if ui
-                    .add_enabled(
-                        was_shown && self.password.has_value() && !self.waiting,
-                        egui::Button::new("Sign in to this exact workspace"),
-                    )
-                    .clicked_by(PointerButton::Primary)
+                } else if ready
+                    && (enter || sign_in.clicked_by(PointerButton::Primary))
                     && let Some(password) = self.password.take()
                 {
                     if self.send(Action::Finish {
@@ -334,11 +450,17 @@ impl Desktop {
                 egui::Button::new("Confirm this exact choice"),
             )
             .clicked_by(PointerButton::Primary)
-            && self.send(Action::Approve(card.claim.clone()))
         {
-            self.approved_send = matches!(card.effect, Effect::Send);
+            let gesture = Claim::new();
+            if self.send(Action::Approve {
+                choice: card.claim.clone(),
+                gesture: gesture.clone(),
+            }) {
+                self.gesture = Some(gesture);
+                self.approved_send = matches!(card.effect, Effect::Send);
+            }
         }
-        if self.approved_send {
+        if self.approved_send && self.gesture.as_ref().is_some_and(Claim::accepted) {
             ui.label(
                 "Submit in progress. If interrupted, keep the original and check its receipt.",
             );
@@ -363,26 +485,51 @@ impl Desktop {
             return;
         }
         self.approvals.seen = None;
-        ui.add_enabled_ui(!self.waiting, |ui| {
+        let mut pick = None;
+        let enter = self.form_enter.take();
+        if let Some(notice) = self.local_notice {
+            ui.label(notice);
+        }
+        if self.chooser.is_some() {
+            ui.label("Waiting for the native file chooser. No transfer was started.");
+        }
+        ui.add_enabled_ui(!self.waiting && self.chooser.is_none() && self.approvals.admitted, |ui| {
             if let Some(path) = &self.view.path {
                 ui.label(format!("Original private workspace: {}", path.display()));
             }
             ui.horizontal(|ui| {
                 ui.label("Existing state directory:");
-                ui.text_edit_singleline(&mut self.state_path);
-                if ui.button("Open existing").clicked() && !self.state_path.is_empty() {
-                    action = Some(Action::Open(PathBuf::from(&self.state_path)));
+                let edit = ui.text_edit_singleline(&mut self.state_path);
+                if ui.button("Choose folder").clicked() {
+                    pick = Some(Field::Workspace);
+                }
+                if ui.button("Open existing").clicked() || field_enter(&edit, enter) {
+                    if Path::new(&self.state_path).is_absolute() {
+                        action = Some(Action::Open(PathBuf::from(&self.state_path)));
+                    } else {
+                        self.local_notice = Some("Select the existing private workspace using an absolute folder path.");
+                    }
                 }
             });
             if !self.view.connected {
                 ui.label("This app opens existing enrolled workspaces. It does not create a new one.");
                 ui.horizontal(|ui| {
                     ui.label("Original HTTPS origin");
-                    ui.text_edit_singleline(&mut self.origin);
+                    let origin = ui.text_edit_singleline(&mut self.origin);
                     ui.label("Account");
-                    ui.text_edit_singleline(&mut self.account);
-                    if ui.add_enabled(self.view.path.is_some() && !self.origin.is_empty() && !self.account.is_empty(),
-                        egui::Button::new("Review connection")).clicked() {
+                    let account = ui.text_edit_singleline(&mut self.account);
+                    if ui.button("Review connection").clicked()
+                        || field_enter(&origin, enter) || field_enter(&account, enter)
+                    {
+                        if self.view.path.is_none() {
+                            self.local_notice = Some("Open the existing private workspace first.");
+                            return;
+                        }
+                        if !self.origin.starts_with("https://") || self.account.is_empty() {
+                            self.local_notice = Some("Enter the original HTTPS origin and account.");
+                            return;
+                        }
+                        self.local_notice = None;
                         // The next frame is read-only and scrubbed, before Verify.
                         self.password.clear();
                         ui.ctx().memory_mut(|memory| {
@@ -397,7 +544,7 @@ impl Desktop {
             } else {
                 ui.horizontal(|ui| {
                     ui.label(format!("Authorized: {} · {}", self.view.authority, self.view.account));
-                    if ui.button("Disconnect").clicked() {
+                    if ui.button("Lock workspace").clicked() {
                         action = Some(Action::Disconnect);
                     }
                 });
@@ -426,14 +573,22 @@ impl Desktop {
                     });
                     ui.horizontal(|ui| {
                         ui.label("Exact new ordinary file:");
-                        ui.text_edit_singleline(&mut self.destination);
+                        let edit = ui.text_edit_singleline(&mut self.destination);
+                        if ui.button("Choose output folder").clicked() {
+                            pick = Some(Field::CheckoutFolder);
+                        }
                         let head = self.branch.as_ref().and_then(|b| detail.heads.iter().find(|h| &h.branch == b));
-                        if ui.add_enabled(head.is_some() && !self.destination.is_empty(), egui::Button::new("Review checkout")).clicked()
-                            && let Some(head) = head {
-                            action = Some(Action::Choose {
-                                container: detail.container_id.clone(), branch: head.branch.clone(),
-                                node: head.head.clone(), output: self.destination.as_str().into(),
-                            });
+                        if ui.button("Review checkout").clicked() || field_enter(&edit, enter) {
+                            if !absolute_file(&self.destination) {
+                                self.local_notice = Some("Choose an absolute output path with an exact new filename.");
+                            } else if let Some(head) = head {
+                                action = Some(Action::Choose {
+                                    container: detail.container_id.clone(), branch: head.branch.clone(),
+                                    node: head.head.clone(), output: self.destination.as_str().into(),
+                                });
+                            } else {
+                                self.local_notice = Some("Select the branch whose exact head you want to check out.");
+                            }
                         }
                     });
                 }
@@ -443,9 +598,16 @@ impl Desktop {
                 ui.label("Edit the ordinary path in your preferred application. Editor saves never submit.");
                 ui.horizontal(|ui| {
                     ui.label("Mapped working file:");
-                    ui.text_edit_singleline(&mut self.working);
-                    if ui.add_enabled(!self.working.is_empty() && !self.view.fresh_send, egui::Button::new("Review full change")).clicked() {
-                        action = Some(Action::Review(self.working.as_str().into()));
+                    let edit = ui.text_edit_singleline(&mut self.working);
+                    if ui.button("Choose file").clicked() {
+                        pick = Some(Field::WorkingFile);
+                    }
+                    if !self.view.fresh_send && (ui.button("Review full change").clicked() || field_enter(&edit, enter)) {
+                        if absolute_file(&self.working) {
+                            action = Some(Action::Review(self.working.as_str().into()));
+                        } else {
+                            self.local_notice = Some("Choose a mapped ordinary file using an absolute path.");
+                        }
                     }
                 });
                 if ui.add_enabled(self.view.connected && self.view.fresh_send, egui::Button::new("Review newly frozen original for submit")).clicked() {
@@ -475,48 +637,145 @@ impl Desktop {
                 });
             }
         });
-        if let Some(action) = action {
+        if let Some(field) = pick {
+            self.choose_path(ui.ctx(), field);
+        } else if let Some(action) = action {
+            self.local_notice = None;
             self.send(action);
+        } else if let Some(edit) = self.ordinary_paste.take()
+            && matches!(self.gate, Gate::Idle)
+            && self.approvals.admitted
+            && ui.ctx().memory(|memory| memory.focused()) == Some(edit)
+        {
+            self.clipboard
+                .request(ui.ctx(), PasteTarget::Ordinary(edit));
         }
     }
 }
 
+fn absolute_file(path: &str) -> bool {
+    Path::new(path).is_absolute() && !path.ends_with('/') && Path::new(path).file_name().is_some()
+}
+
+fn field_enter(edit: &Response, enter: Option<egui::Id>) -> bool {
+    enter == Some(edit.id) && edit.lost_focus()
+}
+
+fn ordinary_clipboard(focused: Option<egui::Id>, raw: &mut RawInput) -> Option<egui::Id> {
+    // Native shortcuts are disabled globally to avoid a pre-hook clipboard
+    // text copy in the protected lane. Only normal widgets use the native
+    // integration's copy/cut events and requested paste.
+    let focused = focused?;
+    let mut paste = false;
+    raw.events.retain_mut(|event| {
+        if let Event::Key {
+            key,
+            pressed: true,
+            modifiers,
+            ..
+        } = event
+            && clipboard_chord(*modifiers)
+        {
+            match key {
+                Key::C => *event = Event::Copy,
+                Key::X => *event = Event::Cut,
+                Key::V => {
+                    paste = true;
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        true
+    });
+    paste.then_some(focused)
+}
+
 impl eframe::App for Desktop {
     fn raw_input_hook(&mut self, ctx: &Context, raw: &mut RawInput) {
-        // Even if a confirmation card arrives only in logic() below, an
-        // interrupted native frame may not be its first approval frame.
+        let frame = NativeFrame::from_raw(raw);
         self.approvals.begin(
-            !native_interrupted(raw),
+            frame,
             self.view.card.as_ref().map(|card| &card.claim),
+            self.gesture.as_ref(),
         );
-        if matches!(self.gate, Gate::Idle) {
+        self.password_enter = false;
+        self.password_paste = false;
+        self.form_enter = None;
+        self.ordinary_paste = None;
+        if frame.explicit_end() {
+            self.chooser = None;
+        }
+
+        let ordinary = matches!(self.gate, Gate::Idle)
+            && frame.active()
+            && self.view.card.is_none()
+            && self.chooser.is_none();
+        let focused = ordinary
+            .then(|| ctx.memory(|m| m.focused()))
+            .flatten()
+            .filter(|id| egui::TextEdit::load_state(ctx, *id).is_some());
+        let prompt = match &self.gate {
+            Gate::Prompt { claim, shown: true }
+                if frame.active()
+                    && claim.live()
+                    && self.view.prompt.as_ref().is_some_and(|ready| {
+                        ready.claim.same(claim) && Instant::now() < ready.deadline
+                    }) =>
+            {
+                Some(PasteTarget::Protected(claim.clone()))
+            }
+            _ => None,
+        };
+        let target = focused
+            .map(PasteTarget::Ordinary)
+            .or_else(|| prompt.clone());
+        let paste_waiting = prompt
+            .as_ref()
+            .is_some_and(|t| self.clipboard.waiting_for(t));
+        let no_clipboard = self.clipboard.receive(raw, target.as_ref(), Instant::now());
+
+        if ordinary {
+            if no_clipboard {
+                self.local_notice = Some("No clipboard text is available to this field.");
+            }
+            if raw.events.iter().any(|e| {
+                matches!(e, Event::Key {
+                key: Key::Enter, pressed: true, modifiers, ..
+            } if *modifiers == egui::Modifiers::NONE)
+            }) && !raw
+                .events
+                .iter()
+                .any(|e| matches!(e, Event::Ime(_) | Event::PointerButton { .. }))
+            {
+                self.form_enter = focused;
+            }
+            self.ordinary_paste = ordinary_clipboard(focused, raw);
             return;
         }
-        let capture = matches!(&self.gate, Gate::Prompt { claim, shown: true }
-        if claim.live() && self.view.prompt.as_ref().is_some_and(|ready| {
-            ready.claim.same(claim) && Instant::now() < ready.deadline
-        }));
-        let filtered = self.password.filter(raw, capture);
-        // A focus/close revocation still wins while a handed-off credential is
-        // queued. Once atomically accepted, keep the in-flight status honest.
-        if filtered.abort {
-            let unaccepted = match &self.gate {
-                Gate::WaitingForCatalog(claim) => claim.revoke(),
-                _ => true,
-            };
-            if unaccepted && !matches!(self.gate, Gate::Retiring) {
-                self.retire();
-                ctx.request_repaint();
-            }
-        } else if filtered.rejected {
-            self.rejected_input = true;
+        let filtered = self
+            .password
+            .filter(raw, prompt.is_some(), frame, paste_waiting);
+        self.password_enter = filtered.submit;
+        self.password_paste = filtered.paste_requested;
+        if frame.explicit_end() && !matches!(self.gate, Gate::Idle | Gate::Retiring) {
+            self.retire();
+            ctx.request_repaint();
+        } else if filtered.rejected || no_clipboard {
+            self.rejected_input = filtered.rejected;
+            self.clipboard_unavailable = no_clipboard;
         } else if self.password.has_value() {
             self.rejected_input = false;
+            self.clipboard_unavailable = false;
         }
+        // Once a foreground sign-in was explicitly handed off, transient
+        // blur is not cancellation. The same held H2-ready guard still
+        // honors explicit cancel, close, change and expiry.
     }
 
     fn logic(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         self.update_view();
+        self.poll_chooser();
         if self.approved_send
             && ctx.input(|i| i.viewport().close_requested())
             && self
@@ -532,9 +791,10 @@ impl eframe::App for Desktop {
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        self.clipboard.painted(ui.ctx(), self.approvals.native);
         egui::CentralPanel::default().show(ui, |ui| {
             if matches!(self.gate, Gate::Idle) {
-                self.normal(ui);
+                ui.push_id(("workspace", self.view.epoch), |ui| self.normal(ui));
             } else {
                 self.protective_panel(ui);
             }
@@ -549,6 +809,9 @@ impl eframe::App for Desktop {
 impl Drop for Desktop {
     fn drop(&mut self) {
         self.retire();
+        if let Some(gesture) = &self.gesture {
+            gesture.revoke();
+        }
         if let Some(card) = &self.view.card {
             card.claim.revoke();
         }
@@ -564,15 +827,15 @@ mod tests {
         let old = Claim::new();
         let next = Claim::new();
         let mut frames = ApprovalFrames::default();
-        frames.begin(true, None);
+        frames.begin(NativeFrame::Active, None, None);
         assert!(!frames.show(&old));
-        assert!(!frames.show(&old)); // A second egui layout is still the same frame.
-        frames.begin(true, Some(&old));
+        assert!(!frames.show(&old));
+        frames.begin(NativeFrame::Active, Some(&old), None);
         assert!(frames.show(&old));
         assert_ne!(old.widget_scope(), next.widget_scope());
         assert!(!frames.show(&next));
         assert!(!frames.show(&next));
-        frames.begin(true, Some(&next));
+        frames.begin(NativeFrame::Active, Some(&next), None);
         assert!(frames.show(&next));
     }
 
@@ -582,19 +845,34 @@ mod tests {
         let next = Claim::new();
         let mut raw = RawInput::default();
         let mut frames = ApprovalFrames::default();
-        frames.begin(!native_interrupted(&raw), None);
+        frames.begin(NativeFrame::from_raw(&raw), None, None);
         assert!(!frames.show(&old));
         raw.viewports
             .get_mut(&raw.viewport_id)
             .unwrap()
             .events
             .push(egui::ViewportEvent::Close);
-        frames.begin(!native_interrupted(&raw), Some(&old));
+        frames.begin(NativeFrame::from_raw(&raw), Some(&old), None);
         assert!(old.revoked());
         assert!(!frames.show(&old));
-        // The owner returns a different card after raw input already ran.
         assert!(!frames.show(&next));
-        frames.begin(true, Some(&next));
+        frames.begin(NativeFrame::Active, Some(&next), None);
         assert!(!frames.show(&next));
+    }
+
+    #[test]
+    fn focus_loss_revokes_only_the_gesture_and_requires_a_new_foreground_frame() {
+        let card = Claim::new();
+        let gesture = Claim::new();
+        let mut frames = ApprovalFrames::default();
+        frames.begin(NativeFrame::Active, Some(&card), None);
+        assert!(!frames.show(&card));
+        frames.begin(NativeFrame::Inactive, Some(&card), Some(&gesture));
+        assert!(gesture.revoked() && card.live());
+        assert!(!frames.show(&card));
+        frames.begin(NativeFrame::Active, Some(&card), None);
+        assert!(!frames.show(&card));
+        frames.begin(NativeFrame::Active, Some(&card), None);
+        assert!(frames.show(&card) && gesture.revoked());
     }
 }

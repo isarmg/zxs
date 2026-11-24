@@ -131,7 +131,10 @@ pub enum Action {
     },
     Review(PathBuf),
     ReviewSend,
-    Approve(Claim),
+    Approve {
+        choice: Claim,
+        gesture: Claim,
+    },
     Lookup(Id),
 }
 
@@ -529,12 +532,18 @@ impl Owner {
         }
     }
 
-    async fn approve(&mut self, approved: Claim) -> &'static str {
+    async fn approve(&mut self, approved: Claim, gesture: Claim) -> &'static str {
         let Some((claim, _)) = self.choice.as_ref() else {
             return "No current decision to approve.";
         };
-        if !claim.same(&approved) || !claim.accept() {
+        if !claim.same(&approved) || !claim.live() {
             return "That choice is no longer current; nothing was approved.";
+        }
+        if !gesture.accept() {
+            return "Confirmation was interrupted. The same preview is still available.";
+        }
+        if !claim.accept() {
+            return "That choice was canceled before it was accepted.";
         }
         let Some((_, choice)) = self.choice.take() else {
             return "No current decision.";
@@ -576,7 +585,8 @@ impl Owner {
             self.drop_choice();
         }
         if (self.login.is_some() && !matches!(&action, Action::Finish { .. } | Action::Dismiss))
-            || (self.choice.is_some() && !matches!(&action, Action::Approve(_) | Action::Dismiss))
+            || (self.choice.is_some()
+                && !matches!(&action, Action::Approve { .. } | Action::Dismiss))
         {
             self.view.notice = "Resolve or cancel the original visible choice first.";
             return;
@@ -688,7 +698,7 @@ impl Owner {
                     "No current matching frozen original is available to send."
                 }
             }
-            Action::Approve(claim) => self.approve(claim).await,
+            Action::Approve { choice, gesture } => self.approve(choice, gesture).await,
             Action::Lookup(op) => {
                 if self.lookup(op).await.is_ok() {
                     "Original receipt checked; no file body was sent."

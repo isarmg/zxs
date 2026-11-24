@@ -11,11 +11,14 @@ description = "Optional ZXS desktop shell for the existing shared client core"
 resolver = "3"
 
 [dependencies]
-eframe = { version = "=0.37.0", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+eframe = { version = "=0.37.0", default-features = false, features = ["clipboard", "default_fonts", "glow", "system_fonts", "wayland", "x11"] }
 log = { version = "=0.4.35", default-features = false, features = ["max_level_off"] }
 tokio = { version = "=1.54.1", default-features = false, features = ["rt", "sync", "time"] }
 zeroize = "=1.9.1"
 zxs-core = { path = ".." }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+rfd = { version = "=0.17.2", default-features = false, features = ["xdg-portal"] }
 
 [lints.rust]
 unsafe_code = "forbid"

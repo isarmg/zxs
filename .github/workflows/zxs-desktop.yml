@@ -58,9 +58,14 @@ jobs:
           grep -Eq '^eframe v0\.37\.0([[:space:]]|$)' "$graph"
           grep -Eq '^egui-winit v0\.37\.0([[:space:]]|$)' "$graph"
           features="$(sed -n 's/^eframe feature "\([^"]*\)".*$/\1/p' "$graph" | LC_ALL=C sort -u)"
-          test "$features" = $'default_fonts\nglow\nwayland\nx11'
+          test "$features" = $'clipboard\ndefault_fonts\nglow\nsystem_fonts\nwayland\nx11'
+          grep -Eq '^arboard v3\.7\.0([[:space:]]|$)' "$graph"
+          grep -Eq '^rfd v0\.17\.2([[:space:]]|$)' "$graph"
+          grep -Fq 'rfd feature "xdg-portal"' "$graph"
+          grep -Fq 'egui-winit feature "clipboard"' "$graph"
+          grep -Eq '^egui_system_font_provider v0\.37\.0([[:space:]]|$)' "$graph"
           grep -Fq 'log feature "max_level_off"' "$graph"
-          if grep -E '^(arboard|smithay-clipboard|webbrowser|accesskit_(unix|winit)|wgpu|egui-wgpu|env_logger|tracing-subscriber) v|^(eframe|egui|egui-winit|egui_glow) feature "(clipboard|links|accesskit|persistence|inspection|screenshot|wgpu)"' "$graph"; then
+          if grep -E '^(webbrowser|accesskit_(unix|winit)|wgpu|egui-wgpu|env_logger|tracing-subscriber|gtk-sys) v|^(eframe|egui|egui-winit|egui_glow) feature "(links|accesskit|persistence|inspection|screenshot|wgpu)"' "$graph"; then
             echo 'Unexpected active desktop input, renderer or diagnostic feature'
             exit 1
           fi
@@ -78,11 +83,15 @@ jobs:
             actor::tests::prewire_cancel_during_sender_ready_refuses_the_first_auth_cut
             actor::tests::revocation_and_acceptance_are_single_original_decisions
             secret::tests::only_previously_armed_direct_text_survives_in_fixed_secret_storage
-            secret::tests::coalesced_focus_loss_or_paste_never_leaves_a_partial_credential
-            secret::tests::minimize_close_or_escape_scrub_the_complete_batch
+            secret::tests::focus_loss_preserves_only_the_prior_draft
+            secret::tests::hide_preserves_but_close_or_escape_wipes_the_draft_and_batch
             secret::tests::overlong_batch_is_not_truncated_and_left_available
+            secret::tests::only_new_enter_after_composition_can_submit
+            secret::tests::only_explicit_foreground_paste_is_requested_and_enter_ends_that_batch
             view::tests::a_card_needs_prior_native_visibility_and_the_same_exact_claim
             view::tests::close_event_wins_over_an_old_or_a_new_card_in_that_frame
+            clipboard::tests::native_paste_keeps_its_target_through_glows_empty_pass
+            view::tests::focus_loss_revokes_only_the_gesture_and_requires_a_new_foreground_frame
           )
           output="$(cargo +1.100.0 test --locked --offline --bin zxs-desktop -- \
             --exact --color never --format pretty --test-threads=1 "${cases[@]}" 2>&1)" || {

@@ -4,6 +4,10 @@ compile_error!("The initial ZXS desktop workspace adapter is Linux-only.");
 #[cfg(target_os = "linux")]
 mod actor;
 #[cfg(target_os = "linux")]
+mod clipboard;
+#[cfg(target_os = "linux")]
+mod picker;
+#[cfg(target_os = "linux")]
 mod secret;
 #[cfg(target_os = "linux")]
 mod view;
@@ -19,7 +23,7 @@ fn main() -> eframe::Result {
         clipboard_shortcuts: false,
         persistence_path: None,
         persist_window: false,
-        system_font_fallback: false,
+        system_font_fallback: true,
         ..eframe::NativeOptions::default()
     };
     eframe::run_native(
