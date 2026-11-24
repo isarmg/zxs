@@ -1,0 +1,38 @@
+[package]
+name = "zxs-core"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "Apache-2.0"
+publish = false
+description = "ZXS native remote client: exact R3 transfer and ordinary local workspace"
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+base64 = "=0.22.1"
+bytes = "=1.11.1"
+crc32fast = "=1.5.0"
+flate2 = { version = "=1.1.10", default-features = false, features = ["miniz_oxide"] }
+h2 = "=0.4.19"
+http = "=1.4.0"
+miniz_oxide = { version = "=0.9.0", default-features = false }
+ring = "=0.17.14"
+rustls = { version = "=0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
+rustls-native-certs = "=0.8.5"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+sha2 = "=0.10.9"
+tokio = { version = "=1.54.1", features = ["fs", "io-util", "net", "rt", "time"] }
+tokio-rustls = { version = "=0.26.5", default-features = false, features = ["ring", "tls12"] }
+zeroize = "=1.9.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ignore = "=0.4.25"
+rpassword = "=7.4.0"
+rusqlite = { version = "=0.37.0", default-features = false, features = ["bundled"] }
+rustix = { version = "=1.1.5", features = ["fs", "process"] }
+
+[lints.rust]
+unsafe_code = "forbid"
