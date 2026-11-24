@@ -57,6 +57,26 @@ final class PickedDocument implements AutoCloseable {
         }
     }
 
+    OrdinaryFileStage.Staged stageOrdinary(Context ctx, String id, CancellationSignal cancel) throws IOException {
+        if (index != null) throw new IOException("Select an ordinary file to stage");
+        OrdinaryFileStage.Staged completed = null;
+        try (ParcelFileDescriptor lease = borrow()) {
+            Reader reader = new Reader(ctx, uri, lease.getFileDescriptor(), observed, cancel, null);
+            completed = OrdinaryFileStage.stage(ctx, id, new OrdinaryFileStage.Source() {
+                @Override public long size() { return observed.st_size; }
+                @Override public void validate() throws IOException { reader.validate(); }
+                @Override public void fill(long offset, byte[] bytes, int count) throws IOException {
+                    reader.fill(offset, bytes, count);
+                }
+                @Override public void checkEnd() throws IOException { reader.checkEnd(); }
+            }, cancel);
+        } catch (IOException | RuntimeException failure) {
+            if (completed != null) throw new OrdinaryFileStage.Unconfirmed(completed, failure);
+            throw failure;
+        }
+        return completed;
+    }
+
     boolean isManagedSnapshotName() { return title.toLowerCase(Locale.ROOT).endsWith(".zxs"); }
     long fileBytes() { return observed.st_size; }
 
@@ -138,6 +158,15 @@ final class PickedDocument implements AutoCloseable {
                 && a.st_ctim.tv_sec == b.st_ctim.tv_sec && a.st_ctim.tv_nsec == b.st_ctim.tv_nsec;
     }
     static PickedDocument inspect(Context ctx, Uri uri, CancellationSignal cancel) throws IOException {
+        return inspect(ctx, uri, cancel, true);
+    }
+
+    static PickedDocument openOrdinary(Context ctx, Uri uri, CancellationSignal cancel) throws IOException {
+        return inspect(ctx, uri, cancel, false);
+    }
+
+    private static PickedDocument inspect(Context ctx, Uri uri, CancellationSignal cancel, boolean archive)
+            throws IOException {
         checkUri(uri); cancel.throwIfCanceled();
         PackageManager pm = ctx.getPackageManager();
         ProviderInfo info = pm.resolveContentProvider(AUTH, 0);
@@ -162,8 +191,9 @@ final class PickedDocument implements AutoCloseable {
                     && c.getType(4) == Cursor.FIELD_TYPE_INTEGER);
             title = c.getString(1); size = c.getLong(4);
             String ext = title.toLowerCase(Locale.ROOT);
-            ArchiveIndex.require(ArchiveIndex.safeComponent(title) && (ext.endsWith(".zxs") || ext.endsWith(".zip"))
-                    && size >= 22 && size <= ArchiveIndex.MAX_ARCHIVE && !c.moveToNext());
+            ArchiveIndex.require(ArchiveIndex.safeComponent(title) && size >= 0 && !c.moveToNext()
+                    && (!archive || ((ext.endsWith(".zxs") || ext.endsWith(".zip"))
+                    && size >= 22 && size <= ArchiveIndex.MAX_ARCHIVE)));
         }
         cancel.throwIfCanceled();
         ParcelFileDescriptor pfd = resolver.openFileDescriptor(uri, "r", cancel);
@@ -177,7 +207,7 @@ final class PickedDocument implements AutoCloseable {
             Os.lseek(fd, 0, OsConstants.SEEK_CUR);
             Reader reader = new Reader(ctx, uri, fd, original, cancel, null);
             reader.validate();
-            ArchiveIndex index = ArchiveIndex.read(reader, size);
+            ArchiveIndex index = archive ? ArchiveIndex.read(reader, size) : null;
             reader.validate();
             PickedDocument result = new PickedDocument(title, index, uri, original, pfd);
             transferred = true;
