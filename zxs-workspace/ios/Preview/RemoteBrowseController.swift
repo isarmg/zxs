@@ -32,7 +32,7 @@ final class RemoteBrowseController: UITableViewController {
     private let onPrepared: (RemoteSave, Bool) -> Void
     private var trail: [Page] = [.catalog(nil)]
     private var rows: [Row] = []
-    private var next: Page?
+    private var nextRemotePage: Page?
     private var job: Task<Void, Never>?
     private var token = UUID()
     private weak var consent: UIAlertController?
@@ -65,13 +65,13 @@ final class RemoteBrowseController: UITableViewController {
     }
 
     private func setNavigation() {
-        navigationItem.rightBarButtonItems?.first?.isEnabled = next != nil && exchange != nil && job == nil
+        navigationItem.rightBarButtonItems?.first?.isEnabled = nextRemotePage != nil && exchange != nil && job == nil
         navigationItem.rightBarButtonItems?.last?.isEnabled = trail.count > 1 && exchange != nil && job == nil
     }
 
     @objc private func advance() {
-        guard let next, job == nil else { return }
-        trail.append(next)
+        guard let nextRemotePage, job == nil else { return }
+        trail.append(nextRemotePage)
         loadCurrent()
     }
 
@@ -83,7 +83,7 @@ final class RemoteBrowseController: UITableViewController {
 
     private func loadCurrent() {
         guard let page = trail.last, let exchange, job == nil else { return }
-        rows = []; next = nil; tableView.reloadData()
+        rows = []; nextRemotePage = nil; tableView.reloadData()
         banner.text = "读取服务器列表…"
         let selected = UUID()
         token = selected
@@ -96,17 +96,17 @@ final class RemoteBrowseController: UITableViewController {
                 case let .catalog(cursor):
                     let result = try RemoteRead.Catalog.select(response.bytes, after: cursor)
                     self.rows = result.items.map(Row.container)
-                    self.next = result.nextAfter.map(Page.catalog)
+                    self.nextRemotePage = result.nextAfter.map(Page.catalog)
                 case let .detail(container, cursor):
                     let result = try RemoteRead.Detail.select(response.bytes, expected: container, after: cursor)
                     self.rows = result.heads.map { .branch(container, $0) }
-                    self.next = result.nextAfter.map { .detail(container, $0) }
+                    self.nextRemotePage = result.nextAfter.map { .detail(container, $0) }
                 case let .history(container, branch, cursor, upper):
                     let result = try RemoteRead.History.select(response.bytes, head: branch.head,
                                                                cursor: cursor, upper: upper)
                     self.rows = result.nodes.map { .node(container, branch, $0) }
                     if let next = result.next, let tail = result.nodes.last {
-                        self.next = .history(container, branch, next, tail.sequence - 1)
+                        self.nextRemotePage = .history(container, branch, next, tail.sequence - 1)
                     }
                 }
                 self.banner.text = self.rows.isEmpty ? "本页没有项目。" : nil
@@ -238,7 +238,7 @@ final class RemoteBrowseController: UITableViewController {
         token = UUID()
         job?.cancel(); job = nil
         exchange = nil
-        next = nil; rows = []
+        nextRemotePage = nil; rows = []
         if isViewLoaded {
             navigationItem.prompt = nil
             banner.text = "连接已关闭。请返回并重新选择服务器。"

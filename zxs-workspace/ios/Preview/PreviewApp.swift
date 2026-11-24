@@ -122,7 +122,7 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
     private let checkAll = UIButton(type: .system)
     private let find = UIButton(type: .system), form = UIStackView(), query = UITextField()
     private var search: NameSearch?
-    private let previous = UIButton(type: .system), next = UIButton(type: .system)
+    private let previous = UIButton(type: .system), nextDirectoryPageButton = UIButton(type: .system)
     private let directoryNav = UIStackView(), textNav = UIStackView(), literal = UITextView()
     private var textReading: TextReading?
     private var rawReading: NSObject?
@@ -131,7 +131,7 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
     private var selection: DocumentPresentation?, report: Report?
     private weak var decision: UIAlertController?
     private var memberConsent: NSObject?
-    private var trail: [Member] = [], children: [Member] = [], page = 0
+    private var trail: [Member] = [], directoryEntries: [Member] = [], page = 0
     private let pageSize = 100
 
     override func viewDidLoad() {
@@ -168,8 +168,8 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         for child in [query, submit, fold] { form.addArrangedSubview(child) }
         wire(up, "上一级", #selector(goUp))
         wire(previous, "上一页", #selector(prevPage))
-        wire(next, "下一页", #selector(nextPage))
-        for button in [up, previous, next] { directoryNav.addArrangedSubview(button) }
+        wire(nextDirectoryPageButton, "下一页", #selector(nextPage))
+        for button in [up, previous, nextDirectoryPageButton] { directoryNav.addArrangedSubview(button) }
         directoryNav.distribution = .fillEqually
         textNav.axis = .vertical; textNav.spacing = 3
         // The text view occupies the available viewport, not a view as tall as every line.
@@ -372,7 +372,7 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
             if let match = match, let rows = origin.directory.originalParentRows(for: match) {
                 guard self.originalArchive(for: request) != nil else { self.clearSelection(); return }
                 self.trail = match.parents
-                self.children = rows
+                self.directoryEntries = rows
                 self.page = match.ordinal / self.pageSize
                 self.status.text = "已定位到所选条目所在页；未打开成员。"
                 self.render(focus: match.ordinal % self.pageSize)
@@ -502,7 +502,7 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
     private func showing(_ record: Report, file: Member) -> Bool {
         guard search == nil, selection === record.archive.scope, report?.archive === record.archive else { return false }
         let first = page * pageSize
-        return first < children.count && children[first..<min(first + pageSize, children.count)].contains { $0 === file }
+        return first < directoryEntries.count && directoryEntries[first..<min(first + pageSize, directoryEntries.count)].contains { $0 === file }
     }
     private func observeBody(_ job: DocumentRead, archive: HeldArchive, total: Int,
                              title: String, measure: String = "正文", detail: String = "", previous: Int = -1) {
@@ -689,21 +689,21 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
     }
     private func reset(_ message: String) {
         clearDraft(); clearText()
-        trail = []; children = []; page = 0
+        trail = []; directoryEntries = []; page = 0
         status.text = message; location.text = nil; cancelButton.isHidden = active == nil
         cancelButton.setTitle("取消并关闭文件", for: .normal)
         find.isEnabled = false; checkAll.isHidden = true
-        up.isEnabled = false; previous.isEnabled = false; next.isEnabled = false
+        up.isEnabled = false; previous.isEnabled = false; nextDirectoryPageButton.isEnabled = false
         replacePage(canSelect: false, focus: 0)
     }
     private func enter() {
         page = 0
-        children = trail.last.map { DirectoryIndex.orderedChildren(of: $0) } ?? []
+        directoryEntries = trail.last.map { DirectoryIndex.orderedChildren(of: $0) } ?? []
         render()
     }
     private func render(focus: Int = 0) {
-        let pages = max(1, (children.count + pageSize - 1) / pageSize)
-        let pageText = children.isEmpty ? "空目录" : "\(page + 1)/\(pages) 页"
+        let pages = max(1, (directoryEntries.count + pageSize - 1) / pageSize)
+        let pageText = directoryEntries.isEmpty ? "空目录" : "\(page + 1)/\(pages) 页"
         location.text = pageText + "   /" + trail.dropFirst().map(\.name).joined(separator: "/")
         let idle = active == nil && search == nil
         let finding = search.map { $0.sheet == nil && !$0.consumed } ?? false
@@ -713,7 +713,7 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
         cancelButton.setTitle(finding ? "取消查找" : "取消并关闭文件", for: .normal)
         cancelButton.isHidden = active == nil && !finding
         up.isEnabled = idle && trail.count > 1; previous.isEnabled = idle && page > 0
-        next.isEnabled = idle && page + 1 < pages
+        nextDirectoryPageButton.isEnabled = idle && page + 1 < pages
         replacePage(canSelect: idle, focus: focus)
     }
 
@@ -734,15 +734,15 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
 
     @objc private func goUp() { if mayNavigate && trail.count > 1 { trail.removeLast(); enter() } }
     @objc private func prevPage() { if mayNavigate && page > 0 { page -= 1; render() } }
-    @objc private func nextPage() { if mayNavigate && (page + 1) * pageSize < children.count { page += 1; render() } }
+    @objc private func nextPage() { if mayNavigate && (page + 1) * pageSize < directoryEntries.count { page += 1; render() } }
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         guard tableView === table, section == 0 else { return 0 }
-        return min(pageSize, max(0, children.count - page * pageSize))
+        return min(pageSize, max(0, directoryEntries.count - page * pageSize))
     }
     func tableView(_ tableView: UITableView, cellForRowAt path: IndexPath) -> UITableViewCell {
         let i = page * pageSize + path.row
-        guard tableView === table, path.section == 0, children.indices.contains(i) else { return UITableViewCell() }
-        let row = children[i], cell = tableView.dequeueReusableCell(withIdentifier: "row", for: path)
+        guard tableView === table, path.section == 0, directoryEntries.indices.contains(i) else { return UITableViewCell() }
+        let row = directoryEntries[i], cell = tableView.dequeueReusableCell(withIdentifier: "row", for: path)
         var content = cell.defaultContentConfiguration()
         content.text = row.name
         content.secondaryText = row.children == nil ? "\(row.size) B（声明）" : "目录"
@@ -753,9 +753,9 @@ final class PreviewController: UIViewController, UIDocumentPickerDelegate, UIAda
     }
     func tableView(_ tableView: UITableView, didSelectRowAt path: IndexPath) {
         let i = page * pageSize + path.row
-        guard tableView === table, path.section == 0, mayNavigate, children.indices.contains(i),
+        guard tableView === table, path.section == 0, mayNavigate, directoryEntries.indices.contains(i),
               let view = report, selection === view.archive.scope, (try? view.archive.scope.check()) != nil else { return }
-        let row = children[i]
+        let row = directoryEntries[i]
         if row.children != nil { trail.append(row); enter() } else { offer(row) }
     }
     deinit { active?.cancel(); search?.operation.cancel(); queue.cancelAllOperations(); selection?.retire() }
