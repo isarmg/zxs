@@ -40,6 +40,10 @@ class ContainerPanel(QWidget):
         super().__init__()
         self.ops, self.editor, self.cold, self.platform_disk = operations, None, None, None
         self._download_window = native_window if sys.platform == "linux" else None
+        if sys.platform == "darwin":
+            from .container_macos_download import SAVE_AS_RELEASED
+            if SAVE_AS_RELEASED:
+                self._download_window = native_window
         self._configured_profile = self._profile = write_profile
         self._owned = None
         self._checking_connection = False
@@ -106,7 +110,8 @@ class ContainerPanel(QWidget):
         actions.addRow(self.retry_button)
         self.copy_transfer_button = self.download_button = None
         if self._download_window is not None:
-            self.download_button = button("另存所选节点…", self._download)
+            title = "系统确认后另存所选节点为新文件…" if sys.platform == "darwin" else "另存所选节点…"
+            self.download_button = button(title, self._download)
             actions.addRow(self.download_button)
         if sys.platform == "linux":
             self.copy_transfer_button = button("复制原传输信息", self._copy_selected_transfer)
@@ -485,10 +490,11 @@ class ContainerPanel(QWidget):
         if selected is None or host.pending is not None:
             return
 
+        epoch = self._epoch
         def still_selected():
             now = self._download_scope()
-            return (now is not None and now[0] is selected[0] and now[1] is selected[1]
-                    and now[2:] == selected[2:])
+            return (now is not None and self._epoch == epoch and host.pending is None
+                    and now[0] is selected[0] and now[1] is selected[1] and now[2:] == selected[2:])
 
         # The picker supplies a spelling, not a write or an overwrite grant.
         opts = (QFileDialog.Option.DontUseNativeDialog | QFileDialog.Option.ReadOnly |
@@ -497,9 +503,13 @@ class ContainerPanel(QWidget):
                                               "", "所有文件 (*)", options=opts)
         if not name or not still_selected():
             return
-        from .container_download import ContainerNodeCopy
+        mac_save = sys.platform == "darwin"
+        if mac_save:
+            from .container_macos_download import MacNodeSaveAs as CopyPlan
+        else:
+            from .container_download import ContainerNodeCopy as CopyPlan
         try:
-            plan = ContainerNodeCopy(*selected, name)
+            plan = CopyPlan(*selected, name)
         except Exception as error:
             host.inform(str(error))
             return
@@ -517,10 +527,18 @@ class ContainerPanel(QWidget):
 
         def reviewed(detail):
             try:
-                if still_selected() and confirm(self, "另存此原节点", detail,
-                        attestation="我选择这个新文件名，并保持原目的目录不被移动或改写。",
-                        action_text="下载并核验") and still_selected():
-                    submit("正在下载并核验所选原节点…", partial(plan.run, confirmed=True), host.inform,
+                work = None
+                if still_selected():
+                    if mac_save:
+                        permit = plan.approve()  # Native explicit source + new destination, Cancel is default.
+                        if permit is not None:
+                            work = partial(plan.run, permit)
+                    elif confirm(self, "另存此原节点", detail,
+                            attestation="我选择这个新文件名，并保持原目的目录不被移动或改写。",
+                            action_text="下载并核验"):
+                        work = partial(plan.run, confirmed=True)
+                if work is not None and still_selected():
+                    submit("正在下载并核验所选原节点…", work, host.inform,
                            cancel=plan.cancel, progress_report=plan.progress)
                 else:
                     plan.close()

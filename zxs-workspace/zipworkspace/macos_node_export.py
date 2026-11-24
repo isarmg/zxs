@@ -1,6 +1,7 @@
 """Publish one exact R3 file node on a qualified local APFS volume, not a ZIP or checkout."""
 from contextlib import ExitStack, contextmanager
 import ctypes as C
+from dataclasses import dataclass
 from functools import lru_cache
 import hashlib
 import os
@@ -23,7 +24,8 @@ _STAGE_PREFIX = ".zipworkspace-node-"
 
 class _DownloadQuarantine:
     """Set only a new download's Apple resource property; never touch raw xattrs."""
-    def __init__(self):
+    def __init__(self, *, require_url=True):
+        self._require_url = require_url
         cf, ls = C.CDLL(_CF), C.CDLL(_LS)
         p, l = C.c_void_p, C.c_long
         self._url = _bind(cf, "CFURLCreateWithBytes", p, p, C.c_char_p, l, C.c_uint32, p)
@@ -78,29 +80,73 @@ class _DownloadQuarantine:
                 raise Rejected("macOS 返回的下载隔离类型不是文本。")
             if not api.equal(kind, self._download):
                 raise Rejected("macOS 返回了不同的下载隔离类型。")
-            if not value:
+            reported = bool(value)
+            if reported:
+                if api.type(value) == self._url_type():
+                    value = self._url_string(value)
+                if not value or api.type(value) != string_type:
+                    raise Rejected("macOS 返回了无法识别的下载 URL 类型。")
+                expected = self._url_string(url)
+                if not expected or not api.equal(value, expected):
+                    raise Rejected("macOS 返回的下载 URL 与本次请求不同。")
+            elif self._require_url:
                 raise Rejected("macOS 保留了下载隔离类型，但未返回下载 URL。")
-            if api.type(value) == self._url_type():
-                value = self._url_string(value)
-                if not value:
-                    raise Rejected("无法读取 macOS 返回的下载 URL。")
-            if api.type(value) != string_type:
-                raise Rejected("macOS 返回了无法识别的下载 URL 类型。")
-            expected = self._url_string(url)
-            if not expected:
-                raise Rejected("无法读取本次请求的下载 URL。")
-            if not api.equal(value, expected):
-                raise Rejected("macOS 返回的下载 URL 与本次请求不同。")
         if api.attrs(fd) != attrs:
             raise Rejected("原文件的下载来源在核验时改变。")
-        return attrs
+        # Remember presence too: a previously available matching URL may not
+        # silently disappear between staging and publication.
+        return _NativeMark(attrs, reported)
 
 
-@lru_cache(maxsize=1)
-def _download_quarantine():
-    try: return _DownloadQuarantine()
+@dataclass(frozen=True)
+class _NativeMark:
+    attributes: dict
+    reported_url: bool
+
+
+@lru_cache(maxsize=2)
+def _download_quarantine(*, require_url=True):
+    try: return _DownloadQuarantine(require_url=require_url)
     except (OSError, AttributeError, ValueError) as error:
         raise Rejected("macOS 缺少公开下载来源接口；未启用备用写入。") from error
+
+
+@dataclass(frozen=True, eq=False)
+class _SelectedDownload:
+    exchange: HttpsExchange
+    authority: object
+    identity: str
+    origin: str
+    container: str
+    node: str
+    length: int
+    sha256: str
+    url: str
+
+    @classmethod
+    def capture(cls, exchange, container, node, length, sha256):
+        if (type(exchange) is not HttpsExchange
+                or not callable(getattr(exchange._authorization, "require_live", None))):
+            raise Rejected("需明确确认本次原认证连接和目的文件。")
+        target = exchange._node_target(container, node, length, sha256)
+        if length >= 1 << 63: raise Rejected("节点长度超出 macOS 可核验的文件偏移。")
+        selected = cls(exchange, exchange._authorization, exchange.destination_identity, exchange._location,
+                       container, node, length, sha256, exchange._location + target)
+        selected.require_current()
+        return selected
+
+    def require_current(self):
+        if (self.exchange._location != self.origin or self.exchange.destination_identity != self.identity
+                or self.exchange._authorization is not self.authority):
+            raise Rejected("原 HTTPS 服务器连接已改变。")
+        self.authority.require_live()
+
+
+@dataclass(frozen=True)
+class MacSaveAsResult:
+    path: Path
+    system_reported_url: bool
+
 
 
 class MacNodeOutput:
@@ -122,7 +168,7 @@ class MacNodeOutput:
         self._stage = _STAGE_PREFIX + new_id() + ".partial"
         if len(parent.parts) >= 65 or any(len(os.fsencode(leaf)) >= 1024 for leaf in (self.path, parent / self._stage)):
             raise Rejected("目标名称无法由 macOS 原句柄逐级核对。")
-        self._lock = Lock()
+        self._lock, self._consent = Lock(), None
         self._parent, self._identity, self._volume = mac.in_disposable_thread(self._pin)
 
     @property
@@ -151,6 +197,7 @@ class MacNodeOutput:
     def _take_parent(self):
         with self._lock:
             fd, self._parent = self._parent, None
+            self._consent = None
         return fd
 
     def close(self):
@@ -180,33 +227,66 @@ class MacNodeOutput:
             raise Rejected("新文件不是所持目的卷上的原普通文件。")
         return observed
 
+    def approve_save_as(self, exchange, container, node, *, length, sha256):
+        """On the GUI thread only. A path from a picker is not permission to write."""
+        from ._macos_save_alert import approve_new_file
+
+        selected = _SelectedDownload.capture(exchange, container, node, length, sha256)
+        with self._lock:
+            if self._parent is None or self._consent is not None:
+                raise Rejected("请重新选择本次另存目的位置。")
+        # The account is the non-secret identity of the live credential, not a label
+        # passed by a picker. Never ask its supplier for the Authorization header.
+        account = getattr(selected.authority, "_login", None)
+        if type(account) is not str or not callable(getattr(selected.authority, "require_account", None)):
+            raise Rejected("无法核对原认证账户，未请求本机确认。")
+        selected.authority.require_account(account)
+        # Include the exact URL, not a display label supplied by the caller. repr
+        # escapes non-printing characters in the filesystem spelling.
+        detail = (f"新文件（绝不覆盖）：{str(self.path)!r}\n"
+                  f"账户：{account!r}\n下载地址：{selected.url}\n"
+                  f"正文：{length:,} 字节\nSHA-256：{sha256}\n\n"
+                  "我确认目的目录仅本人使用，未同步，操作期间不会被移动或改写。"
+                  "本次会将上述完整地址交给 macOS，并要求真实的下载隔离标记。"
+                  "即使系统未返回地址，也可能保留它；不据此证明来源地址或 Gatekeeper 放行。"
+                  "失败后私有暂存可能保留。")
+        if approve_new_file(detail) is not True:
+            return None
+        selected.require_current()
+        with self._lock:
+            if self._parent is None or self._consent is not None:
+                raise Rejected("原目的目录或本次确认已失效。")
+            self._consent = selected
+        return selected
+
     def publish(self, exchange, container, node, *, length, sha256, confirmed=False,
                 checkpoint=lambda: None, begin_publication=lambda: None,
                 progress=lambda n: None, phase=lambda text, total: None):
-        """Return the new path after durability and identity checks, or raise without retrying."""
-        if (confirmed is not True or type(exchange) is not HttpsExchange
-                or not callable(getattr(exchange._authorization, "require_live", None))):
+        """Legacy strict export: a native affirmative exact DataURL is mandatory."""
+        if confirmed is not True:
             raise Rejected("需明确确认本次原认证连接和目的文件。")
-        target = exchange._node_target(container, node, length, sha256)
-        if length >= 1 << 63: raise Rejected("节点长度超出 macOS 可核验的文件偏移。")
-        location, identity, authority = exchange._location, exchange.destination_identity, exchange._authorization
+        selected = _SelectedDownload.capture(exchange, container, node, length, sha256)
+        return self._run(selected, False, checkpoint, begin_publication, progress, phase)
 
-        def original_source():
-            if (exchange._location != location or exchange.destination_identity != identity
-                    or exchange._authorization is not authority):
-                raise Rejected("原 HTTPS 服务器连接已改变。")
-            authority.require_live()
+    def publish_save_as(self, consent, *, checkpoint=lambda: None, begin_publication=lambda: None,
+                        progress=lambda n: None, phase=lambda text, total: None):
+        """Consume only this held destination's single-use native approval."""
+        return self._run(consent, True, checkpoint, begin_publication, progress, phase)
 
+    def _run(self, selected, explicit, checkpoint, begin_publication, progress, phase):
+        with self._lock:
+            if explicit and (selected is None or self._consent is not selected):
+                raise Rejected("没有针对这个原节点及新位置的本机确认。")
+            parent, self._parent, self._consent = self._parent, None, None
+        if parent is None: raise Rejected("原目的目录的单次另存已结束。")
         with ExitStack() as owned:
-            parent = self._take_parent()
-            if parent is None: raise Rejected("原目的目录的单次另存已结束。")
             owned.callback(os.close, parent)  # Also covers failure to start the worker.
-            return mac.in_disposable_thread(self._publish, parent, owned.close, exchange, container, node,
-                                            length, sha256, location + target, original_source, checkpoint,
-                                            begin_publication, progress, phase)
+            return mac.in_disposable_thread(self._publish, parent, owned.close, selected, explicit,
+                                            checkpoint, begin_publication, progress, phase)
 
-    def _publish(self, parent, close_parent, exchange, container, node, length, sha256,
-                 url, original_source, checkpoint, begin_publication, progress, phase):
+    def _publish(self, parent, close_parent, selected, explicit, checkpoint, begin_publication, progress, phase):
+        exchange, container, node = selected.exchange, selected.container, selected.node
+        length, sha256, original_source = selected.length, selected.sha256, selected.require_current
         state = "uncreated"
         partial = self.path.parent / self._stage
         try:
@@ -220,8 +300,8 @@ class MacNodeOutput:
                 _absent(parent, self.path.name)
                 os.fsync(parent)  # Reject an unavailable parent barrier before creating anything.
                 self._original_parent(parent)
-                origin = _download_quarantine()
-                data_url = held.enter_context(origin.url(url))
+                origin = _download_quarantine(require_url=False) if explicit else _download_quarantine()
+                data_url = held.enter_context(origin.url(selected.url))
                 flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
                 fd = os.open(self._stage, flags, 0o600, dir_fd=parent)
                 held.callback(os.close, fd)
@@ -282,8 +362,11 @@ class MacNodeOutput:
                 # Caller callbacks may have taken time. Witness the original
                 # parent and sealed stage again after the last callback.
                 self._original_parent(parent)
+                if explicit and origin.verify(partial, fd, data_url) != properties:
+                    raise Rejected("开始发布前，原下载标记已改变。")
                 if self._output(parent, self._stage, fd, length) != sealed:
                     raise Rejected("开始发布前，原暂存文件已改变。")
+                original_source()  # The final native lookups above can take time.
                 state = "rename"
                 try: rename_new_at(parent, self._stage, self.path.name)
                 except FileExistsError as error:
@@ -298,7 +381,7 @@ class MacNodeOutput:
                         or self._output(parent, self.path.name, fd, length) != published):
                     raise Rejected("正式文件或实际下载来源无法确认。")
                 _absent(parent, self._stage)
-            return self.path
+            return MacSaveAsResult(self.path, properties.reported_url) if explicit else self.path
         except Exception as error:
             if state == "rename":
                 raise Uncertain(f"正式名称可能已出现，无法确认：{str(self.path)!r}。先检查原位置，不重试或删除。") from error

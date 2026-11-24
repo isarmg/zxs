@@ -15,8 +15,9 @@
 
 `macos_edit_file.selected_edit_file` 是进程内的匿名 APFS 编辑原语，不是卷或恢复票据。独占建立 0600 空暂存，开真正独立的读写与只读句柄，核实体、[移去名字](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/unlink.2)、同步原私有父目录并确认链接数为零后才接收正文。停写后等本会话内全部句柄结束，显式封存整份；未移交前退出进程会丢失编辑。它与真正的 FSKit 正常后移交共享原整文件留存、计划和回执代码，不假装共用 OS 挂载或进程内锁。
 
-公开 Finder「另存」仍须读回真正系统隔离标记与确切 [Launch Services DataURL](https://developer.apple.com/documentation/coreservices/klsquarantinedataurlkey)。已观察到隔离类型正确但系统未返回实际 URL；不以成功 setter、Finder 来源文本或应用私写属性替代，公开另存继续关闭。挂载限制也不替代独立下载的来源证明。以上源码和[资格断言](../tests/qualification/)未在 macOS 执行，特别不能据普通 fsync 声称[设备断电持久性](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/fsync.2)。
+公开 Finder「另存」仍须读回真正系统隔离标记与确切 [Launch Services DataURL](https://developer.apple.com/documentation/coreservices/klsquarantinedataurlkey)。已观察到隔离类型正确但系统未返回实际 URL；不以成功 setter、Finder 来源文本或应用私写属性替代，公开另存继续关闭。挂载限制也不替代独立下载的来源证明。[该托管资格作业](https://github.com/isarmg/zxs/actions/runs/45298114940/job/138123553971)未通过这个精确 URL 条件。不能据普通 fsync 声称[设备断电持久性](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/man/man2/fsync.2)。
 
+另有**独立、当前发行未启用**的「为所示节点明确另存新文件」源码，不是上述系统来源证明。路径选择器只提供名称；本机前台 [AppKit NSAlert](https://developer.apple.com/documentation/appkit/nsalert/runmodal()) 以取消为默认，显示这笔真实连接的账号、完整下载地址、节点、长度、SHA-256 和已持有的全新目的路径。只有本机肯定选择才产生对这一个原件/目的目录有效、限用一次的许可。仍在首个正文字节写入暂存前向系统设置下载属性，并从原文件读回真正的隔离类型（零字节在空 GET 通过核验后设置）；如果系统返回 URL，必须精确相符。如果系统未返回 URL，结果会明确说明；系统仍可能留存传入的完整地址（含私有主机名、容器号和节点号，不含口令），不能据此认定已经删除或已经验证地址。既不改原隔离，也不用 Finder 文本、私写标签或泛用覆盖对话框充当凭据。原父目录、原文件、新名称无覆盖、正文摘要及读回、改名前后与同步复核保留。这与 FSKit 安装和签名准入无关。实际应用中的点击、取消及换选仍须单独验收，默认发行保持关闭。
 
 ## 首次提交一个本机文件
 

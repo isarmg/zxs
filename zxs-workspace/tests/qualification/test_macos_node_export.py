@@ -105,6 +105,187 @@ class MacNodePublication(unittest.TestCase):
                     self.publish(output, body)
         self.assertEqual(self.request, [("GET", _TARGET, "application/octet-stream", None)] * 2)
 
+    def choose(self, output, body, answer=True):
+        # Substitute only the human decision; never substitute native metadata
+        # in the real-APFS successful explicit export fixture below.
+        def respond(detail):
+            for value in (repr(str(output.path)), "账户：'test'", _ORIGIN + _TARGET, sha256(body).hexdigest(),
+                          f"{len(body):,} 字节", "即使系统未返回地址，也可能保留它"):
+                self.assertIn(value, detail)
+            return answer
+
+        with patch("zipworkspace._macos_save_alert.approve_new_file", side_effect=respond) as alert:
+            permit = output.approve_save_as(self.exchange, _CONTAINER, _NODE, length=len(body),
+                                            sha256=sha256(body).hexdigest())
+            alert.assert_called_once()
+            return permit
+
+    def test_explicit_save_as_real_quarantine_with_only_human_decision_substituted(self):
+        from zipworkspace.desktop.container_connection import OpenConnection
+        from zipworkspace.desktop.container_macos_download import MacNodeSaveAs
+        from zipworkspace.desktop.container_management import Branch, Container, Detail, Node
+
+        for name, body in (("native-explicit.txt", b"actual node"), ("native-empty.txt", b"")):
+            with self.subTest(name=name):
+                node = Node(_NODE, None, len(body), sha256(body).hexdigest())
+                branch = Branch("main", node.id, (node,))
+                detail = Detail(Container(_CONTAINER, "fixture", 1), (), (branch,))
+                owner = OpenConnection(None, self.exchange._authorization, self.exchange, "test", _listed=True)
+                path = self.root / name
+                plan = MacNodeSaveAs(owner, detail, branch, node, str(path))
+                self.addCleanup(plan.close)
+                plan.review()
+                self.assertFalse(path.exists())
+                def accept(text):
+                    for field in (repr(str(path)), _ORIGIN + _TARGET, node.sha256, "即使系统未返回地址，也可能保留它"):
+                        self.assertIn(field, text)
+                    return True
+                with patch("zipworkspace._macos_save_alert.approve_new_file", side_effect=accept) as human:
+                    permit = plan.approve()
+                    human.assert_called_once()
+                self.assertFalse(path.exists())
+                with self.response(body, node.sha256):
+                    result = plan.run(permit)
+
+                # Independent OS observation on the final name and new FD.
+                with mac.no_materialization(), path.open("rb") as saved:
+                    fd, fields, api = saved.fileno(), export._download_quarantine(), export.native()
+                    self.assertEqual(saved.read(), body)
+                    self.assertIn(b"com.apple.quarantine", api.attrs(fd))
+                    with api.quarantine(path, fd, literal=True) as observed:
+                        kind = fields._get(observed, fields._kind)
+                        self.assertTrue(kind and api.type(kind) == fields._string_type() and api.equal(kind, fields._download))
+                        reported = bool(fields._get(observed, fields._data))
+                    if reported:
+                        self.require_system_download(path, fd)
+                    self.assertIn("系统已返回并核对本次下载地址" if reported else "没有返回来源地址", result)
+                self.assertFalse(any(item.name.startswith(export._STAGE_PREFIX) for item in self.root.iterdir()))
+        self.assertEqual(self.request, [("GET", _TARGET, "application/octet-stream", None)] * 2)
+
+    def test_explicit_save_as_cancel_foreign_grant_and_changed_parent_make_no_request(self):
+        body = b"old"
+        child, decoy = self.root / "chosen", self.root / "other"
+        child.mkdir(mode=0o700)
+        decoy.mkdir(mode=0o700)
+        with export.MacNodeOutput(child, "same.txt") as chosen, export.MacNodeOutput(decoy, "same.txt") as other:
+            self.assertIsNone(self.choose(chosen, body, answer=False))
+            for invalid in (None, True, object()):
+                with self.assertRaises(Rejected):
+                    chosen.publish_save_as(invalid)
+            permit = self.choose(chosen, body)
+            with self.assertRaises(Rejected):
+                other.publish_save_as(permit)
+            # Replace the reviewed parent at exactly the same spelling. Neither
+            # the decoy, the replacement nor the held original may get a stage.
+            moved = self.root / "held"
+            child.rename(moved)
+            child.mkdir(mode=0o700)
+            with self.assertRaises(Rejected):
+                chosen.publish_save_as(permit)
+            self.assertEqual([list(p.iterdir()) for p in (child, decoy, moved)], [[], [], []])
+            with self.assertRaises(Rejected):
+                chosen.publish_save_as(permit)
+        self.assertEqual(self.request, [])
+
+    def test_explicit_save_as_refuses_real_collision_and_post_consent_revocation(self):
+        body = b"verified"
+        with export.MacNodeOutput(self.root, "late.txt") as output:
+            permit = self.choose(output, body)
+            def occupy():
+                with output.path.open("xb") as existing:
+                    existing.write(b"untouched")
+            with self.response(body, sha256(body).hexdigest()), self.assertRaisesRegex(Rejected, "没有覆盖"):
+                output.publish_save_as(permit, begin_publication=occupy)
+            self.assertEqual(output.path.read_bytes(), b"untouched")
+            self.assertEqual((self.root / output._stage).read_bytes(), body)
+        with export.MacNodeOutput(self.root, "revoked.txt") as output:
+            permit = self.choose(output, body)
+            self.exchange._authorization.revoke()
+            with self.assertRaises(Rejected): output.publish_save_as(permit)
+            self.assertFalse(output.path.exists())
+            self.assertFalse((self.root / output._stage).exists())
+        self.assertEqual(len(self.request), 1)
+
+    def test_explicit_save_as_source_change_at_commit_and_unknown_after_actual_move(self):
+        body = b"exact selected bytes"
+        digest = sha256(body).hexdigest()
+        with export.MacNodeOutput(self.root, "no-switch.txt") as output:
+            permit = self.choose(output, body)
+            old = self.exchange._identity
+            try:
+                with self.response(body, digest), self.assertRaises(Rejected):
+                    output.publish_save_as(permit, begin_publication=lambda: setattr(self.exchange, "_identity", "a"*64))
+            finally:
+                self.exchange._identity = old
+            self.assertFalse(output.path.exists())
+            self.assertEqual((self.root / output._stage).read_bytes(), body)
+        move = export.rename_new_at
+        def lose_reply(*arguments):
+            move(*arguments)
+            raise OSError("injected failure after actual exclusive rename")
+        with export.MacNodeOutput(self.root, "inspect.txt") as output:
+            permit = self.choose(output, body)
+            with self.response(body, digest), patch.object(export, "rename_new_at", side_effect=lose_reply):
+                with self.assertRaises(Uncertain): output.publish_save_as(permit)
+            self.assertEqual(output.path.read_bytes(), body)
+            with self.assertRaises(Rejected): output.publish_save_as(permit)
+        self.assertEqual(len(self.request), 2)
+
+    def test_explicit_save_as_refuses_url_loss_or_revocation_during_last_native_check(self):
+        body = b"verified privately"
+        digest = sha256(body).hexdigest()
+        fields = export._download_quarantine(require_url=False)
+        get = fields._get
+        # Negative boundary injection: even on an OS which never retains DataURL,
+        # exercise a matching URL initially present and missing only at commit.
+        with fields.url(_ORIGIN + _TARGET) as expected, export.MacNodeOutput(self.root, "lost-url.txt") as output:
+            permit = self.choose(output, body)
+            commit = []
+            def observed(data, key):
+                if key == fields._data:
+                    return None if commit else expected
+                return get(data, key)
+            with self.response(body, digest), patch.object(fields, "_get", side_effect=observed):
+                with self.assertRaisesRegex(Rejected, "原下载标记已改变"):
+                    output.publish_save_as(permit, begin_publication=lambda: commit.append(True))
+            self.assertFalse(output.path.exists())
+            self.assertEqual((self.root / output._stage).read_bytes(), body)
+
+        # A valid observation can itself take long enough for the original
+        # connection to be revoked; no name may be published on its return.
+        with export.MacNodeOutput(self.root, "late-revoke.txt") as output:
+            permit, verify, commit = self.choose(output, body), fields.verify, []
+            def revoke_late(*args):
+                witness = verify(*args)
+                if commit: self.exchange._authorization.revoke()
+                return witness
+            with self.response(body, digest), patch.object(fields, "verify", side_effect=revoke_late):
+                with self.assertRaises(Rejected):
+                    output.publish_save_as(permit, begin_publication=lambda: commit.append(True))
+            self.assertFalse(output.path.exists())
+            self.assertEqual((self.root / output._stage).read_bytes(), body)
+
+    def test_explicit_save_as_rejects_missing_mark_and_present_wrong_url(self):
+        body = b"must never be written"
+        fields = export._download_quarantine(require_url=False)
+        with export.MacNodeOutput(self.root, "unmarked.txt") as output:
+            permit = self.choose(output, body)
+            with self.response(body, sha256(body).hexdigest()), patch.object(fields, "_set", return_value=True):
+                with self.assertRaises(Rejected): output.publish_save_as(permit)
+            self.assertFalse(output.path.exists())
+            self.assertEqual((self.root / output._stage).read_bytes(), b"")
+        # Negative injection only: if the OS returns a different URL, user
+        # consent must NOT convert it to the allowed "URL not reported" case.
+        get = fields._get
+        with fields.url("https://wrong.invalid/") as wrong, export.MacNodeOutput(self.root, "wrong-url.txt") as output:
+            permit = self.choose(output, body)
+            def mismatch(observed, key):
+                return wrong if key == fields._data else get(observed, key)
+            with self.response(body, sha256(body).hexdigest()), patch.object(fields, "_get", side_effect=mismatch):
+                with self.assertRaisesRegex(Rejected, "与本次请求不同"): output.publish_save_as(permit)
+            self.assertFalse(output.path.exists())
+            self.assertEqual((self.root / output._stage).read_bytes(), b"")
+
     def test_local_destination_preflight_reports_native_name_collision(self):
         original = self.root / "Keep.txt"
         with mac.no_materialization(), mac.literal_name(self.root, directory=True) as parent:
