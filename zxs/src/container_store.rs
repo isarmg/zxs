@@ -3,6 +3,8 @@ mod codec;
 pub(crate) mod import_one;
 pub(crate) mod init_data;
 mod model;
+#[cfg(test)]
+mod name_index;
 pub(crate) mod offline_catalog;
 mod operation;
 mod payload;
@@ -953,10 +955,17 @@ fn held_entry(original: &HeldDir, leaf: &str) -> io::Result<HeldDir> {
 }
 
 fn read_state(directory: &HeldDir, id: Id) -> io::Result<State> {
+    read_confirmed(directory, || read_selected_entries(directory, id))
+}
+
+fn read_confirmed(
+    directory: &HeldDir,
+    read: impl FnOnce() -> io::Result<State>,
+) -> io::Result<State> {
     directory.require_named()?;
     // Required before exposing any receipt/node after a prior process died.
     directory.file.sync_all()?;
-    let state = read_selected_entries(directory, id)?;
+    let state = read()?;
     directory.require_named()?;
     Ok(state)
 }
@@ -966,8 +975,34 @@ fn read_selected_entries(directory: &HeldDir, id: Id) -> io::Result<State> {
 }
 
 fn replay_selected_entries(directory: &HeldDir, id: Id, access: ReadAccess) -> io::Result<State> {
+    replay_with(
+        directory,
+        id,
+        access,
+        (usize::MAX, usize::MAX),
+        |_, bytes| codec::decode(bytes),
+    )
+}
+
+fn ledger_limit() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::FileTooLarge,
+        "selected ledger exceeds the bounded view",
+    )
+}
+
+fn replay_with(
+    directory: &HeldDir,
+    id: Id,
+    access: ReadAccess,
+    (max_entries, mut remaining): (usize, usize),
+    mut decode: impl FnMut(u64, &[u8]) -> io::Result<Receipt>,
+) -> io::Result<State> {
     let mut entries = Vec::new();
     directory.each_name(access, |raw| {
+        if entries.len() == max_entries {
+            return Err(ledger_limit());
+        }
         let name =
             std::str::from_utf8(raw).map_err(|_| invalid("invalid container receipt path"))?;
         let (sequence, request) = generation_name(name)?;
@@ -986,14 +1021,18 @@ fn replay_selected_entries(directory: &HeldDir, id: Id, access: ReadAccess) -> i
             .opaque_pin_with(c"receipt", access)?
             .ok_or_else(|| invalid("stored receipt is absent"))?;
         let mut bytes = Vec::new();
+        let limit = remaining.min(codec::MAX_RECEIPT);
         (&original.file)
-            .take((codec::MAX_RECEIPT + 1) as u64)
+            .take((limit + 1) as u64)
             .read_to_end(&mut bytes)?;
         original.require(&entry, c"receipt")?;
         if bytes.len() > codec::MAX_RECEIPT {
             return Err(invalid("stored receipt exceeds metadata capacity"));
         }
-        let receipt = codec::decode(&bytes)?;
+        remaining = remaining
+            .checked_sub(bytes.len())
+            .ok_or_else(ledger_limit)?;
+        let receipt = decode(sequence, &bytes)?;
         if receipt.mutation
             != (Mutation {
                 container: id,
@@ -1137,7 +1176,10 @@ fn encode_tags(tags: &[String]) -> io::Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-fn decode_tags(mut bytes: &[u8]) -> io::Result<Vec<String>> {
+fn decode_tags(
+    mut bytes: &[u8],
+    mut charge: impl FnMut() -> io::Result<()>,
+) -> io::Result<Vec<String>> {
     let mut tags = Vec::new();
     while !bytes.is_empty() {
         let (length, suffix) = bytes
@@ -1155,6 +1197,7 @@ fn decode_tags(mut bytes: &[u8]) -> io::Result<Vec<String>> {
         if tag.is_empty() || tag.contains('\0') {
             return Err(invalid("invalid stored tag"));
         }
+        charge()?;
         tags.push(tag.to_owned());
         bytes = rest;
     }

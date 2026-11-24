@@ -29,14 +29,7 @@ impl Store {
             // SYSTEM selection alone cannot prove that this operation was
             // absent from the chosen ledger. Never confuse corrupt R with 404.
             let state = read_state(at, op.container)?;
-            if state.sequence != selected.original_sequence
-                || state.name.is_none()
-                || state.receipts.contains_key(&selected.mutation.request)
-            {
-                return Err(invalid(
-                    "archived ledger disagrees with its selected recycle receipt",
-                ));
-            }
+            require_archived_ledger(&state, selected)?;
             if selected.mutation == op {
                 Some(OperationReceipt::Recycle(*selected))
             } else {
@@ -70,4 +63,16 @@ impl Store {
         }
         Ok(result)
     }
+}
+
+pub(super) fn require_archived_ledger(state: &State, selected: &RecycleReceipt) -> io::Result<()> {
+    if state.sequence != selected.original_sequence
+        || state.name.is_none()
+        || state.receipts.contains_key(&selected.mutation.request)
+    {
+        return Err(invalid(
+            "archived ledger disagrees with its selected recycle receipt",
+        ));
+    }
+    Ok(())
 }

@@ -106,6 +106,24 @@ impl Routes {
         read_ids(&self.directory, ReadAccess::Ordinary)
     }
 
+    #[cfg(test)]
+    pub(super) fn index_directory(&self) -> io::Result<&HeldDir> {
+        let cut = self
+            .unsure
+            .lock()
+            .map_err(|_| invalid("container route selection unavailable"))?;
+        if *cut {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        self.directory.require_named()?;
+        Ok(&self.directory)
+    }
+
+    #[cfg(test)]
+    pub(super) fn index_ids(&self, limit: usize) -> io::Result<Vec<Id>> {
+        read_ids_bounded(self.index_directory()?, ReadAccess::Ordinary, limit)
+    }
+
     /// Call after validating bootstrap and the complete staged DATA body, but
     /// before making any part of that container visible on DATA.
     pub(super) fn reserve(&self, id: Id, token: [u8; 32]) -> io::Result<()> {
@@ -238,14 +256,32 @@ fn read_route(
 }
 
 pub(super) fn read_ids(directory: &HeldDir, access: ReadAccess) -> io::Result<Vec<Id>> {
+    read_ids_bounded(directory, access, usize::MAX)
+}
+
+fn read_ids_bounded(directory: &HeldDir, access: ReadAccess, limit: usize) -> io::Result<Vec<Id>> {
     let mut ids = Vec::new();
+    let mut stages = 0;
+    let above_limit = || {
+        io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            "route catalogue exceeds view capacity",
+        )
+    };
     directory.each_name(access, |name| {
         if let Some(stage) = name
             .strip_prefix(b".")
             .and_then(|name| name.strip_suffix(STAGE_SUFFIX))
         {
+            if stages == limit {
+                return Err(above_limit());
+            }
+            stages += 1;
             parse_container_id(stage)?;
         } else {
+            if ids.len() == limit {
+                return Err(above_limit());
+            }
             ids.push(parse_container_id(name)?);
         }
         Ok(())

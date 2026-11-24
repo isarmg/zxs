@@ -148,6 +148,13 @@ fn save(input: &mut Decoder<'_>) -> io::Result<Change> {
 }
 
 pub(super) fn decode(bytes: &[u8]) -> io::Result<Receipt> {
+    decode_charging(bytes, || Ok(()))
+}
+
+pub(super) fn decode_charging(
+    bytes: &[u8],
+    charge_tag: impl FnMut() -> io::Result<()>,
+) -> io::Result<Receipt> {
     let mut input = Decoder(bytes);
     if input.array::<4>()? != *b"OC2\0" {
         return Err(invalid("unknown container receipt format"));
@@ -169,7 +176,7 @@ pub(super) fn decode(bytes: &[u8]) -> io::Result<Receipt> {
         },
         4 => {
             let expected_sequence = input.word()?;
-            let tags = decode_tags(input.0)?;
+            let tags = decode_tags(input.0, charge_tag)?;
             input.0 = &[];
             Change::Tags {
                 expected_sequence,

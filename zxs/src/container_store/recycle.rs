@@ -145,9 +145,24 @@ pub(super) struct Recycle {
     moves_directory: HeldDir,
     staging_directory: HeldDir,
     arrived_directory: HeldDir,
-    _recycle_owner: File,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "retains the native RECYCLE lease")
+    )]
+    archive_owner: File,
     receipt_fence: Mutex<()>,
     unsure: AtomicBool,
+}
+
+#[cfg(test)]
+pub(super) struct IndexRoles<'a> {
+    pub(super) system: &'a HeldDir,
+    pub(super) root: &'a HeldDir,
+    pub(super) owner: &'a File,
+    pub(super) role: RecycleRole,
+    pub(super) moves: &'a HeldDir,
+    pub(super) staging: &'a HeldDir,
+    pub(super) arrived: &'a HeldDir,
 }
 
 /// The chosen receipt and the exact R child that was copied or verified.
@@ -253,7 +268,7 @@ impl Recycle {
             system,
             role,
             archive_root: recycle,
-            _recycle_owner: owner,
+            archive_owner: owner,
             moves_directory,
             staging_directory,
             arrived_directory,
@@ -294,6 +309,27 @@ impl Recycle {
             self.role,
             ReadAccess::Ordinary,
         )
+    }
+
+    #[cfg(test)]
+    pub(super) fn index_roles(&self) -> io::Result<IndexRoles<'_>> {
+        let _cut = self
+            .receipt_fence
+            .lock()
+            .map_err(|_| invalid("recycle receipt cut unavailable"))?;
+        if self.unsure.load(Ordering::Acquire) {
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        self.held()?;
+        Ok(IndexRoles {
+            system: &self.system,
+            root: &self.archive_root,
+            owner: &self.archive_owner,
+            role: self.role,
+            moves: &self.moves_directory,
+            staging: &self.staging_directory,
+            arrived: &self.arrived_directory,
+        })
     }
 
     pub(super) fn selected(&self, id: Id) -> io::Result<Option<(RecycleReceipt, HeldDir)>> {
