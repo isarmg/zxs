@@ -25,6 +25,12 @@ out="$HOME/zip-workspace-ios-0.1.0-build1-candidate-01"
 
 此命令没有 `-allowProvisioningUpdates`、`-allowProvisioningDeviceRegistration` 或导出参数。仅普通 App 目标参加 Release 归档，不归档 XCTest。请核实成功返回及真实产物，不把中途创建的目录当作归档成功。
 
+## 托管模拟器检查
+
+仓库的 [Workspace iOS simulator](../../.github/workflows/workspace-ios-simulator.yml) 仅在主线手动执行。它固定 Xcode 26.5（17F42）、iOS 26.5 iPhone 17 Pro 模拟器和 Swift 软件包提交，先在 macOS 运行传输帧与门控夹具，再运行 App 的 XCTest，并核对实际依赖提交和未变更的锁文件。运行器镜像的安装表见 [GitHub 的 macOS 26 ARM 镜像说明](https://github.com/actions/runner-images/blob/main/images/macos/macos-26-arm64-Readme.md)。环境不符就停，不更换成另外的 Xcode 或模拟器。
+
+它检查的是编译和合成运行，不连接真实服务器、不汇入证书、不安装签名 App。实际提交验收另外核对 HTTP/2、服务器名称证书和无 ALPN 阻断、最大文本长度、首次保存、当前分支头追加、历史 main 分叉、断线原回执和明确重试，以及编辑、出入后台、取消和防晚到结果。真机还核对局域网权限、文件保护、发布签名及安装。
+
 ## 验实物后再签发
 
 1. 由构建者记录本次源提交、Xcode 和 SDK 版本。归档应为 iOS 真机类型且恰含 `Products/Applications/ZipPreview.app`，不应是模拟器或泛用归档；记录 Release 符号。核 `ZipPreview.app/Info.plist` 的真实 ID、版本、构建号和最低系统；核 `PrivacyInfo.xcprivacy` 确实在 App 包根且可读、图标在原生资源中。可用 `plutil -lint` 检查两份 plist。Xcode 归档是目录，不当作已签文件作单一字节摘要。

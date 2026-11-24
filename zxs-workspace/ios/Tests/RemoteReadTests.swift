@@ -51,6 +51,26 @@ final class RemoteReadTests: XCTestCase {
                                                            node: decoded.nodes[0], original: Data("xyz".utf8)))
     }
 
+    func testNamedBranchHeadCanAppendButItsOlderNodesCannotFork() throws {
+        let catalog = #"{"items":[{"container_id":"\#(container)","sequence":5,"name":"a.txt"}],"next_after":null}"#
+        let selected = try XCTUnwrap(RemoteRead.Catalog.select(Data(catalog.utf8), after: nil).items.first)
+        let detail = #"{"container_id":"\#(container)","sequence":5,"name":"a.txt","tags":[],"heads":[{"branch":"\#(newBranch)","head":"\#(head)"}],"next_after":null}"#
+        let branch = try XCTUnwrap(RemoteRead.Detail.select(Data(detail.utf8), expected: selected, after: nil).heads.first)
+        let current = wireNode(head, parent: "\"" + old + "\"", sequence: 5)
+        let older = wireNode(old, parent: "null", sequence: 1)
+        let history = #"{"head":"\#(head)","nodes":[\#(current),\#(older)],"next":null}"#
+        let decoded = try RemoteRead.History.select(Data(history.utf8), head: head, cursor: nil, upper: 5)
+        let selectedHead = try RemoteRead.TextSelection(container: selected, branch: branch, node: decoded.nodes[0],
+                                                        original: Data("abc".utf8))
+        let saved = try selectedHead.freeze(text: "changed", destination: "fixture", operationID: request,
+                                            newNode: newNode, newBranch: newBranch).upload(for: "fixture")
+        XCTAssertEqual(saved.path, "/zxs/v1/containers/\(container)/branches/\(newBranch)/nodes")
+        XCTAssertEqual(saved.headers["Zxs-Base-Node"], head)
+        XCTAssertNil(saved.headers["Zxs-Fork-From-Main"])
+        XCTAssertThrowsError(try RemoteRead.TextSelection(container: selected, branch: branch, node: decoded.nodes[1],
+                                                          original: Data("abc".utf8)))
+    }
+
     func testDuplicateFieldsStaleRevisionAndUnexpectedHistoryRejected() throws {
         let catalog = #"{"items":[{"container_id":"\#(container)","sequence":5,"name":"a.txt"}],"next_after":null}"#
         let item = try XCTUnwrap(RemoteRead.Catalog.select(Data(catalog.utf8), after: nil).items.first)

@@ -1,0 +1,85 @@
+name: Workspace iOS simulator
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apple-toolchain-and-unit-fixtures:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+    defaults:
+      run:
+        shell: bash
+        working-directory: zxs-workspace/ios
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Verify pinned Xcode, simulator, and package locks
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          test "$(xcodebuild -version)" = $'Xcode 26.5\nBuild version 17F42'
+          test "$(xcrun --sdk iphonesimulator --show-sdk-version)" = 26.5
+          xcrun swift --version
+          git rev-parse HEAD
+          cmp RemoteTransport/Package.resolved \
+            ZipPreview.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+          simulator="$(xcrun simctl list devices available -j | python3 -c '
+          import json, re, sys
+          devices = json.load(sys.stdin)["devices"]["com.apple.CoreSimulator.SimRuntime.iOS-26-5"]
+          matches = [d["udid"] for d in devices if d["name"] == "iPhone 17 Pro" and d["isAvailable"]]
+          if len(matches) != 1 or not re.fullmatch(r"[0-9A-Fa-f-]{36}", matches[0]):
+              raise SystemExit("expected exactly one iPhone 17 Pro running iOS 26.5")
+          print(matches[0])
+          ')"
+          printf 'WORKSPACE_IOS_SIMULATOR=%s\n' "$simulator" >> "$GITHUB_ENV"
+
+      - name: Run isolated transport codec and gate fixtures on macOS
+        run: |
+          set -euo pipefail
+          xcrun swift test --package-path RemoteTransport \
+            --scratch-path "$RUNNER_TEMP/workspace-ios-transport" \
+            --disable-automatic-resolution
+
+      - name: Build and run Workspace app fixtures on the pinned simulator
+        run: |
+          set -euo pipefail
+          xcodebuild test -project ZipPreview.xcodeproj -scheme ZipPreview \
+            -destination "platform=iOS Simulator,id=$WORKSPACE_IOS_SIMULATOR" \
+            -derivedDataPath "$RUNNER_TEMP/workspace-ios-app" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/workspace-ios-packages" \
+            -disableAutomaticPackageResolution \
+            -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Audit actual package checkout revisions
+        if: success()
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/workspace-ios-transport/checkouts" \
+            "$RUNNER_TEMP/workspace-ios-packages/checkouts" <<'PY'
+          import json, pathlib, subprocess, sys
+          lock = pathlib.Path("RemoteTransport/Package.resolved")
+          pins = {pin["identity"]: pin["state"]["revision"]
+                  for pin in json.loads(lock.read_text())["pins"]}
+          if len(pins) != 6:
+              raise SystemExit("expected the exact six reviewed Swift packages")
+          for directory in map(pathlib.Path, sys.argv[1:]):
+              actual = {p.name: subprocess.check_output(
+                  ["git", "-C", str(p), "rev-parse", "--verify", "HEAD"], text=True).strip()
+                  for p in directory.iterdir() if p.is_dir()}
+              if actual != pins:
+                  raise SystemExit(f"unreviewed actual dependency resolution: {actual!r}")
+              for identity, revision in sorted(actual.items()):
+                  print(f"{identity} {revision}")
+          PY
+          git diff --exit-code -- RemoteTransport/Package.resolved \
+            ZipPreview.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved

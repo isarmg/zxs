@@ -155,7 +155,7 @@ final class RemoteBrowseController: UITableViewController {
 
     private func offer(_ container: RemoteRead.Catalog.Container, _ branch: RemoteRead.Detail.Head,
                        _ node: RemoteRead.History.Node) {
-        guard let exchange else { return }
+        guard let exchange, presentedViewController == nil, consent == nil else { return }
         let editable = node.length <= UInt64(LocalDraft.byteLimit)
             && (node.nodeId == branch.head || (branch.branch == "main" && node.originalBranch == "main"))
         let alert = UIAlertController(title: editable ? "打开完整正文？" : "此节点无法在手机内编辑",
@@ -189,6 +189,7 @@ final class RemoteBrowseController: UITableViewController {
                 let selection = try RemoteRead.TextSelection(container: container, branch: branch, node: node,
                                                              original: response.bytes)
                 guard let self, self.token == selected, !Task.isCancelled,
+                      self.navigationController?.topViewController === self,
                       self.view.window?.windowScene?.activationState == .foregroundActive else { return }
                 self.complete(selected)
                 self.navigationItem.prompt = nil
