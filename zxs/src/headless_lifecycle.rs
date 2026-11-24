@@ -1,7 +1,7 @@
 //! One explicit HTTP listener with bounded workers and foreground drain.
 use crate::{
     container_store::Store,
-    headless_http::{IO_TIMEOUT, Incoming, Outcome, serve_one},
+    headless_http::{IO_TIMEOUT, Incoming, Outcome, ReuseBudget, serve_connection},
     headless_start::Bound,
     workspace_protocol::Request,
 };
@@ -17,6 +17,7 @@ pub(crate) fn serve_selected(
     dispatch: impl Fn(&Store, Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome + Sync,
 ) -> io::Result<()> {
     listener.set_nonblocking(true)?;
+    let budget = &ReuseBudget::default();
     thread::scope(|scope| {
         let mut workers: Vec<thread::ScopedJoinHandle<'_, ()>> = Vec::new();
         let mut result = loop {
@@ -52,10 +53,13 @@ pub(crate) fn serve_selected(
                     let dispatch = &dispatch;
                     let stopping = &stopping;
                     match thread::Builder::new().spawn_scoped(scope, move || {
-                        let _ =
-                            serve_one(bound.account(), stream, stopping, |request, body, live| {
-                                dispatch(bound.store(), request, body, live)
-                            });
+                        let _ = serve_connection(
+                            bound.account(),
+                            &stream,
+                            stopping,
+                            budget,
+                            |request, body, live| dispatch(bound.store(), request, body, live),
+                        );
                     }) {
                         Ok(worker) => workers.push(worker),
                         Err(error) => break Err(error),

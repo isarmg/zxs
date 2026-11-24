@@ -10,6 +10,7 @@ use std::{
     os::unix::{ffi::OsStrExt, fs::MetadataExt},
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
+    time::Instant,
 };
 
 const MAGIC: &[u8] = b"ZXS-HTTP-ROSTER\0";
@@ -19,6 +20,8 @@ const MAX_DESCRIPTOR: usize =
     MAGIC.len() + 16 + 16 + 16 + 32 + 1 + 64 + 1 + (MAX_DATA_ROOTS + 2) * (2 + MAX_ROLE_PATH + 32);
 #[path = "headless_fresh_password.rs"]
 mod fresh_password;
+mod session;
+pub(crate) const SESSION_TTL_SECONDS: u64 = session::EXPIRES_SECONDS;
 const MAX_AUTH_SCHEME_VALUE: usize = 6 + 4 * (64usize + 1 + fresh_password::MAX_BYTES).div_ceil(3);
 
 fn invalid() -> io::Error {
@@ -176,6 +179,7 @@ impl Descriptor {
             login: self.login,
             verifier: Verifier::new(self.salt, self.tag),
             open: AtomicBool::new(true),
+            sessions: session::Sessions::default(),
         };
         (self.roots, account)
     }
@@ -219,18 +223,26 @@ pub(crate) struct Account {
     login: String,
     verifier: Verifier,
     open: AtomicBool,
+    sessions: session::Sessions,
 }
 
 pub(crate) struct Permit<'owner> {
     account: &'owner Account,
     pool: [u8; 16],
     epoch: [u8; 16],
+    expires: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AuthError {
     Invalid,
     Unavailable,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum LoginError {
+    Auth(AuthError),
+    Throttled(u64),
 }
 
 impl Account {
@@ -259,11 +271,60 @@ impl Account {
         if !matched {
             return Err(AuthError::Invalid);
         }
-        Ok(Permit {
+        Ok(self.permit(None))
+    }
+
+    pub(crate) fn authenticate_bearer(
+        &self,
+        headers: &[(&str, &str)],
+        stopping: &dyn Fn() -> bool,
+    ) -> Result<Permit<'_>, AuthError> {
+        self.require_open(stopping)?;
+        let expires = self.sessions.prove(
+            session::Scope(self.pool, self.epoch),
+            Instant::now(),
+            authorization(headers)?,
+        )?;
+        self.require_open(stopping)?;
+        if Instant::now() >= expires {
+            return Err(AuthError::Invalid);
+        }
+        Ok(self.permit(Some(expires)))
+    }
+
+    pub(crate) fn issue_session(
+        &self,
+        headers: &[(&str, &str)],
+        stopping: &dyn Fn() -> bool,
+    ) -> Result<String, LoginError> {
+        self.require_open(stopping).map_err(LoginError::Auth)?;
+        // One account, one bounded rolling admission window. It applies
+        // before Argon2 even to malformed, unknown, or failed credentials.
+        self.sessions.allow_login(Instant::now)?;
+        self.authenticate(headers, stopping)
+            .map_err(LoginError::Auth)?;
+        let token = self
+            .sessions
+            .issue(session::Scope(self.pool, self.epoch))
+            .map_err(LoginError::Auth)?;
+        self.require_open(stopping).map_err(LoginError::Auth)?;
+        Ok(token)
+    }
+
+    fn require_open(&self, stopping: &dyn Fn() -> bool) -> Result<(), AuthError> {
+        if stopping() || !self.open.load(Ordering::Acquire) {
+            return Err(AuthError::Unavailable);
+        }
+        Ok(())
+    }
+
+    fn permit(&self, expires: Option<Instant>) -> Permit<'_> {
+        Permit {
             account: self,
             pool: self.pool,
             epoch: self.epoch,
-        })
+            expires,
+        }
     }
 
     /// Stop accepting/authorizing before drain. The offline Helper cannot
@@ -288,7 +349,14 @@ impl Permit<'_> {
                 && self.pool == account.pool
                 && self.epoch == account.epoch
                 && account.open.load(Ordering::Acquire)
+                && self.expires.is_none_or(|expires| Instant::now() < expires)
         };
+        if self
+            .expires
+            .is_some_and(|expires| Instant::now() >= expires)
+        {
+            return Err(AuthError::Invalid);
+        }
         if !allowed() {
             return Err(AuthError::Unavailable);
         }
@@ -308,7 +376,7 @@ impl BasicCredentials {
         &self.decoded[self.separator + 1..]
     }
 }
-fn credentials(headers: &[(&str, &str)]) -> Result<BasicCredentials, AuthError> {
+fn authorization<'a>(headers: &[(&str, &'a str)]) -> Result<&'a str, AuthError> {
     let mut values = headers
         .iter()
         .filter_map(|(k, v)| k.eq_ignore_ascii_case("authorization").then_some(*v));
@@ -316,7 +384,12 @@ fn credentials(headers: &[(&str, &str)]) -> Result<BasicCredentials, AuthError> 
     if values.next().is_some() {
         return Err(AuthError::Invalid);
     }
-    let decoded = String::from_utf8(decode_basic(raw)?).map_err(|_| AuthError::Invalid)?;
+    Ok(raw)
+}
+
+fn credentials(headers: &[(&str, &str)]) -> Result<BasicCredentials, AuthError> {
+    let decoded = String::from_utf8(decode_basic(authorization(headers)?)?)
+        .map_err(|_| AuthError::Invalid)?;
     let separator = decoded.find(':').ok_or(AuthError::Invalid)?;
     let bound = BasicCredentials { decoded, separator };
     if login_name(bound.login().as_bytes()).is_err()
@@ -376,3 +449,6 @@ fn decode_basic(value: &str) -> Result<Vec<u8>, AuthError> {
 #[cfg(test)]
 #[path = "../tests/unit/attached/headless_auth/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use tests::{FIXTURE_BASIC, fixture_account};

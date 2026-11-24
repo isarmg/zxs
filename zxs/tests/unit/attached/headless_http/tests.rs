@@ -65,3 +65,6 @@ fn r3_create_branch_short_or_oversized_json_has_no_successful_extent() {
         Err(Problem::TooLarge)
     ));
 }
+
+#[path = "persistent.rs"]
+mod persistent;

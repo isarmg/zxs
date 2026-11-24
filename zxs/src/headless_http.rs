@@ -1,4 +1,9 @@
-//! One HTTP/1.1 request on one accepted TCP connection; no TLS or forwarding policy.
+//! Strict HTTP/1.1 behind a deployment-managed frontend. No TLS or forwarding policy.
+mod reuse;
+
+pub(super) use reuse::ReuseBudget;
+use reuse::{BackendProfile, MAX_EXCHANGES, NEXT_HEAD, can_reuse, profile, session_outcome};
+
 use crate::{
     headless_auth::{Account, AuthError},
     workspace_protocol::{self, Request},
@@ -75,6 +80,8 @@ pub(crate) enum Outcome {
 pub(crate) enum Problem {
     Malformed,
     Unauthorized,
+    BearerUnauthorized,
+    LoginThrottled(u64),
     Denied,
     Missing,
     Conflict,
@@ -86,7 +93,8 @@ impl Problem {
     fn status(self) -> &'static str {
         match self {
             Self::Malformed => "400 Bad Request",
-            Self::Unauthorized => "401 Unauthorized",
+            Self::Unauthorized | Self::BearerUnauthorized => "401 Unauthorized",
+            Self::LoginThrottled(_) => "429 Too Many Requests",
             Self::Denied => "403 Forbidden",
             Self::Missing => "404 Not Found",
             Self::Conflict => "409 Conflict",
@@ -114,14 +122,18 @@ struct Head<'a> {
 fn read_head(
     input: &mut impl BufRead,
     before_read: impl Fn() -> io::Result<()>,
-) -> io::Result<Vec<u8>> {
+) -> io::Result<Option<Vec<u8>>> {
     let mut bytes = Vec::new();
     let mut ended = 0;
     loop {
         before_read()?;
         let available = input.fill_buf()?;
         if available.is_empty() {
-            return Err(io::ErrorKind::UnexpectedEof.into());
+            return if bytes.is_empty() {
+                Ok(None)
+            } else {
+                Err(io::ErrorKind::UnexpectedEof.into())
+            };
         }
         let count = available.len().min(MAX_HEAD - bytes.len());
         for (offset, byte) in available[..count].iter().copied().enumerate() {
@@ -132,9 +144,9 @@ fn read_head(
                 _ => 0,
             };
             if ended == 4 {
-                // Body or extra bytes in the buffer remain unread.
+                // Another head cannot start until this exact exchange settles.
                 input.consume(offset + 1);
-                return Ok(bytes);
+                return Ok(Some(bytes));
             }
         }
         input.consume(count);
@@ -182,7 +194,7 @@ fn head(raw: &[u8]) -> Result<Head<'_>, Problem> {
             }
             hosts += 1;
         }
-        // This single-request transport accepts no transfer coding, trailers,
+        // Neither transport profile accepts transfer coding, trailers,
         // upgrades or 100-continue.
         if ["transfer-encoding", "trailer", "te", "upgrade", "expect"]
             .iter()
@@ -203,36 +215,81 @@ fn head(raw: &[u8]) -> Result<Head<'_>, Problem> {
     })
 }
 
-/// Own exactly one accepted socket and close it after one HTTP request.
-/// The canonical Content-Length delimits this body, not TCP EOF; no following
-/// bytes can become another admitted request on this connection.
-///
-/// Dispatcher must decode one exact bounded JSON object or consume the full
-/// streaming `SaveNode`, checking length and digest before selection.
-/// DELETE delegates to the container store; the adapter does not create receipts.
-pub(crate) fn serve_one(
-    account: &Account,
-    stream: TcpStream,
-    stopping: &dyn Fn() -> bool,
-    dispatch: impl FnOnce(Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome,
-) -> io::Result<()> {
-    let result = serve_request(account, &stream, stopping, dispatch);
-    drop(stream);
-    result
-}
-
-fn serve_request(
+/// One bounded reader serves the accepted socket through complete sequential v1
+/// exchanges. A legacy Basic request still performs one exchange and closes.
+pub(crate) fn serve_connection(
     account: &Account,
     stream: &TcpStream,
     stopping: &dyn Fn() -> bool,
-    dispatch: impl FnOnce(Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome,
+    budget: &ReuseBudget,
+    dispatch: impl Fn(Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome,
 ) -> io::Result<()> {
     let mut input = BufReader::new(stream);
     let mut output = stream;
-    let deadline = Instant::now() + IO_TIMEOUT;
-    // Bound the complete head, rather than granting a new idle interval
-    // for every byte. Body reads keep the existing per-read idle timeout.
-    let before_head_read = || {
+    let mut reuse_slot = None;
+    for served in 0..MAX_EXCHANGES {
+        let initial = served == 0;
+        let raw = match next_head(&mut input, stream, stopping, initial) {
+            Ok(Some(raw)) => raw,
+            Ok(None) if !initial => return Ok(()),
+            Ok(None) => return write_problem(&mut output, Problem::Malformed),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof
+                ) =>
+            {
+                return write_problem(&mut output, Problem::Malformed);
+            }
+            Err(error) => return Err(error),
+        };
+        if stopping() {
+            return Ok(());
+        }
+        stream.set_read_timeout(Some(IO_TIMEOUT))?;
+        let head = match head(&raw) {
+            Ok(head) => head,
+            Err(problem) => return write_problem(&mut output, problem),
+        };
+        let mode = profile(&head);
+        let outcome = match mode {
+            BackendProfile::Login => session_outcome(account, &head, stopping),
+            BackendProfile::Legacy | BackendProfile::Bearer => {
+                let Some(outcome) = resource(account, &head, &mut input, mode, stopping, &dispatch)
+                else {
+                    // Preserve the legacy cut: a stop during authentication
+                    // closes quietly rather than admitting or reporting new work.
+                    return Ok(());
+                };
+                outcome
+            }
+        };
+        let eligible = mode != BackendProfile::Legacy
+            && served + 1 < MAX_EXCHANGES
+            && !stopping()
+            && !matches!(outcome, Outcome::Failed(_))
+            && can_reuse(&head);
+        if eligible && reuse_slot.is_none() {
+            reuse_slot = budget.try_hold();
+        }
+        let keep = eligible && reuse_slot.is_some();
+        write_outcome(&mut output, outcome, keep)?;
+        output.flush()?;
+        if !keep {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+fn next_head(
+    input: &mut impl BufRead,
+    stream: &TcpStream,
+    stopping: &dyn Fn() -> bool,
+    initial: bool,
+) -> io::Result<Option<Vec<u8>>> {
+    let deadline = Instant::now() + if initial { IO_TIMEOUT } else { NEXT_HEAD };
+    let before = || {
         if stopping() {
             return Err(io::ErrorKind::Interrupted.into());
         }
@@ -242,58 +299,74 @@ fn serve_request(
         }
         stream.set_read_timeout(Some(left))
     };
-    let raw = match read_head(&mut input, before_head_read) {
-        Ok(raw) => raw,
-        Err(e)
-            if matches!(
-                e.kind(),
-                io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof
-            ) =>
-        {
-            return write_outcome(&mut output, Outcome::Failed(Problem::Malformed));
-        }
-        Err(e) => return Err(e),
-    };
+    let raw = read_head(input, before)?;
     if Instant::now() >= deadline {
         return Err(io::ErrorKind::TimedOut.into());
     }
-    if stopping() {
-        return Ok(());
-    }
-    stream.set_read_timeout(Some(IO_TIMEOUT))?;
-    let head = match head(&raw) {
-        Ok(head) => head,
-        Err(p) => return write_outcome(&mut output, Outcome::Failed(p)),
+    Ok(raw)
+}
+
+fn resource(
+    account: &Account,
+    head: &Head<'_>,
+    reader: &mut dyn Read,
+    mode: BackendProfile,
+    stopping: &dyn Fn() -> bool,
+    dispatch: &impl Fn(Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome,
+) -> Option<Outcome> {
+    let bearer = mode == BackendProfile::Bearer;
+    let auth_problem = |error: AuthError| {
+        if bearer && error == AuthError::Invalid {
+            Problem::BearerUnauthorized
+        } else {
+            error.into()
+        }
     };
-    let permit = match account.authenticate(&head.fields, stopping) {
+    let permit = if bearer {
+        account.authenticate_bearer(&head.fields, stopping)
+    } else {
+        account.authenticate(&head.fields, stopping)
+    };
+    let permit = match permit {
         Ok(permit) => permit,
-        Err(_) if stopping() => return Ok(()),
-        Err(e) => return write_outcome(&mut output, Outcome::Failed(e.into())),
+        Err(_) if stopping() => return None,
+        Err(error) => return Some(Outcome::Failed(auth_problem(error))),
     };
     let request = match workspace_protocol::request(head.method, head.target, &head.fields) {
         Ok(request) => request,
-        Err(workspace_protocol::Rejected::Route) => {
-            return write_outcome(&mut output, Outcome::Failed(Problem::Missing));
-        }
-        Err(_) => return write_outcome(&mut output, Outcome::Failed(Problem::Malformed)),
+        Err(workspace_protocol::Rejected::Route) => return Some(Outcome::Failed(Problem::Missing)),
+        Err(_) => return Some(Outcome::Failed(Problem::Malformed)),
     };
-    let mut bounded = match body_for(&request, &mut input) {
+    if bearer && !matches!(request, Request::Receipt { .. }) {
+        // Until a separate v1 mutation policy is selected, a session is
+        // authority only for the original immutable receipt lookup.
+        return Some(Outcome::Failed(Problem::Denied));
+    }
+    let mut bounded = match body_for(&request, reader) {
         Ok(body) => body,
-        Err(problem) => return write_outcome(&mut output, Outcome::Failed(problem)),
+        Err(problem) => return Some(Outcome::Failed(problem)),
     };
-    let outcome = match permit.with_admission(account, |live| {
-        // This is the final admission cut. Once admitted, normal stop does
-        // not revoke the original operation's permit before it can finish.
-        if stopping() {
-            return Outcome::Failed(Problem::Unavailable);
-        }
-        dispatch(request, &mut bounded, live)
-    }) {
-        Ok(result) if matches!(result, Outcome::Failed(_)) || bounded.exhausted() => result,
-        Ok(_) => Outcome::Failed(Problem::Unavailable),
-        Err(e) => Outcome::Failed(e.into()),
-    };
-    write_outcome(&mut output, outcome)
+    Some(
+        match permit.with_admission(account, |live| {
+            // No new work on stop. An already admitted operation can finish and
+            // report its exact receipt if it completed with live authorization.
+            if stopping() {
+                return Outcome::Failed(Problem::Unavailable);
+            }
+            dispatch(request, &mut bounded, live)
+        }) {
+            Ok(result) if matches!(result, Outcome::Failed(_)) || bounded.exhausted() => result,
+            Ok(_) => Outcome::Failed(Problem::Unavailable),
+            Err(error) => Outcome::Failed(auth_problem(error)),
+        },
+    )
+}
+
+#[derive(Clone, Copy, Default)]
+struct HeaderExtras {
+    challenge: Option<&'static str>,
+    retry_after: Option<u64>,
+    digest: Option<[u8; 32]>,
 }
 
 fn headers(
@@ -301,31 +374,25 @@ fn headers(
     status: &str,
     media: Option<&str>,
     length: u64,
-    challenge: bool,
+    keep: bool,
+    extras: HeaderExtras,
 ) -> io::Result<()> {
-    headers_with_digest(output, status, media, length, challenge, None)
-}
-
-fn headers_with_digest(
-    output: &mut impl Write,
-    status: &str,
-    media: Option<&str>,
-    length: u64,
-    challenge: bool,
-    digest: Option<[u8; 32]>,
-) -> io::Result<()> {
+    let connection = if keep { "keep-alive" } else { "close" };
     write!(
         output,
-        "HTTP/1.1 {status}\r\nConnection: close\r\nCache-Control: no-store\r\n"
+        "HTTP/1.1 {status}\r\nConnection: {connection}\r\nCache-Control: no-store\r\n"
     )?;
     if let Some(media) = media {
         write!(output, "Content-Type: {media}\r\n")?;
     }
-    if challenge {
-        output.write_all(b"WWW-Authenticate: Basic realm=\"zxs\", charset=\"UTF-8\"\r\n")?;
+    if let Some(challenge) = extras.challenge {
+        write!(output, "WWW-Authenticate: {challenge}\r\n")?;
+    }
+    if let Some(seconds) = extras.retry_after {
+        write!(output, "Retry-After: {seconds}\r\n")?;
     }
     write!(output, "Content-Length: {length}\r\n")?;
-    if let Some(digest) = digest {
+    if let Some(digest) = extras.digest {
         output.write_all(b"Zxs-Sha256: ")?;
         for byte in digest {
             write!(output, "{byte:02x}")?;
@@ -335,7 +402,18 @@ fn headers_with_digest(
     output.write_all(b"\r\n")
 }
 
-fn write_outcome(output: &mut impl Write, outcome: Outcome) -> io::Result<()> {
+fn write_problem(output: &mut impl Write, problem: Problem) -> io::Result<()> {
+    let mut extras = HeaderExtras::default();
+    match problem {
+        Problem::Unauthorized => extras.challenge = Some("Basic realm=\"zxs\", charset=\"UTF-8\""),
+        Problem::BearerUnauthorized => extras.challenge = Some("Bearer"),
+        Problem::LoginThrottled(seconds) => extras.retry_after = Some(seconds),
+        _ => {}
+    }
+    headers(output, problem.status(), None, 0, false, extras)
+}
+
+fn write_outcome(output: &mut impl Write, outcome: Outcome, keep: bool) -> io::Result<()> {
     match outcome {
         Outcome::Json(bytes) => {
             headers(
@@ -343,7 +421,8 @@ fn write_outcome(output: &mut impl Write, outcome: Outcome) -> io::Result<()> {
                 "200 OK",
                 Some("application/json"),
                 bytes.len() as u64,
-                false,
+                keep,
+                HeaderExtras::default(),
             )?;
             output.write_all(&bytes)
         }
@@ -354,7 +433,8 @@ fn write_outcome(output: &mut impl Write, outcome: Outcome) -> io::Result<()> {
                 "404 Not Found",
                 Some("application/json"),
                 ABSENT.len() as u64,
-                false,
+                keep,
+                HeaderExtras::default(),
             )?;
             output.write_all(ABSENT)
         }
@@ -363,26 +443,23 @@ fn write_outcome(output: &mut impl Write, outcome: Outcome) -> io::Result<()> {
             sha256,
             body,
         } => {
-            headers_with_digest(
+            headers(
                 output,
                 "200 OK",
                 Some("application/octet-stream"),
                 length,
-                false,
-                Some(sha256),
+                keep,
+                HeaderExtras {
+                    digest: Some(sha256),
+                    ..HeaderExtras::default()
+                },
             )?;
             if io::copy(&mut body.take(length), output)? != length {
                 return Err(io::ErrorKind::UnexpectedEof.into());
             }
             Ok(())
         }
-        Outcome::Failed(problem) => headers(
-            output,
-            problem.status(),
-            None,
-            0,
-            matches!(problem, Problem::Unauthorized),
-        ),
+        Outcome::Failed(problem) => write_problem(output, problem),
     }
 }
 

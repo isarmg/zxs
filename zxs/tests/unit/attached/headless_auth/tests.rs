@@ -126,8 +126,9 @@ fn descriptor_rejects_data_paths_or_tokens_aliasing_any_role() {
     }
 }
 
-#[test]
-fn direct_request_authenticates_the_original_live_account() {
+pub(crate) const FIXTURE_BASIC: &str = "Basic dXNlcjpmcmVzaCB3b3Jrc3BhY2UgdGVzdCBzZWNyZXQ=";
+
+pub(crate) fn fixture_account() -> Account {
     // The same independent Argon2id vector used in the password fixtures.
     let salt = b"\x1a\x2b\x3c\x4d\x5e\x6f\x70\x81\x92\xa3\xb4\xc5\xd6\xe7\xf8\x09";
     let tag = b"\xcf\x7e\x98\x79\xa1\x40\x23\x3c\x9a\x38\xa1\x60\x19\xd0\x3d\xfc\xd1\x27\xd1\x85\x53\x86\xde\xfe\x40\xfa\x2f\x39\xab\x83\xe8\xc2";
@@ -135,12 +136,14 @@ fn direct_request_authenticates_the_original_live_account() {
     let offset = MAGIC.len() + 32;
     bytes[offset..offset + 16].copy_from_slice(salt);
     bytes[offset + 16..offset + 48].copy_from_slice(tag);
-    let (_, account) = Descriptor::parse(&bytes).unwrap().into_parts();
-    let (_, another) = Descriptor::parse(&bytes).unwrap().into_parts();
-    let exact = [(
-        "Authorization",
-        "Basic dXNlcjpmcmVzaCB3b3Jrc3BhY2UgdGVzdCBzZWNyZXQ=",
-    )];
+    Descriptor::parse(&bytes).unwrap().into_parts().1
+}
+
+#[test]
+fn direct_request_authenticates_the_original_live_account() {
+    let account = fixture_account();
+    let another = fixture_account();
+    let exact = [("Authorization", FIXTURE_BASIC)];
     let other_login = [(
         "Authorization",
         "Basic b3RoZXI6ZnJlc2ggd29ya3NwYWNlIHRlc3Qgc2VjcmV0",
