@@ -60,14 +60,24 @@ impl Routes {
         Ok(Some(Self::in_directory(directory)))
     }
 
-    #[cfg(test)]
-    pub(super) fn require_upload_parent(&self, system: &HeldDir) -> io::Result<()> {
+    pub(super) fn require_bound_parent(&self, system: &HeldDir) -> io::Result<()> {
         let at = existing_directory(system)?
-            .ok_or_else(|| invalid("upload lacks the original SYSTEM routes"))?;
+            .ok_or_else(|| invalid("the original SYSTEM routes are absent"))?;
         if at.entity != self.directory.entity || !at.same_mount(&self.directory)? {
-            return Err(invalid("upload has a different SYSTEM authority"));
+            return Err(invalid(
+                "the selected SYSTEM authority differs from its original",
+            ));
         }
         self.directory.require_named()
+    }
+
+    #[cfg(test)]
+    pub(super) fn require_upload_parent(&self, system: &HeldDir) -> io::Result<()> {
+        self.require_bound_parent(system)
+    }
+
+    pub(super) fn name_namespace(&self) -> &HeldDir {
+        &self.directory
     }
 
     fn in_directory(directory: HeldDir) -> Self {
@@ -106,8 +116,7 @@ impl Routes {
         read_ids(&self.directory, ReadAccess::Ordinary)
     }
 
-    #[cfg(test)]
-    pub(super) fn index_directory(&self) -> io::Result<&HeldDir> {
+    fn index_directory(&self) -> io::Result<&HeldDir> {
         let cut = self
             .unsure
             .lock()
@@ -119,7 +128,6 @@ impl Routes {
         Ok(&self.directory)
     }
 
-    #[cfg(test)]
     pub(super) fn index_ids(&self, limit: usize) -> io::Result<Vec<Id>> {
         read_ids_bounded(self.index_directory()?, ReadAccess::Ordinary, limit)
     }
@@ -128,6 +136,23 @@ impl Routes {
     /// before making any part of that container visible on DATA.
     pub(super) fn reserve(&self, id: Id, token: [u8; 32]) -> io::Result<()> {
         self.reserve_using(id, token, None)
+    }
+
+    pub(super) fn reserve_name_checked(
+        &self,
+        id: Id,
+        token: [u8; 32],
+        prove: &dyn Fn() -> io::Result<()>,
+        last: &dyn Fn() -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.reserve_using(
+            id,
+            token,
+            Some(&BeforeRoute {
+                prove,
+                authorize: last,
+            }),
+        )
     }
 
     #[cfg(test)]

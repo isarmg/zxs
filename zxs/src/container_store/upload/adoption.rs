@@ -7,7 +7,9 @@ use super::{
 use crate::{
     container_store::{
         Conflict, Error, Id, Mutation, OperationReceipt, Receipt, State, Store, invalid,
-        routes::Routes, stage::Publication, volume::DataVolume,
+        routes::Routes,
+        stage::{NameCut, Publication},
+        volume::DataVolume,
     },
     fs::HeldDir,
 };
@@ -270,23 +272,35 @@ impl<F: Fn() -> io::Result<()>> Publication for Adoption<'_, '_, F> {
         routes: &Routes,
         id: Id,
         token: [u8; 32],
+        name_cut: Option<NameCut<'_>>,
         authorize: &impl Fn() -> io::Result<()>,
     ) -> io::Result<()> {
-        routes.reserve_upload(id, token, &|| self.prove_bootstrap(), authorize)
+        let prove = || {
+            self.prove_bootstrap()?;
+            name_cut.map_or(Ok(()), |check| (check.prove)())
+        };
+        let last = || {
+            authorize()?;
+            name_cut.map_or(Ok(()), |check| (check.last)())
+        };
+        routes.reserve_upload(id, token, &prove, &last)
     }
 
     fn create_first(
         &self,
         volume: &DataVolume,
         id: Id,
+        name_cut: Option<NameCut<'_>>,
         authorize: &impl Fn() -> io::Result<()>,
     ) -> io::Result<HeldDir> {
-        volume.create_upload_container(id, || {
+        volume.create_container_when(id, || {
             if self.store.routes.get(id)? != Some(volume.token) {
                 return Err(invalid("upload lost its exact selected first route"));
             }
             self.prove_bootstrap()?;
-            authorize()
+            name_cut.map_or(Ok(()), |check| (check.prove)())?;
+            authorize()?;
+            name_cut.map_or(Ok(()), |check| (check.last)())
         })
     }
 

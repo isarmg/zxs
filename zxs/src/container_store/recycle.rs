@@ -145,16 +145,11 @@ pub(super) struct Recycle {
     moves_directory: HeldDir,
     staging_directory: HeldDir,
     arrived_directory: HeldDir,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "retains the native RECYCLE lease")
-    )]
     archive_owner: File,
     receipt_fence: Mutex<()>,
     unsure: AtomicBool,
 }
 
-#[cfg(test)]
 pub(super) struct IndexRoles<'a> {
     pub(super) system: &'a HeldDir,
     pub(super) root: &'a HeldDir,
@@ -311,15 +306,21 @@ impl Recycle {
         )
     }
 
-    #[cfg(test)]
-    pub(super) fn index_roles(&self) -> io::Result<IndexRoles<'_>> {
-        let _cut = self
-            .receipt_fence
-            .lock()
-            .map_err(|_| invalid("recycle receipt cut unavailable"))?;
+    pub(super) fn indexed_system(&self) -> &HeldDir {
+        &self.system
+    }
+
+    // Sample from adjacent native rename checks without selecting a route
+    // or entering either route/recycle mutex.
+    pub(super) fn index_moves(&self) -> io::Result<&HeldDir> {
         if self.unsure.load(Ordering::Acquire) {
             return Err(io::ErrorKind::WouldBlock.into());
         }
+        self.moves()
+    }
+
+    pub(super) fn index_roles(&self) -> io::Result<IndexRoles<'_>> {
+        self.index_moves()?;
         self.held()?;
         Ok(IndexRoles {
             system: &self.system,

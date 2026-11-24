@@ -154,6 +154,19 @@ impl<'a> FlatStage<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct NameCut<'a> {
+    pub(super) prove: &'a dyn Fn() -> io::Result<()>,
+    pub(super) last: &'a dyn Fn() -> io::Result<()>,
+}
+
+impl NameCut<'_> {
+    pub(super) fn require(self) -> io::Result<()> {
+        (self.prove)()?;
+        (self.last)()
+    }
+}
+
 /// The selection and durability sequence is shared; the original legacy flat
 /// stage and an exactly verified upload are independently qualified sources.
 pub(super) trait Publication {
@@ -175,19 +188,29 @@ pub(super) trait Publication {
         routes: &Routes,
         id: Id,
         token: [u8; 32],
+        name_cut: Option<NameCut<'_>>,
         authorize: &impl Fn() -> io::Result<()>,
     ) -> io::Result<()> {
         authorize()?;
-        routes.reserve(id, token)
+        if let Some(check) = name_cut {
+            routes.reserve_name_checked(id, token, check.prove, check.last)
+        } else {
+            routes.reserve(id, token)
+        }
     }
 
     fn create_first(
         &self,
         volume: &DataVolume,
         id: Id,
+        name_cut: Option<NameCut<'_>>,
         _authorize: &impl Fn() -> io::Result<()>,
     ) -> io::Result<HeldDir> {
-        volume.create_container(id)
+        if let Some(check) = name_cut {
+            volume.create_container_when(id, || check.require())
+        } else {
+            volume.create_container(id)
+        }
     }
 
     fn confirm_moved(&self, _parent: &HeldDir, _name: &CStr) -> io::Result<()> {

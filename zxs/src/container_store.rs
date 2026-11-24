@@ -3,7 +3,6 @@ mod codec;
 pub(crate) mod import_one;
 pub(crate) mod init_data;
 mod model;
-#[cfg(test)]
 mod name_index;
 pub(crate) mod offline_catalog;
 mod operation;
@@ -25,11 +24,12 @@ use crate::fs::{HeldDir, ReadAccess};
 use crate::hash::Sha256;
 pub(crate) use model::{Body, Change, Conflict, Id, MAIN, Mutation, Node, NodeId, Receipt, Target};
 use model::{Decision, State};
+use name_index::{Background, ChangeCut, Clock, Names, Ticket};
 pub(crate) use operation::OperationReceipt;
 use placement::{Intake, Placement, Sample};
 pub(crate) use recycle::RecycleReceipt;
 use routes::Routes;
-use stage::{FlatStage, Publication};
+use stage::{FlatStage, NameCut, Publication};
 use std::{
     collections::BTreeMap,
     ffi::CString,
@@ -261,12 +261,9 @@ pub(crate) struct Store {
     // No upload reads, hashing, or fsync while acquiring this map.
     objects: Mutex<BTreeMap<Id, Arc<Mutex<Option<State>>>>>,
     // Only bootstrap and rename require a shared display-namespace cut.
-    names: Mutex<()>,
+    names: Mutex<Names>,
+    name_clock: Clock,
     archive: Option<recycle::Recycle>,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "retains the native SYSTEM lease")
-    )]
     system_owner: File,
     #[cfg(test)]
     uploads: upload::Shared,
@@ -334,12 +331,27 @@ impl Store {
             next_stage: AtomicU64::new(0),
             placement: Placement::default(),
             objects: Mutex::new(BTreeMap::new()),
-            names: Mutex::new(()),
+            names: Mutex::new(Names::default()),
+            name_clock: Clock::default(),
             archive: None,
             system_owner: owner,
             #[cfg(test)]
             uploads: upload::Shared::default(),
         }
+    }
+
+    fn name_observed<T>(&self, result: io::Result<T>) -> io::Result<T> {
+        if result.is_err() {
+            self.name_clock.fault();
+        }
+        result
+    }
+
+    fn name_background(&self) -> io::Result<Background<'_>> {
+        self.names
+            .lock()
+            .map_err(|_| invalid("container name selection unavailable"))?
+            .enter_background(&self.name_clock)
     }
 
     fn enrolled(&self, token: [u8; 32]) -> Option<&DataVolume> {
@@ -350,10 +362,12 @@ impl Store {
     }
 
     fn routed(&self, id: Id) -> io::Result<Option<&DataVolume>> {
-        self.routes
-            .get(id)?
-            .map(|token| self.enrolled(token).ok_or_else(unenrolled_data))
-            .transpose()
+        let backed = self.routes.get(id).and_then(|token| {
+            token
+                .map(|token| self.enrolled(token).ok_or_else(unenrolled_data))
+                .transpose()
+        });
+        self.name_observed(backed)
     }
 
     fn write_volume(
@@ -422,6 +436,7 @@ impl Store {
             match volume.available_bytes() {
                 Ok(free) => samples.push((volume.token, free)),
                 Err(error) => {
+                    self.name_clock.fault();
                     let failure = match error.kind() {
                         io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData => {
                             &mut identity_failure
@@ -443,6 +458,10 @@ impl Store {
     }
 
     fn recycled(&self, id: Id) -> io::Result<Option<(RecycleReceipt, HeldDir)>> {
+        self.name_observed(self.selected_recycle(id))
+    }
+
+    fn selected_recycle(&self, id: Id) -> io::Result<Option<(RecycleReceipt, HeldDir)>> {
         let Some(archive) = self.archive.as_ref() else {
             return Ok(None);
         };
@@ -592,15 +611,19 @@ impl Store {
             authorize()?;
             return Err(Conflict::MissingContainer.into());
         }
-        volume.require_named()?;
-        let reserved = match self.routes.get(id)? {
+        self.name_observed(volume.require_named())?;
+        let reserved = match self.name_observed(self.routes.get(id))? {
             Some(token) if token == volume.token => true,
             None if memory.is_none() => false,
-            _ => return Err(invalid("DATA route changed during intake").into()),
+            _ => {
+                return self
+                    .name_observed(Err(invalid("DATA route changed during intake")))
+                    .map_err(Into::into);
+            }
         };
         let mut first = State::default();
         let selected = if reserved {
-            volume.load(id, memory)?
+            self.name_observed(volume.load(id, memory))?
         } else {
             &mut first
         };
@@ -615,59 +638,13 @@ impl Store {
                 return Err(error.into());
             }
         };
-        let receipt = pending.receipt();
-        stage.stage_receipt(receipt, &authorize)?;
-
-        let wanted = match &receipt.change {
-            Change::Save {
-                target: Target::FirstMain { name },
-                ..
+        if let Err(error) =
+            self.publish_new(pending.receipt(), (volume, reserved), stage, &authorize)
+        {
+            if matches!(error, Error::Uncertain(_)) {
+                *memory = None;
             }
-            | Change::Rename { name, .. } => Some(name.as_str()),
-            _ => None,
-        };
-        let _namespace = wanted
-            .map(|_| {
-                self.names
-                    .lock()
-                    .map_err(|_| invalid("container name selection unavailable"))
-            })
-            .transpose()?;
-        if let Some(name) = wanted
-            && !self.vacant(id, name)?
-        {
-            authorize()?;
-            return Err(Conflict::AlreadyExists.into());
-        }
-        let directory = if !reserved {
-            volume.require_vacant(id)?;
-            stage.reserve_first(&self.routes, id, volume.token, &authorize)?;
-            stage.create_first(volume, id, &authorize)?
-        } else if let Some(original) = volume.held_container(id)? {
-            original
-        } else if receipt.sequence == 1 {
-            // The SYSTEM reservation can survive an interrupted first save.
-            stage.create_first(volume, id, &authorize)?
-        } else {
-            return Err(invalid("recorded DATA container is absent").into());
-        };
-        if receipt.sequence == 1 {
-            directory.only(None)?;
-        }
-        // Also covers a prior failed first publication of this directory.
-        volume.sync_data()?;
-        let destination = receipt_name(receipt)?;
-        volume.require_named()?;
-        directory.require_named()?;
-        stage.install(&directory, &destination, authorize)?;
-        if let Err(e) = directory
-            .file
-            .sync_all()
-            .and_then(|()| volume.sync_staging())
-            .and_then(|()| stage.confirm_moved(&directory, &destination))
-        {
-            *memory = None;
-            return Err(Error::Uncertain(e));
+            return Err(error);
         }
         let receipt = pending.commit();
         if !reserved {
@@ -676,18 +653,125 @@ impl Store {
         Ok(receipt)
     }
 
+    fn publish_new(
+        &self,
+        receipt: &Receipt,
+        (volume, reserved): (&DataVolume, bool),
+        stage: &mut impl Publication,
+        authorize: &impl Fn() -> io::Result<()>,
+    ) -> Result<(), Error> {
+        stage.stage_receipt(receipt, authorize)?;
+        let mut bound = if let Some(label) = name_index::active_label(receipt) {
+            let mut guard = self
+                .names
+                .lock()
+                .map_err(|_| invalid("container name selection unavailable"))?;
+            let Some(ticket) =
+                guard.admit(self, receipt.mutation.container, label, volume.token)?
+            else {
+                authorize()?;
+                return Err(Conflict::AlreadyExists.into());
+            };
+            guard.invalidate(); // Keep a prior witness; clear its fast grant before any write.
+            Some((guard, ticket))
+        } else {
+            None
+        };
+        let ticket = bound.as_ref().map(|(_, ticket)| ticket);
+        let (directory, changed) =
+            self.publication_directory(receipt, (volume, reserved), stage, ticket, authorize)?;
+        if receipt.sequence == 1 {
+            self.name_observed(directory.only(None))?;
+        }
+        // Also covers a prior failed first publication of this directory.
+        self.name_observed(volume.sync_data())?;
+        let destination = receipt_name(receipt)?;
+        self.name_observed(volume.require_named())?;
+        self.name_observed(directory.require_named())?;
+        stage.install(&directory, &destination, || {
+            if let Some(ticket) = ticket {
+                ticket.require(self, changed)?;
+            }
+            authorize()?;
+            ticket.map_or(Ok(()), |proof| proof.require_generation(self))
+        })?;
+        if let Err(error) = directory
+            .file
+            .sync_all()
+            .and_then(|()| volume.sync_staging())
+            .and_then(|()| stage.confirm_moved(&directory, &destination))
+        {
+            self.name_clock.fault();
+            return Err(Error::Uncertain(error));
+        }
+        // Projection is best effort after the authoritative native flush.
+        if let Some((guard, ticket)) = bound.as_mut() {
+            guard.confirm(self, ticket, changed, receipt, (&directory, volume.token));
+        }
+        Ok(())
+    }
+
+    fn publication_directory(
+        &self,
+        receipt: &Receipt,
+        (volume, reserved): (&DataVolume, bool),
+        stage: &impl Publication,
+        ticket: Option<&Ticket>,
+        authorize: &impl Fn() -> io::Result<()>,
+    ) -> Result<(HeldDir, ChangeCut), Error> {
+        let id = receipt.mutation.container;
+        let mut changed = ChangeCut::default();
+        let cut = |changed| ticket.map_or(Ok(()), |proof| proof.require(self, changed));
+        let checked = ticket.is_some_and(Ticket::held);
+        let last = || ticket.map_or(Ok(()), |proof| proof.require_generation(self));
+        if !reserved {
+            self.name_observed(volume.require_vacant(id))?;
+            cut(changed)?;
+            let prove = || cut(ChangeCut::default().route());
+            let check = checked.then_some(NameCut {
+                prove: &prove,
+                last: &last,
+            });
+            stage.reserve_first(&self.routes, id, volume.token, check, authorize)?;
+            changed = changed.route();
+        } else if let Some(original) = self.name_observed(volume.held_container(id))? {
+            return Ok((original, changed));
+        } else if receipt.sequence != 1 {
+            return self
+                .name_observed(Err(invalid("recorded DATA container is absent")))
+                .map_err(Into::into);
+        }
+        // A fresh or interrupted first route still needs its own held directory.
+        cut(changed)?;
+        let prove = || cut(changed);
+        let check = checked.then_some(NameCut {
+            prove: &prove,
+            last: &last,
+        });
+        let created = stage.create_first(volume, id, check, authorize)?;
+        Ok((created, changed.data(volume.token)))
+    }
+
     fn recorded(&self, id: Id) -> io::Result<&DataVolume> {
         self.routed(id)?
             .ok_or_else(|| invalid("selected container route is absent"))
     }
 
     fn vacant(&self, except: Id, name: &str) -> io::Result<bool> {
-        for id in self.routes.ids()? {
-            if id != except
-                && self.recycled(id)?.is_none()
-                && self.recorded(id)?.read(id)?.name.as_deref() == Some(name)
-            {
-                return Ok(false);
+        #[cfg(test)]
+        self.name_clock.count_routes();
+        for id in self.name_observed(self.routes.ids())? {
+            if id != except && self.recycled(id)?.is_none() {
+                #[cfg(test)]
+                self.name_clock.count_ledger();
+                if self
+                    .name_observed(self.recorded(id)?.read(id))?
+                    .name
+                    .as_deref()
+                    == Some(name)
+                {
+                    return Ok(false);
+                }
             }
         }
         Ok(true)
@@ -730,7 +814,7 @@ impl Store {
             };
             volume
         };
-        let state = volume.load(id, &mut memory)?;
+        let state = self.name_observed(volume.load(id, &mut memory))?;
         Ok(state.name.as_deref().map(|name| project(state, name)))
     }
     pub(crate) fn catalog_page(
@@ -738,13 +822,18 @@ impl Store {
         after: Option<Id>,
         readable: impl Fn(Id) -> bool,
     ) -> io::Result<CatalogPage> {
-        catalog_rows(self.routes.ids()?, after, readable, |id| {
-            self.project_container(id, true, |state, name| CatalogRow {
-                id,
-                sequence: state.sequence,
-                name: name.to_owned(),
-            })
-        })
+        catalog_rows(
+            self.name_observed(self.routes.ids())?,
+            after,
+            readable,
+            |id| {
+                self.project_container(id, true, |state, name| CatalogRow {
+                    id,
+                    sequence: state.sequence,
+                    name: name.to_owned(),
+                })
+            },
+        )
     }
 
     /// Recycle an entire selected container, not a branch or a node.
@@ -770,6 +859,7 @@ impl Store {
             if (done.mutation, done.original_sequence) != (mutation, expected_sequence) {
                 return Err(Conflict::RequestReused.into());
             }
+            let _namespace_activity = self.name_background()?;
             if let Err(error) = self.finish_recycle(archive, done, &at, &authorize) {
                 return Err(Error::CleanupPending {
                     receipt: Box::new(done),
@@ -781,7 +871,7 @@ impl Store {
         let Some(volume) = self.routed(mutation.container)? else {
             return Err(Conflict::MissingContainer.into());
         };
-        let state = volume.load(mutation.container, &mut memory)?;
+        let state = self.name_observed(volume.load(mutation.container, &mut memory))?;
         if state.name.is_none() {
             return Err(Conflict::MissingContainer.into());
         }
@@ -791,6 +881,8 @@ impl Store {
         if state.sequence != expected_sequence {
             return Err(Conflict::SequenceChanged(state.sequence).into());
         }
+        // Keep this guard until after both stages drop, and after source cleanup.
+        let _namespace_activity = self.name_background()?;
         let mut incoming = self.flat_stage_at(archive.staging()?)?;
         let prepared = archive.prepare(mutation, volume, state, &mut incoming, || {
             authorize()?;
@@ -801,7 +893,7 @@ impl Store {
         // Only one small SYSTEM rename switches logical visibility. The
         // ordinary namespace guard contains no streaming/hash work.
         {
-            let _names = self
+            let mut names = self
                 .names
                 .lock()
                 .map_err(|_| invalid("container name selection unavailable"))?;
@@ -814,6 +906,7 @@ impl Store {
                 done.require_data(token)?;
                 authorize()
             })?;
+            names.recycled(done, &prepared.at, volume.token);
         }
         if let Err(error) = archive.retire(
             done,
@@ -847,7 +940,12 @@ impl Store {
             .get(id)?
             .ok_or_else(|| invalid("selected container route is absent"))?;
         done.require_data(token)?;
-        let known = read_state(at, id)?;
+        // Explicit replay of a previously selected cut is just as final for
+        // names as a fresh selector, even in a newly reopened Store.
+        if let Ok(mut names) = self.names.lock() {
+            names.recycled(done, at, token);
+        }
+        let known = self.name_observed(read_state(at, id))?;
         archive.require_selected(done, &known)?;
         if let Some(volume) = self.enrolled(token) {
             return archive.retire(
@@ -891,11 +989,11 @@ impl Store {
     }
 
     pub(crate) fn node(&self, id: Id, node: NodeId) -> io::Result<Option<NodeBytes>> {
-        self.open_node(id, node, false)
+        self.name_observed(self.open_node(id, node, false))
     }
 
     pub(crate) fn node_for_payload(&self, id: Id, node: NodeId) -> io::Result<Option<NodeBytes>> {
-        self.open_node(id, node, true)
+        self.name_observed(self.open_node(id, node, true))
     }
 
     fn open_node(&self, id: Id, node: NodeId, exact_name: bool) -> io::Result<Option<NodeBytes>> {
@@ -909,7 +1007,7 @@ impl Store {
         let Some(volume) = self.routed(id)? else {
             return Ok(None);
         };
-        let state = volume.load(id, &mut memory)?;
+        let state = self.name_observed(volume.load(id, &mut memory))?;
         let Some(node) = state.nodes.get(&node).cloned() else {
             return Ok(None);
         };

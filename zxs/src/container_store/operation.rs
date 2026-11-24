@@ -28,8 +28,8 @@ impl Store {
         let result = if let Some((selected, at)) = location.as_ref() {
             // SYSTEM selection alone cannot prove that this operation was
             // absent from the chosen ledger. Never confuse corrupt R with 404.
-            let state = read_state(at, op.container)?;
-            require_archived_ledger(&state, selected)?;
+            let state = self.name_observed(read_state(at, op.container))?;
+            self.name_observed(require_archived_ledger(&state, selected))?;
             if selected.mutation == op {
                 Some(OperationReceipt::Recycle(*selected))
             } else {
@@ -40,8 +40,7 @@ impl Store {
                     .map(OperationReceipt::Mutation)
             }
         } else if let Some(volume) = self.routed(op.container)? {
-            volume
-                .load(op.container, memory)?
+            self.name_observed(volume.load(op.container, memory))?
                 .receipts
                 .get(&op.request)
                 .cloned()
@@ -55,11 +54,17 @@ impl Store {
         match (location, self.recycled(op.container)?) {
             (None, None) => {}
             (Some((prior, at)), Some((now, named)))
-                if prior == now && at.entity == named.entity && at.same_mount(&named)? =>
+                if prior == now
+                    && at.entity == named.entity
+                    && self.name_observed(at.same_mount(&named))? =>
             {
-                at.require_named()?;
+                self.name_observed(at.require_named())?;
             }
-            _ => return Err(invalid("container receipt location changed during lookup")),
+            _ => {
+                return self.name_observed(Err(invalid(
+                    "container receipt location changed during lookup",
+                )));
+            }
         }
         Ok(result)
     }

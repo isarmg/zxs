@@ -17,7 +17,6 @@ pub(super) struct DataVolume {
     root: HeldDir,
     data: HeldDir,
     staging: HeldDir,
-    #[cfg_attr(not(test), expect(dead_code, reason = "retains the native DATA lease"))]
     owner: File,
 }
 
@@ -68,9 +67,13 @@ impl DataVolume {
         &self.data
     }
 
+    pub(super) fn bound_owner(&self) -> &File {
+        &self.owner
+    }
+
     #[cfg(test)]
     pub(super) fn upload_owner(&self) -> &File {
-        &self.owner
+        self.bound_owner()
     }
 
     pub(super) fn staging(&self) -> &HeldDir {
@@ -102,8 +105,7 @@ impl DataVolume {
         self.data.new_child_directory(&leaf(id)?)
     }
 
-    #[cfg(test)]
-    pub(super) fn create_upload_container(
+    pub(super) fn create_container_when(
         &self,
         id: Id,
         before: impl FnOnce() -> io::Result<()>,
