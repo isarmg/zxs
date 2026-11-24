@@ -44,12 +44,15 @@ final class RemoteSaveSubmit {
      * Serialization is within this single app process. Call on a bounded-time worker,
      * never the UI thread. No process or service other than this app owns the journal.
      */
-    static synchronized Result execute(Context context, RemoteSaveJournal.Authority authority, String operation,
+    static synchronized Result execute(Context context, RemoteSaveJournal.Plan selected,
                                        Mode mode, AuthenticatedExchange exchange) {
-        if (authority == null || mode == null || exchange == null || !authority.equals(exchange.authority())) {
+        if (selected == null || mode == null || exchange == null
+                || !selected.authority().equals(exchange.authority())) {
             return status(Status.UNCONFIRMED);
         }
 
+        var authority = selected.authority();
+        String operation = selected.save().operation();
         RemoteSaveJournal.Plan attempted;
         RemoteSaveJournal.Plan original;
         try {
@@ -59,6 +62,7 @@ final class RemoteSaveSubmit {
                 var prepared = RemoteSaveJournal.reopen(context, authority, operation);
                 original = new RemoteSaveJournal.Plan(prepared.authority(), prepared.save());
             }
+            if (!selected.equals(original)) return status(Status.LOCAL_UNAVAILABLE);
             BigInteger alreadyRecorded = RemoteSaveJournal.receipt(context, original);
             if (alreadyRecorded != null) return new Result(Status.CONFIRMED, alreadyRecorded);
         } catch (IOException unavailable) {

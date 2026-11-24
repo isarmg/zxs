@@ -123,6 +123,19 @@ public final class RemoteSaveSubmitTest {
         assertNull(RemoteSaveJournal.receipt(fake.context, new RemoteSaveJournal.Plan(AUTHORITY, fake.save)));
     }
 
+    @Test
+    public void previouslyConfirmedPlanCannotSilentlyChooseDifferentOriginal() throws Exception {
+        var fake = prepare();
+        var save = fake.save;
+        var changed = new RemoteSaveContract.Save(save.container(), save.operation(), save.node(),
+                save.baseSequence(), new RemoteSaveContract.FirstMain("another.txt"), save.length(), save.sha256());
+        var selected = new RemoteSaveJournal.Plan(AUTHORITY, changed);
+        assertEquals(RemoteSaveSubmit.Status.LOCAL_UNAVAILABLE, RemoteSaveSubmit.execute(
+                fake.context, selected, RemoteSaveSubmit.Mode.FIRST_SEND, fake).status());
+        assertEquals(0, fake.gets);
+        assertEquals(0, fake.posts);
+    }
+
     private static Fake prepare() throws Exception {
         Context context = InstrumentationRegistry.getInstrumentation().getTargetContext();
         String op = UUID.randomUUID().toString().replace("-", "");
@@ -151,7 +164,7 @@ public final class RemoteSaveSubmitTest {
         }
 
         RemoteSaveSubmit.Result run(RemoteSaveSubmit.Mode mode) {
-            return RemoteSaveSubmit.execute(context, AUTHORITY, save.operation(), mode, this);
+            return RemoteSaveSubmit.execute(context, new RemoteSaveJournal.Plan(AUTHORITY, save), mode, this);
         }
 
         @Override public RemoteSaveJournal.Authority authority() { return peer; }

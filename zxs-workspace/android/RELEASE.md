@@ -23,7 +23,7 @@ gradle --offline --no-daemon --no-build-cache --no-configuration-cache \
 
 ## 准备签名、交付前的核对
 
-1. 在同一授权环境重新计算候选 SHA-256 和长度，与 `candidate.json` 对照；记录确切源提交及工具版本。用官方 [apkanalyzer](https://developer.android.com/tools/apkanalyzer) 的 `manifest application-id`、`version-code`、`version-name`、`min-sdk`、`target-sdk`、`debuggable`、`permissions` 和 `manifest print` 查看 APK 实物。当前应为上述 ID、1、0.1、35、36、不可调试；不得出现 testOnly、网络或新增的广域存储权限。对不明来源、非预期签名或损坏产物停下，不要以重签替代调查。
+1. 在同一授权环境重新计算候选 SHA-256 和长度，与 `candidate.json` 对照；记录确切源提交及工具版本。用官方 [apkanalyzer](https://developer.android.com/tools/apkanalyzer) 的 `manifest application-id`、`version-code`、`version-name`、`min-sdk`、`target-sdk`、`debuggable`、`permissions` 和 `manifest print` 查看 APK 实物。当前应为上述 ID、1、0.1、35、36、不可调试；不得出现 testOnly 或新增的广域存储权限。远程文件入口需要 `android.permission.INTERNET`；验收须核对应用仍禁止明文流量、远程界面不导出、所选 TLS 目标之外没有网络请求。对不明来源、非预期签名或损坏产物停下，不要以重签替代调查。
 2. 使用 SDK 的 `zipalign -c -P 16 -v 4 <候选.apk>` **只检查**现有对齐；不通过就重新调查。获授权的所有者在自己的签名系统中把候选签为另一个新文件，不在源码、Gradle 属性、聊天或命令行参数中保存密码。签名是单独环节，不由本任务调用。用 [apksigner](https://developer.android.com/tools/apksigner) 的 `verify --verbose --print-certs <已签.apk>` 验真实已签新件，并将实际签名者证书 SHA-256 与所有者**独立确认**的预期身份比对；不要仅因“有个签名”就放行。签名后不得再改动包；另算已签新文件的 SHA-256，不能沿用候选摘要。参见 [对齐与签名的顺序](https://developer.android.com/tools/zipalign)、[Android 签名与更新](https://developer.android.com/studio/publish/app-signing)。
 3. 在干净环境验：无缓存/SDK 时离线失败；签名或 IDE 注入在 APK 生产前拒绝；已有交接目录/多份或拆分产物不作交付；调试和普通构建不写交接目录；已有相同名称或应用 ID 不等于可升级。用 Android 15+ 真机分别验全新安装、同签升级及本应用的选档、取消、CRC 和纯文本边界。最终核定本产品和实际依赖的分发权、保留许可与真实实机结果，再决定是否对外发布。此流程不生成 AAB、不上传 Play，也不代表已有可安装工件。
 

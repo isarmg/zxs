@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
     <queries><provider android:authorities="com.android.externalstorage.documents" /></queries>
     <application android:label="ZIP 目录预览" android:allowBackup="false"
         android:usesCleartextTraffic="false" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <activity android:name=".RemoteSaveActivity" android:exported="false" />
         <activity android:name=".WorkspaceEditActivity" android:exported="false" />
         <activity android:name=".LocalSnapshotsActivity" android:exported="false" />
         <activity android:name=".ArchiveActivity" android:exported="true">
