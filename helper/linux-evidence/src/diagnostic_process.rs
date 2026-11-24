@@ -99,6 +99,26 @@ pub fn prepare_import_one_exec(
     )
 }
 
+/// Select the fixed whole-batch import entrypoint on the same pinned executable.
+///
+/// # Errors
+/// Errors if its original executable, channel or sealed order cannot be retained.
+pub fn prepare_import_batch_exec(
+    cmd: &mut Command,
+    original: &File,
+    channel: &File,
+    order: &File,
+) -> io::Result<()> {
+    prepare_fixed_peer_exec(
+        cmd,
+        original,
+        channel,
+        order,
+        c"zxs",
+        c"__offline-import-batch-v1",
+    )
+}
+
 /// Select the dedicated enrolled-DATA initialization worker on the pinned binary.
 ///
 /// # Errors

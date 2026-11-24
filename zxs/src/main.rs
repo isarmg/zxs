@@ -29,6 +29,7 @@ fn run() -> io::Result<()> {
         if let Some(
             operation @ ("__offline-live-names-v1"
             | "__offline-import-one-v1"
+            | "__offline-import-batch-v1"
             | "__offline-init-data-v1"),
         ) = args.next().as_deref().and_then(OsStr::to_str)
         {
@@ -38,6 +39,7 @@ fn run() -> io::Result<()> {
             return match operation {
                 "__offline-live-names-v1" => storage_server::offline_live_names_v1(),
                 "__offline-init-data-v1" => storage_server::offline_init_data_v1(),
+                "__offline-import-batch-v1" => storage_server::offline_import_batch_v1(),
                 _ => storage_server::offline_import_one_v1(),
             };
         }

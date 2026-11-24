@@ -169,7 +169,7 @@ fn complete_frame_is_required_before_any_item_is_visited() {
         corrupt[index] ^= 0x80;
         assert!(Batch::read(&mut corrupt.as_slice()).is_err());
     }
-    assert!(Batch::read(&mut encode(vec![]).as_slice()).is_err());
+    assert!(Batch::read(&mut b"ZXBATCH1\0\0\0\0\0\0\0\0".as_slice()).is_err());
 }
 
 #[test]
@@ -224,4 +224,43 @@ fn uncertain_item_stops_and_the_same_batch_revisits_the_original_ids() {
         })
         .unwrap();
     assert_eq!(retried, [(0, [1; 16]), (1, [2; 16]), (2, [3; 16])]);
+}
+
+#[test]
+fn bounded_plan_rejects_count_before_rows_and_body_before_excess_read() {
+    let raw = encode(pair());
+    assert!(Batch::read_bounded(&mut raw.as_slice(), raw.len()).is_ok());
+    let mut short_budget = io::Cursor::new(&raw);
+    assert!(Batch::read_bounded(&mut short_budget, raw.len() - 1).is_err());
+    assert!(short_budget.position() < u64::try_from(raw.len() - 32).unwrap());
+
+    let mut oversized_count = raw.clone();
+    oversized_count[8..16].copy_from_slice(&65_537_u64.to_be_bytes());
+    let mut count = io::Cursor::new(&oversized_count);
+    assert!(Batch::read(&mut count).is_err());
+    assert_eq!(count.position(), 16);
+}
+
+#[test]
+fn sealed_order_carries_the_exact_saved_bytes_and_full_envelope_digest() {
+    use rustix::fs::{SealFlags, fcntl_get_seals};
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+
+    let original = encode(pair());
+    let batch = Batch::read(&mut original.as_slice()).unwrap();
+    let binding = [0x33; 32];
+    let scope = [0x44; 32];
+    assert!(worker::sealed_order(&batch, &binding, &[0; 32]).is_err());
+    let (mut order, digest) = worker::sealed_order(&batch, &binding, &scope).unwrap();
+    let seals = SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL;
+    assert!(fcntl_get_seals(&order).unwrap().contains(seals));
+    let mut raw = Vec::new();
+    order.read_to_end(&mut raw).unwrap();
+    assert_eq!(&raw[..8], b"ZXIBC1\0\0");
+    assert_eq!(raw[8..40], binding);
+    assert_eq!(raw[40..72], scope);
+    assert_eq!(raw[72..], original);
+    let expected: [u8; 32] = Sha256::digest(raw).into();
+    assert_eq!(digest, expected);
 }

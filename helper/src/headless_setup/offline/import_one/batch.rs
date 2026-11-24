@@ -1,6 +1,6 @@
 //! A batch is an ordered list of original, individually replayable file tickets.
-use super::super::{OfflineSession, SelectedRoles, import_command::write_receipt, offline_catalog};
-use super::{SourceTree, Stamp, TICKET_BYTES, Ticket, apply, relative_path, same_name_candidate};
+use super::super::{OfflineSession, SelectedRoles, offline_catalog};
+use super::{SourceTree, Stamp, Ticket, relative_path, same_name_candidate};
 use crate::{headless_setup::parse_paths, maintenance::diagnostic_worker, path_rules::Kind};
 use rustix::{
     fs::{FileType, fstat},
@@ -19,6 +19,7 @@ use std::{
 mod frame;
 mod mapping_input;
 mod tree;
+mod worker;
 
 const PREPARE: &str = "expected SOURCE TARGET-DATA SYSTEM RECYCLE DATA [DATA ...], followed by -- RELATIVE NAME pairs or --map0; prepare-tree also allows no mappings";
 type Mapping = (OsString, OsString);
@@ -59,6 +60,9 @@ impl ImportBatch {
                 }
                 let mut mapping = Vec::new();
                 while let Some(relative) = args.next() {
+                    if mapping.len() == frame::MAX_ROWS {
+                        return Err("too many rows for one import plan");
+                    }
                     mapping.push((relative, args.next().ok_or(PREPARE)?));
                 }
                 if !whole_tree && !from_stdin && mapping.is_empty() {
@@ -126,6 +130,10 @@ impl ImportBatch {
                     return Err(message(
                         "redirect the original saved batch plan to standard input",
                     ));
+                }
+                let bytes = usize::try_from(stat.st_size).map_err(|_| frame::limit())?;
+                if bytes > frame::MAX_PLAN_BYTES {
+                    return Err(frame::limit());
                 }
                 let plan = Batch::read(&mut input.lock())?;
                 let session = SelectedRoles::select(&roles)?.open_offline(None)?;
@@ -220,6 +228,15 @@ impl Batch {
         rows: impl ExactSizeIterator<Item = (&'a OsStr, &'a OsStr, Option<(&'a SourceTree, &'a Stamp)>)>
         + Clone,
     ) -> io::Result<Self> {
+        frame::require_count(rows.len())?;
+        frame::measure(rows.clone().map(|(path, name, _)| {
+            frame::width(
+                target.as_os_str().as_bytes(),
+                source.as_os_str().as_bytes(),
+                path.as_bytes(),
+                name.as_bytes(),
+            )
+        }))?;
         let existing = offline_catalog::read_names(session)?;
         check_mappings(
             rows.clone()
@@ -245,6 +262,7 @@ impl Batch {
     }
 
     fn checked(tickets: Vec<Ticket>) -> io::Result<Self> {
+        frame::require_count(tickets.len())?;
         let first = tickets
             .first()
             .ok_or_else(|| message("an import batch cannot be empty"))?;
@@ -302,11 +320,11 @@ impl Batch {
             .first()
             .ok_or_else(|| message("empty plan"))?
             .require_target(session)?;
-        self.visit(|index, ticket| {
-            let outcome = apply(session, ticket)?;
-            write!(output, "{}/{} ", index + 1, self.0.len())?;
-            write_receipt(output, &outcome)?;
-            output.flush()
+        if getuid() != rustix::process::geteuid() || getgid() != rustix::process::getegid() {
+            return Err(super::refused());
+        }
+        session.with_rechecked_installed(|executable, require_installed| {
+            worker::run(self, session, executable, require_installed, output)
         })
     }
 

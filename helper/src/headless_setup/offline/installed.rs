@@ -23,6 +23,13 @@ impl OfflineSession {
         &self,
         run: impl FnOnce(&File) -> io::Result<T>,
     ) -> io::Result<T> {
+        self.with_rechecked_installed(|executable, _| run(executable))
+    }
+
+    pub(super) fn with_rechecked_installed<T>(
+        &self,
+        run: impl FnOnce(&File, &dyn Fn() -> io::Result<()>) -> io::Result<T>,
+    ) -> io::Result<T> {
         self.require_original()?;
         let bin = Pinned::local_storage(Path::new(BIN), &self.selected.scope)?;
         let original_dir = bin.relative_directory()?;
@@ -70,7 +77,7 @@ impl OfflineSession {
             Ok(())
         };
         verify()?;
-        let result = run(&executable)?;
+        let result = run(&executable, &verify)?;
         verify()?;
         Ok(result)
     }

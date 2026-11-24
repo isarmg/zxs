@@ -24,6 +24,7 @@ pub(crate) type Payload = [u8; 65];
 pub(crate) enum Kind {
     ImportStep = 45,
     InitData = 46,
+    ImportBatch = 47,
 }
 
 pub(crate) struct Channel {
@@ -44,13 +45,19 @@ pub(crate) fn pair() -> io::Result<(File, File)> {
     Ok((File::from(a), File::from(b)))
 }
 pub(crate) fn seal_import_ticket(bytes: &[u8]) -> io::Result<File> {
+    use std::io::Write;
+    seal_import_order(|file| file.write_all(bytes))
+}
+pub(crate) fn seal_import_order(
+    fill: impl FnOnce(&mut File) -> io::Result<()>,
+) -> io::Result<File> {
     use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, fcntl_get_seals, memfd_create};
-    use std::io::{Seek, Write};
+    use std::io::Seek;
     let mut ticket = File::from(memfd_create(
         c"helper-fixed-import",
         MemfdFlags::CLOEXEC | MemfdFlags::ALLOW_SEALING,
     )?);
-    ticket.write_all(bytes)?;
+    fill(&mut ticket)?;
     let seals = SealFlags::WRITE | SealFlags::GROW | SealFlags::SHRINK | SealFlags::SEAL;
     fcntl_add_seals(&ticket, seals)?;
     if !fcntl_get_seals(&ticket)?.contains(seals) {
@@ -251,6 +258,13 @@ mod tests {
         root.send(Kind::ImportStep, &digest, &data).unwrap();
         assert_eq!(
             worker.receive::<0>(Kind::ImportStep, &digest).unwrap().0,
+            data
+        );
+        root.send(Kind::ImportBatch, &digest, &data).unwrap();
+        assert!(worker.receive::<0>(Kind::ImportStep, &digest).is_err());
+        root.send(Kind::ImportBatch, &digest, &data).unwrap();
+        assert_eq!(
+            worker.receive::<0>(Kind::ImportBatch, &digest).unwrap().0,
             data
         );
         root.send(Kind::InitData, &digest, &data).unwrap();

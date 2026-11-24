@@ -1,4 +1,4 @@
-//! Private one-file writer invoked by the local offline maintenance tool.
+//! Private offline workers invoked by the original local maintenance tool.
 use crate::{
     container_store::{
         Body, Receipt,
@@ -23,6 +23,8 @@ const PATH_BYTES: usize = 4095;
 const MAX_ENVELOPE: usize = 72 + 8 + 16 + 16 + 32 + 3 * (2 + PATH_BYTES) + 104 + 2 + 255;
 type Payload = [u8; 65];
 
+pub(crate) mod batch;
+
 #[path = "headless_init_data_worker.rs"]
 pub(crate) mod init_data;
 
@@ -44,6 +46,10 @@ unsafe extern "C" {
 }
 
 fn inherited_order() -> io::Result<(File, i32, Vec<u8>)> {
+    inherited_order_with_limit(MAX_ENVELOPE)
+}
+
+fn inherited_order_with_limit(max_bytes: usize) -> io::Result<(File, i32, Vec<u8>)> {
     let socket = inherited(3)?;
     let order = inherited(4)?;
     // SAFETY: getppid takes no arguments; socket lives across the descriptor check.
@@ -51,7 +57,7 @@ fn inherited_order() -> io::Result<(File, i32, Vec<u8>)> {
     if parent <= 1 || unsafe { zxs_import_socket(socket.as_raw_fd(), parent) } != 0 {
         return Err(refused());
     }
-    Ok((socket, parent, retained_order(order)?))
+    Ok((socket, parent, retained_order(order, max_bytes)?))
 }
 
 pub(crate) fn run() -> io::Result<()> {
@@ -120,7 +126,7 @@ fn inherited(fd: i32) -> io::Result<File> {
     Err(refused())
 }
 
-fn retained_order(order: File) -> io::Result<Vec<u8>> {
+fn retained_order(order: File, max_bytes: usize) -> io::Result<Vec<u8>> {
     let stamp = order.metadata()?;
     // SAFETY: order remains owned throughout this descriptor-only native check.
     if !stamp.is_file()
@@ -129,7 +135,7 @@ fn retained_order(order: File) -> io::Result<Vec<u8>> {
     {
         return Err(refused());
     }
-    let limit = u64::try_from(MAX_ENVELOPE).map_err(|_| refused())?;
+    let limit = u64::try_from(max_bytes).map_err(|_| refused())?;
     if stamp.len() > limit {
         return Err(refused());
     }

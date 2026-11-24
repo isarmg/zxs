@@ -128,14 +128,14 @@ fn exchange(
     Ok(prior)
 }
 
-fn step(kind: u8, word: u64) -> Payload {
+pub(super) fn step(kind: u8, word: u64) -> Payload {
     let mut out = [0; 65];
     out[0] = kind;
     out[1..9].copy_from_slice(&word.to_be_bytes());
     out
 }
 
-fn receipt(kind: u8, container: [u8; 16], request: [u8; 16], node: [u8; 16]) -> Payload {
+pub(super) fn receipt(kind: u8, container: [u8; 16], request: [u8; 16], node: [u8; 16]) -> Payload {
     let mut out = step(kind, 1);
     out[9..25].copy_from_slice(&container);
     out[25..41].copy_from_slice(&request);
@@ -143,7 +143,7 @@ fn receipt(kind: u8, container: [u8; 16], request: [u8; 16], node: [u8; 16]) -> 
     out
 }
 
-fn result_ids(raw: &[u8], seed: [u8; 16]) -> io::Result<([u8; 16], [u8; 16])> {
+pub(super) fn result_ids(raw: &[u8], seed: [u8; 16]) -> io::Result<([u8; 16], [u8; 16])> {
     let mut canonical = Sha256::new();
     canonical.update(b"ZXS-IMPORT-INTENT-V1\0");
     canonical.update(raw.get(24..).ok_or_else(refused)?);

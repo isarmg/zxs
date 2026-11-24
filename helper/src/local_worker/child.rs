@@ -1,7 +1,8 @@
 //! Waitable children for the exact installed ZXS offline workers.
 use super::{bad, transport::Channel};
 use helper_linux_evidence::diagnostic_process::{
-    prepare_import_one_exec, prepare_init_data_exec, require_waitable_children,
+    prepare_import_batch_exec, prepare_import_one_exec, prepare_init_data_exec,
+    require_waitable_children,
 };
 use rustix::{
     io::Errno,
@@ -32,6 +33,14 @@ impl Worker {
         lease: &File,
     ) -> io::Result<Self> {
         Self::spawn_storage(exe, peer, order, lease, prepare_import_one_exec)
+    }
+    pub(crate) fn spawn_import_batch(
+        exe: &File,
+        peer: &File,
+        order: &File,
+        lease: &File,
+    ) -> io::Result<Self> {
+        Self::spawn_storage(exe, peer, order, lease, prepare_import_batch_exec)
     }
     pub(crate) fn spawn_data_init(
         exe: &File,
