@@ -17,8 +17,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-pub(super) struct Committed {
-    pub(super) receipt: Receipt,
+pub(crate) struct Committed {
+    pub(crate) receipt: Receipt,
     /// The original receipt remains definitive if its auxiliary UR1 removal
     /// was skipped (source still exists) or remains uncertain.
     pub(super) retired: io::Result<bool>,
@@ -36,7 +36,7 @@ enum Start<'a> {
 }
 
 impl Uploads<'_> {
-    pub(super) fn commit(
+    pub(crate) fn commit(
         &self,
         mutation: Mutation,
         upload: [u8; 32],

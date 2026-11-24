@@ -42,6 +42,40 @@ pub(super) fn project(reply: Reply) -> Result<Outcome, Problem> {
     Ok(Outcome::Json(out.0.into_bytes()))
 }
 
+#[cfg(test)]
+pub(super) fn upload(progress: core::upload::Progress) -> Result<Outcome, Problem> {
+    use core::upload::Status;
+
+    let mut out = Json(String::new());
+    let intent = progress.intent;
+    let state = match progress.status {
+        Status::Open => "open",
+        Status::Complete => "complete",
+        Status::Committed => "committed",
+    };
+    let mut format = || -> fmt::Result {
+        out.write_str("{\"upload_id\":")?;
+        out.hex(&progress.upload)?;
+        out.write_str(",\"container_id\":")?;
+        out.hex(&intent.mutation.container)?;
+        out.write_str(",\"operation_id\":")?;
+        out.hex(&intent.mutation.request)?;
+        out.write_str(",\"node_id\":")?;
+        out.hex(&intent.node)?;
+        out.write_str(",\"target\":")?;
+        out.target(&intent.target)?;
+        write!(out, ",\"length\":{},\"sha256\":", intent.body.length)?;
+        out.hex(&intent.body.sha256)?;
+        write!(
+            out,
+            ",\"next_offset\":{},\"state\":\"{state}\"}}",
+            progress.offset
+        )
+    };
+    format().map_err(|_| Problem::Unavailable)?;
+    Ok(Outcome::Json(out.0.into_bytes()))
+}
+
 struct Json(String);
 
 impl fmt::Write for Json {

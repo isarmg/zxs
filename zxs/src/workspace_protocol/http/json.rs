@@ -50,15 +50,30 @@ pub(super) fn decode(request: &Request, input: &mut impl Read, length: u64) -> O
     }
 }
 
-struct Parser<'a>(&'a str);
+pub(super) struct Parser<'a>(&'a str);
 
 impl<'a> Parser<'a> {
-    fn space(&mut self) -> &'a str {
+    #[cfg(test)]
+    pub(super) fn new(raw: &'a str) -> Self {
+        Self(raw)
+    }
+
+    #[cfg(test)]
+    pub(super) fn unsigned(&mut self) -> Option<u64> {
+        let raw = self.space();
+        let length = raw.bytes().take_while(u8::is_ascii_digit).count();
+        let (digits, remainder) = raw.split_at(length);
+        let value = super::super::decimal(digits).ok()?;
+        self.0 = remainder;
+        Some(value)
+    }
+
+    pub(super) fn space(&mut self) -> &'a str {
         self.0 = self.0.trim_start_matches([' ', '\t', '\n', '\r']);
         self.0
     }
 
-    fn take(&mut self, token: char) -> bool {
+    pub(super) fn take(&mut self, token: char) -> bool {
         if let Some(rest) = self.space().strip_prefix(token) {
             self.0 = rest;
             true
@@ -67,7 +82,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn need(&mut self, token: char) -> Option<()> {
+    pub(super) fn need(&mut self, token: char) -> Option<()> {
         self.take(token).then_some(())
     }
 
@@ -101,7 +116,7 @@ impl<'a> Parser<'a> {
         char::from_u32(u32::from(hi))
     }
 
-    fn string(&mut self) -> Option<String> {
+    pub(super) fn string(&mut self) -> Option<String> {
         self.need('"')?;
         let mut value = String::new();
         loop {

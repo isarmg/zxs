@@ -12,7 +12,8 @@ use super::{
 };
 use crate::{fs::HeldDir, hash::Sha256};
 use journal::{MAX_ACTIVE, NAMESPACE, Slot, capacity};
-use record::{CHUNK, ChunkUse, Intent, Phase, Record, Scope, chunk_use};
+pub(crate) use record::{CHUNK, Intent, MAX_BODY, Scope};
+use record::{ChunkUse, Phase, Record, chunk_use};
 use std::{
     collections::BTreeMap,
     fs::File,
@@ -26,11 +27,11 @@ use std::{
 const MAX_DECLARED: u64 = 4 << 40;
 const HEADROOM: u64 = 1 << 20;
 const READERS: usize = 4;
-type Authorize<'a> = &'a dyn Fn() -> io::Result<()>;
+pub(crate) type Authorize<'a> = &'a dyn Fn() -> io::Result<()>;
 type Gate = Mutex<()>;
 
 #[derive(Debug)]
-enum Failure {
+pub(crate) enum Failure {
     Io(io::Error),
     Absent,
     Conflict,
@@ -48,30 +49,48 @@ impl From<io::Error> for Failure {
     }
 }
 
-type Result<T> = std::result::Result<T, Failure>;
+pub(crate) type Result<T> = std::result::Result<T, Failure>;
 
 #[derive(Debug, Eq, PartialEq)]
-enum Status {
+pub(crate) enum Status {
     Open,
     Complete,
     Committed,
 }
 
 #[derive(Debug, Eq, PartialEq)]
-struct Progress {
-    intent: Intent,
-    upload: [u8; 32],
-    offset: u64,
-    status: Status,
+pub(crate) struct Progress {
+    pub(crate) intent: Intent,
+    pub(crate) upload: [u8; 32],
+    pub(crate) offset: u64,
+    pub(crate) status: Status,
 }
 
-#[derive(Clone, Copy)]
-struct Chunk {
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(crate) struct Chunk {
     mutation: Mutation,
     upload: [u8; 32],
     at: u64,
-    length: u64,
+    pub(crate) length: u64,
     sha256: [u8; 32],
+}
+
+impl Chunk {
+    pub(crate) const fn new(
+        mutation: Mutation,
+        upload: [u8; 32],
+        at: u64,
+        length: u64,
+        sha256: [u8; 32],
+    ) -> Self {
+        Self {
+            mutation,
+            upload,
+            at,
+            length,
+            sha256,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -83,14 +102,14 @@ pub(super) struct Shared {
     full_proofs: proof::Bank,
 }
 
-struct Uploads<'a> {
+pub(crate) struct Uploads<'a> {
     store: &'a Store,
     system: &'a HeldDir,
     scope: Scope, // From the selected local account, not from HTTP fields.
 }
 
 impl<'a> Uploads<'a> {
-    fn bind(store: &'a Store, system: &'a HeldDir, scope: Scope) -> io::Result<Self> {
+    pub(crate) fn bind(store: &'a Store, system: &'a HeldDir, scope: Scope) -> io::Result<Self> {
         if scope.pool == [0; 16] || scope.epoch == [0; 16] || scope.pool == scope.epoch {
             return Err(invalid("invalid selected upload account scope"));
         }
@@ -197,7 +216,7 @@ impl<'a> Uploads<'a> {
         action(&mut memory, official)
     }
 
-    fn begin(&self, intent: &Intent, authorize: Authorize<'_>) -> Result<Progress> {
+    pub(crate) fn begin(&self, intent: &Intent, authorize: Authorize<'_>) -> Result<Progress> {
         let gate = self.gate(intent.mutation, authorize)?;
         if intent.scope != self.scope {
             return Err(Failure::OldEpoch);
@@ -325,7 +344,7 @@ impl<'a> Uploads<'a> {
         make_progress(&selected.record, false)
     }
 
-    fn status(
+    pub(crate) fn status(
         &self,
         mutation: Mutation,
         upload: Option<[u8; 32]>,
@@ -397,7 +416,7 @@ impl<'a> Uploads<'a> {
         make_progress(&slot.record, false)
     }
 
-    fn put(
+    pub(crate) fn put(
         &self,
         chunk: Chunk,
         input: &mut impl Read,
@@ -733,6 +752,10 @@ fn read_some(
             other => return other,
         }
     }
+}
+
+pub(crate) fn expired_upload_authority() -> io::Error {
+    proof::expired()
 }
 
 fn unavailable() -> io::Error {

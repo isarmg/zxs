@@ -335,6 +335,45 @@ impl Account {
 }
 
 impl Permit<'_> {
+    /// Staged upload-only path. Invalid from this *already authenticated*
+    /// check means exact Bearer expiry, not an arbitrary filesystem errno.
+    #[cfg(test)]
+    pub(crate) fn with_upload_admission<T>(
+        self,
+        account: &Account,
+        now: &dyn Fn() -> Instant,
+        stopping: &dyn Fn() -> bool,
+        one_request: impl FnOnce(
+            crate::container_store::upload::Scope,
+            &dyn Fn() -> Result<(), AuthError>,
+        ) -> T,
+    ) -> Result<T, AuthError> {
+        use crate::container_store::upload::Scope;
+
+        let expires = self.expires.ok_or(AuthError::Invalid)?;
+        let check = || {
+            if !std::ptr::eq(account, self.account)
+                || self.pool != account.pool
+                || self.epoch != account.epoch
+            {
+                return Err(AuthError::Unavailable);
+            }
+            account.require_open(stopping)?;
+            if now() >= expires {
+                return Err(AuthError::Invalid);
+            }
+            Ok(())
+        };
+        check()?;
+        Ok(one_request(
+            Scope {
+                pool: self.pool,
+                epoch: self.epoch,
+            },
+            &check,
+        ))
+    }
+
     /// HTTP adapter runs the new typed dispatch here (exactly one complete
     /// request). Check the permit before inspecting Store, and pass the
     /// borrowed predicate into selection. The predicate never takes a Store

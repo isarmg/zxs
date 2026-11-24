@@ -13,7 +13,7 @@ mod recycle_receipt;
 mod routes;
 mod stage;
 #[cfg(test)]
-mod upload;
+pub(crate) mod upload;
 mod volume;
 
 #[cfg(test)]
@@ -1164,3 +1164,7 @@ fn decode_tags(mut bytes: &[u8]) -> io::Result<Vec<String>> {
 #[cfg(test)]
 #[path = "../tests/unit/container_nodes.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/resumable_wire.rs"]
+mod resumable_wire;

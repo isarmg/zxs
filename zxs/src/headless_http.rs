@@ -1,6 +1,8 @@
 //! Strict HTTP/1.1 behind a deployment-managed frontend. No TLS or forwarding policy.
 mod payload;
 mod reuse;
+#[cfg(test)]
+pub(crate) mod upload;
 
 pub(crate) use payload::PayloadReply;
 use payload::{ContentRange, write_payload};

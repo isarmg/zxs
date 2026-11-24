@@ -6,8 +6,8 @@ use crate::{
 };
 use std::io;
 
-pub(super) const CHUNK: u64 = 8 * 1024 * 1024;
-pub(super) const MAX_BODY: u64 = 1 << 40;
+pub(crate) const CHUNK: u64 = 8 * 1024 * 1024;
+pub(crate) const MAX_BODY: u64 = 1 << 40;
 pub(super) const MAX_RECORD: usize = 512;
 const MAGIC: [u8; 4] = *b"UR1\0";
 const ID_DOMAIN: &[u8] = b"ZXS upload intent v1\0";
@@ -17,18 +17,18 @@ const EMPTY_SHA: [u8; 32] = [
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct Scope {
-    pub(super) pool: Id,
-    pub(super) epoch: Id,
+pub(crate) struct Scope {
+    pub(crate) pool: Id,
+    pub(crate) epoch: Id,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct Intent {
-    pub(super) scope: Scope,
-    pub(super) mutation: Mutation,
-    pub(super) node: NodeId,
-    pub(super) body: Body,
-    pub(super) target: Target,
+pub(crate) struct Intent {
+    pub(crate) scope: Scope,
+    pub(crate) mutation: Mutation,
+    pub(crate) node: NodeId,
+    pub(crate) body: Body,
+    pub(crate) target: Target,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
