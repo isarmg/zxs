@@ -81,6 +81,17 @@ struct RemoteSave: Sendable {
     var destination: String { record.destination }
     var operation: String { record.operation }
 
+    var summary: String {
+        let title: String
+        switch record.target {
+        case let .firstMain(name): title = name
+        case let .append(branch, head): title = "追加到 " + branch + " / " + head
+        case let .forkMain(branch, from): title = "从 main 的 " + from + " 分叉到 " + branch
+        }
+        return title + "\n" + String(record.payload.count) + " B · SHA-256 " + record.digest
+            + "\n操作号 " + record.operation
+    }
+
     init(destination: String, container: String, operation: String, node: String, base: UInt64,
          target: Target, draft: LocalDraft.Revision) throws {
         guard !destination.isEmpty, destination.utf8.count <= 512,
@@ -109,6 +120,10 @@ struct RemoteSave: Sendable {
                       operation: stored.operation, node: stored.node, base: stored.base, target: stored.target,
                       draft: LocalDraft.Revision(bytes: stored.payload))
         guard stored.version == 1, stored.digest == record.digest else { throw Failure.invalidStoredRecord }
+    }
+
+    func confirmation() throws -> RemoteSaveConsent {
+        RemoteSaveConsent(operation: operation, reviewed: try encode())
     }
 
     func encode() throws -> Data {
@@ -196,6 +211,21 @@ struct RemoteSave: Sendable {
     }
 }
 
+struct RemoteSaveConsent: Sendable {
+    let operation: String
+    fileprivate let reviewed: Data
+
+    fileprivate init(operation: String, reviewed: Data) {
+        self.operation = operation
+        self.reviewed = reviewed
+    }
+
+    func permits(_ original: RemoteSave) throws -> Bool {
+        guard original.operation == operation else { return false }
+        return try original.encode() == reviewed
+    }
+}
+
 // Application-owned directory only. The operation record is immutable after
 // publication. A later sender must separately persist attempts before POST.
 struct RemoteSaveStore {
@@ -208,6 +238,22 @@ struct RemoteSaveStore {
         let support = try FileManager.default.url(for: .applicationSupportDirectory,
             in: .userDomainMask, appropriateFor: nil, create: true)
         return Self(directory: support.appendingPathComponent("RemoteSave", isDirectory: true))
+    }
+
+    func operationIDs() throws -> [String] {
+        guard let children = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil,
+                options: [.skipsSubdirectoryDescendants], errorHandler: { _, _ in false }) else { return [] }
+        var result = Set<String>()
+        var scanned = 0
+        for case let url as URL in children {
+            scanned += 1
+            guard scanned <= 4096 else { throw RemoteSave.Failure.invalidStoredRecord }
+            if url.pathExtension == "json" || url.pathExtension == "attempt" {
+                let id = url.deletingPathExtension().lastPathComponent
+                if RemoteSave.validID(id) { result.insert(id) }
+            }
+        }
+        return result.sorted()
     }
 
     func retain(_ save: RemoteSave) throws {

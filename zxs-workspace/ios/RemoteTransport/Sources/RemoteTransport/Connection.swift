@@ -10,7 +10,7 @@ enum TransportFailure: Error {
     case invalidOrigin, invalidALPN, serverStream, invalidRequest, invalidResponse, timeout, interrupted
 }
 
-struct TransportAddress {
+struct TransportAddress: Sendable {
     let host: String
     let port: Int
     var authority: String { (host.contains(":") ? "[\(host)]" : host) + ":\(port)" }
@@ -95,22 +95,25 @@ struct NegotiatedHTTP2 {
     static func matchesHTTP2(_ negotiated: String?) -> Bool { negotiated == "h2" }
 
     static func sendOnce(_ request: R3Request, address: TransportAddress, group: NIOTSEventLoopGroup,
-                         authorization: @escaping () throws -> String) -> EventLoopFuture<R3Response> {
+                         permission: SendPermission, authorization: @escaping @Sendable () throws -> String) -> EventLoopFuture<R3Response> {
         connect(address, group: group).flatMap { connection in
             let prepared = connection.channel.eventLoop.makeCompletedFuture {
                 // No material from the credential supplier is evaluated until
                 // this exact TLS channel proved h2 and installed the H2 codec.
-                try request.frames(authority: address.authority, authorization: authorization)
+                guard connection.channel.isActive else { throw TransportFailure.interrupted }
+                return try permission.use {
+                    try request.frames(authority: address.authority, authorization: authorization)
+                }
             }
             return prepared.flatMap { frames in
-                connection.exchange(frames: frames)
+                connection.exchange(frames: frames, permission: permission)
             }.always { _ in
                 connection.channel.close(promise: nil)
             }
         }
     }
 
-    private func exchange(frames: [HTTP2Frame.FramePayload]) -> EventLoopFuture<R3Response> {
+    private func exchange(frames: [HTTP2Frame.FramePayload], permission: SendPermission) -> EventLoopFuture<R3Response> {
         let loop = channel.eventLoop
         let promise = loop.makePromise(of: R3Response.self)
         let receiver = R3ResponseReceiver(result: promise)
@@ -124,10 +127,15 @@ struct NegotiatedHTTP2 {
             case let .failure(error): receiver.fail(error)
             case let .success(stream):
                 guard !receiver.finished else { stream.close(promise: nil); return }
-                for frame in frames.dropLast() { stream.write(frame, promise: nil) }
-                if let last = frames.last {
-                    stream.writeAndFlush(last).whenFailure { receiver.fail($0) }
-                }
+                do {
+                    try permission.use {
+                        guard stream.isActive else { throw TransportFailure.interrupted }
+                        for frame in frames.dropLast() { stream.write(frame, promise: nil) }
+                        if let last = frames.last {
+                            stream.writeAndFlush(last).whenFailure { receiver.fail($0) }
+                        }
+                    }
+                } catch { receiver.fail(error) }
             }
         }
         return promise.futureResult.always { _ in timeout.cancel() }

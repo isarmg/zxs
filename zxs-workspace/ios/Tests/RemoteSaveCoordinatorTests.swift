@@ -69,7 +69,7 @@ final class RemoteSaveCoordinatorTests: XCTestCase {
         try store.retain(save)
         let statusOnly = ScriptedSaveExchange(destination: destination, scripted: [absent])
         let start = RemoteSaveCoordinator(store: store)
-        let before = try await start.run(operation: operation, choice: .lookup, over: statusOnly)
+        let before = try await start.run(consent: save.confirmation(), choice: .lookup, over: statusOnly)
         let beforeMethods = await statusOnly.methods
         XCTAssertEqual(before, .absent)
         XCTAssertEqual(beforeMethods, ["GET"])
@@ -81,7 +81,7 @@ final class RemoteSaveCoordinatorTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf: marker), try save.encode())
         }
         do {
-            _ = try await start.run(operation: operation, choice: .submitFirst, over: failed)
+            _ = try await start.run(consent: save.confirmation(), choice: .submitFirst, over: failed)
             XCTFail("expected loss")
         } catch ScriptedSaveExchange.TestFailure.interrupted {}
         let firstMethods = await failed.methods
@@ -90,20 +90,20 @@ final class RemoteSaveCoordinatorTests: XCTestCase {
 
         let reopened = RemoteSaveCoordinator(store: RemoteSaveStore(directory: directory))
         let absentAfterLoss = ScriptedSaveExchange(destination: destination, scripted: [absent])
-        let rejectedRetry = try await reopened.run(operation: operation, choice: .submitFirst, over: absentAfterLoss)
+        let rejectedRetry = try await reopened.run(consent: save.confirmation(), choice: .submitFirst, over: absentAfterLoss)
         let noRetryMethods = await absentAfterLoss.methods
         XCTAssertEqual(rejectedRetry, .requiresExplicitRetry)
         XCTAssertEqual(noRetryMethods, ["GET"])
 
         let found = ScriptedSaveExchange(destination: destination, scripted: [recorded])
-        let resolved = try await reopened.run(operation: operation, choice: .retrySameOperation, over: found)
+        let resolved = try await reopened.run(consent: save.confirmation(), choice: .retrySameOperation, over: found)
         let foundMethods = await found.methods
         XCTAssertEqual(resolved, .committed(1))
         XCTAssertEqual(foundMethods, ["GET"])
         XCTAssertEqual(try store.cachedReceipt(save), recorded.bytes)
 
         let unused = ScriptedSaveExchange(destination: destination, scripted: [])
-        let cached = try await reopened.run(operation: operation, choice: .lookup, over: unused)
+        let cached = try await reopened.run(consent: save.confirmation(), choice: .lookup, over: unused)
         let cachedMethods = await unused.methods
         XCTAssertEqual(cached, .committed(1))
         XCTAssertEqual(cachedMethods, [])
@@ -130,11 +130,11 @@ final class RemoteSaveCoordinatorTests: XCTestCase {
         try store.retain(save)
         let coordinator = RemoteSaveCoordinator(store: store)
         let gate = BlockingLookup(destination: destination)
-        let waiting = Task { try await coordinator.run(operation: operation, choice: .lookup, over: gate) }
+        let waiting = Task { try await coordinator.run(consent: save.confirmation(), choice: .lookup, over: gate) }
         await gate.waitForLookup()
         let duplicate = ScriptedSaveExchange(destination: destination, scripted: [absent])
         do {
-            _ = try await coordinator.run(operation: operation, choice: .submitFirst, over: duplicate)
+            _ = try await coordinator.run(consent: save.confirmation(), choice: .submitFirst, over: duplicate)
             XCTFail("expected busy")
         } catch RemoteSaveCoordinator.Failure.busy {}
         await gate.finish(absent)
@@ -145,11 +145,11 @@ final class RemoteSaveCoordinatorTests: XCTestCase {
 
         let first = ScriptedSaveExchange(destination: destination, scripted: [absent, nil])
         do {
-            _ = try await coordinator.run(operation: operation, choice: .submitFirst, over: first)
+            _ = try await coordinator.run(consent: save.confirmation(), choice: .submitFirst, over: first)
             XCTFail("expected lost reply")
         } catch ScriptedSaveExchange.TestFailure.interrupted {}
         let retry = ScriptedSaveExchange(destination: destination, scripted: [absent, recorded])
-        let result = try await coordinator.run(operation: operation, choice: .retrySameOperation, over: retry)
+        let result = try await coordinator.run(consent: save.confirmation(), choice: .retrySameOperation, over: retry)
         XCTAssertEqual(result, .committed(1))
         let firstRequests = await first.requests, retriedRequests = await retry.requests
         XCTAssertEqual(firstRequests.map(\.method), ["GET", "POST"])
@@ -169,7 +169,7 @@ final class RemoteSaveCoordinatorTests: XCTestCase {
         try store.retain(save)
         let first = ScriptedSaveExchange(destination: destination, scripted: [absent, nil])
         do {
-            _ = try await RemoteSaveCoordinator(store: store).run(operation: operation, choice: .submitFirst, over: first)
+            _ = try await RemoteSaveCoordinator(store: store).run(consent: save.confirmation(), choice: .submitFirst, over: first)
             XCTFail("expected lost reply")
         } catch ScriptedSaveExchange.TestFailure.interrupted {}
 
@@ -180,7 +180,7 @@ final class RemoteSaveCoordinatorTests: XCTestCase {
             let reloaded = RemoteSaveCoordinator(store: RemoteSaveStore(directory: directory))
             let retry = ScriptedSaveExchange(destination: destination, scripted: [absent])
             do {
-                _ = try await reloaded.run(operation: operation, choice: .retrySameOperation, over: retry)
+                _ = try await reloaded.run(consent: save.confirmation(), choice: .retrySameOperation, over: retry)
                 XCTFail("missing exact primary must prevent retry")
             } catch RemoteSave.Failure.invalidStoredRecord {}
             let methods = await retry.methods
@@ -191,9 +191,41 @@ final class RemoteSaveCoordinatorTests: XCTestCase {
 
         let resolved = ScriptedSaveExchange(destination: destination, scripted: [recorded])
         let found = try await RemoteSaveCoordinator(store: store)
-            .run(operation: operation, choice: .lookup, over: resolved)
+            .run(consent: save.confirmation(), choice: .lookup, over: resolved)
         XCTAssertEqual(found, .committed(1))
         let methods = await resolved.methods
         XCTAssertEqual(methods, ["GET"])
+    }
+
+    func testChangedFrozenSelectionCannotStartEvenLookup() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = RemoteSaveStore(directory: directory)
+        let confirmed = try RemoteSave(destination: destination, container: container, operation: operation,
+            node: node, base: 0, target: .firstMain(name: "old.txt"),
+            draft: LocalDraft.Revision(bytes: Data("abc".utf8)))
+        try store.retain(confirmed)
+        let consent = try confirmed.confirmation()
+        let changed = try RemoteSave(destination: destination, container: container, operation: operation,
+            node: node, base: 0, target: .firstMain(name: "new.txt"),
+            draft: LocalDraft.Revision(bytes: Data("other".utf8)))
+        try Data(changed.encode()).write(to: directory.appendingPathComponent(operation + ".json"))
+        let unused = ScriptedSaveExchange(destination: destination, scripted: [absent])
+        do {
+            _ = try await RemoteSaveCoordinator(store: store).run(consent: consent, choice: .lookup, over: unused)
+            XCTFail("changed selector must not go on the wire")
+        } catch RemoteSaveCoordinator.Failure.selectionChanged {}
+        let network = await unused.methods
+        XCTAssertTrue(network.isEmpty)
+    }
+
+    func testActiveHeadlessBasicLoginAndColonPassword() throws {
+        let credential = try MobileSaveCredential(username: "alice_1", password: "a:b:中文")
+        let payload = String(credential.basic().dropFirst(6))
+        let decoded = try XCTUnwrap(Data(base64Encoded: payload))
+        XCTAssertEqual(decoded, Data("alice_1:a:b:中文".utf8))
+        XCTAssertThrowsError(try MobileSaveCredential(username: "alice:1", password: "a:b"))
+        XCTAssertThrowsError(try MobileSaveCredential(username: "Alice", password: "a:b"))
+        XCTAssertThrowsError(try MobileSaveCredential(username: "1", password: "a\nb"))
     }
 }

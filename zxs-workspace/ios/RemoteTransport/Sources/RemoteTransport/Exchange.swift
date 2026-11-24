@@ -4,11 +4,18 @@ import NIOCore
 import NIOHPACK
 import NIOHTTP2
 
-struct R3Request {
+public struct R3Request: Sendable {
     let method: String
     let path: String
     let headers: [String: String]
     let body: Data?
+
+    public init(method: String, path: String, headers: [String: String], body: Data?) {
+        self.method = method
+        self.path = path
+        self.headers = headers
+        self.body = body
+    }
 
     func frames(authority: String, authorization: () throws -> String) throws -> [HTTP2Frame.FramePayload] {
         try validateRequest()
@@ -87,9 +94,9 @@ struct R3Request {
     }
 }
 
-struct R3Response: Equatable {
-    let status: Int
-    let bytes: Data
+public struct R3Response: Equatable, Sendable {
+    public let status: Int
+    public let bytes: Data
 }
 
 struct R3ResponseAccumulator {

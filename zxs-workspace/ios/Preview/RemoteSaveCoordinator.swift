@@ -19,19 +19,21 @@ actor RemoteSaveCoordinator {
     enum Result: Equatable, Sendable {
         case absent, requiresExplicitRetry, conflict, unknown, committed(UInt64)
     }
-    enum Failure: Error { case busy }
+    enum Failure: Error { case busy, selectionChanged }
 
     private let store: RemoteSaveStore
     private var running = Set<String>()
 
     init(store: RemoteSaveStore) { self.store = store }
 
-    func run(operation: String, choice: Choice, over exchange: any RemoteSaveExchange) async throws -> Result {
+    func run(consent: RemoteSaveConsent, choice: Choice, over exchange: any RemoteSaveExchange) async throws -> Result {
+        let operation = consent.operation
         guard running.insert(operation).inserted else { throw Failure.busy }
         defer { running.remove(operation) }
         try Task.checkCancellation()
 
         let save = try store.reopenForRecovery(operation: operation)
+        guard try consent.permits(save) else { throw Failure.selectionChanged }
         let destination = exchange.destination
         let lookup = try save.lookup(for: destination)
         if let oldReceipt = try store.cachedReceipt(save) {

@@ -21,7 +21,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     private func coverDraft() {
         guard draftShield == nil, let window,
               let sheet = window.rootViewController?.presentedViewController as? UINavigationController,
-              sheet.topViewController is LocalDraftController else { return }
+              sheet.viewControllers.first is LocalDraftController else { return }
         let shield = UIView(frame: window.bounds)
         shield.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         shield.backgroundColor = .systemBackground
@@ -29,6 +29,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         shield.accessibilityViewIsModal = true
         window.addSubview(shield)
         draftShield = shield
+        (sheet.topViewController as? RemoteDraftController)?.leaveForeground()
     }
     func sceneDidEnterBackground(_ scene: UIScene) {
         coverDraft()

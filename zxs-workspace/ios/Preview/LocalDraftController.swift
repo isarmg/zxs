@@ -38,7 +38,10 @@ final class LocalDraftController: UIViewController, UITextViewDelegate {
         #if compiler(>=6.0)
         if #available(iOS 18.0, *) { editor.writingToolsBehavior = UIWritingToolsBehavior.none }
         #endif
-        let stack = UIStackView(arrangedSubviews: [status, editor])
+        let remote = UIButton(type: .system)
+        remote.setTitle("远程提交…", for: .normal)
+        remote.addTarget(self, action: #selector(openRemote), for: .touchUpInside)
+        let stack = UIStackView(arrangedSubviews: [status, remote, editor])
         stack.axis = .vertical
         stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -102,6 +105,14 @@ final class LocalDraftController: UIViewController, UITextViewDelegate {
         } catch {
             status.text = "未能确认保存结果，当前输入仍保留。"
         }
+    }
+
+    @objc private func openRemote() {
+        guard !hasChanges, editor.markedTextRange == nil else {
+            status.text = "请先保存当前草稿，再前往远程提交。"
+            return
+        }
+        navigationController?.pushViewController(RemoteDraftController(draft: original), animated: true)
     }
 
     @objc private func close() {

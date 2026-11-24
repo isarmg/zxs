@@ -9,6 +9,8 @@
     <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>用于按你的选择连接局域网服务器，上传完整草稿或查询原操作。</string>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>UILaunchScreen</key><dict/>
     <key>UIApplicationSceneManifest</key><dict>

@@ -8,14 +8,15 @@
 
 ## 生成待验的归档
 
-供获准的所有者以后在干净的 macOS / 完整 Xcode 环境操作。准备选好的 Apple SDK，核对实际 Xcode / SDK 版本；此配方不选证书、团队或描述文件，不添加账号，也不要求连接 iPhone 或 iPad。若计划公开发行，还须按当时的 [Apple 上传 SDK 要求](https://developer.apple.com/app-store/submitting/) 选择工具链；这不等同于改掉 App 的 iOS 16.0 部署下限。
+供获准的所有者以后在干净的 macOS / 完整 Xcode 环境操作。准备带 Swift 6.1 或更新编译器的完整 Xcode，核对实际 Xcode、Swift 和 SDK 版本；此配方不选证书、团队或描述文件，不添加账号，也不要求连接 iPhone 或 iPad。若计划公开发行，还须按当时的 [Apple 上传 SDK 要求](https://developer.apple.com/app-store/submitting/) 选择工具链；这不等同于改掉 App 的 iOS 16.0 部署下限。
 
-从 `ios/` 运行。输出父须已存在、由操作者独占且不被同步、搬动或改写；目录名包含版本但须是全新的。失败就停，不拿旧成果接续，不自动删除：
+从 `ios/` 运行。远程功能固定使用 Xcode 共享工作区的 `Package.resolved`，其中每个版本和提交应与 `RemoteTransport/Package.resolved` 一致。不要在验收时更新锁或用未记录的依赖。输出父须已存在、由操作者独占且不被同步、搬动或改写；目录名包含版本但须是全新的。失败就停，不拿旧成果接续，不自动删除：
 
 ```sh
 out="$HOME/zip-workspace-ios-0.1.0-build1-candidate-01"
 (umask 077; mkdir "$out") || exit 1
 /usr/bin/xcodebuild -project ZipPreview.xcodeproj -scheme ZipPreview \
+  -disableAutomaticPackageResolution \
   -configuration Release -destination 'generic/platform=iOS' \
   -derivedDataPath "$out/DerivedData" \
   -archivePath "$out/ZipPreview-0.1.0-build1.xcarchive" \
