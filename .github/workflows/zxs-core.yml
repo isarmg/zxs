@@ -23,14 +23,16 @@ jobs:
       run:
         shell: bash
         working-directory: zxs-core
-    env:
-      CARGO_HOME: ${{ runner.temp }}/zxs-core-cargo
-      CARGO_TARGET_DIR: ${{ runner.temp }}/zxs-core-target
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           sparse-checkout: zxs-core
+      - name: Use disposable Cargo paths
+        run: |
+          printf 'CARGO_HOME=%s\nCARGO_TARGET_DIR=%s\n' \
+            "${RUNNER_TEMP:?}/zxs-core-cargo" \
+            "${RUNNER_TEMP:?}/zxs-core-target" >> "${GITHUB_ENV:?}"
       - name: Verify toolchain and resolve the checked-in lock
         run: |
           test ! -e ../zxs && test ! -e ../helper && test ! -e ../zxs-workspace
