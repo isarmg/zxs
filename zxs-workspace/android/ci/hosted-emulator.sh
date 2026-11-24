@@ -35,7 +35,7 @@ export ANDROID_USER_HOME="$scratch/user" ANDROID_AVD_HOME="$scratch/avd"
 export ANDROID_ADB_SERVER_PORT=5038 ADB_SERVER_SOCKET=tcp:127.0.0.1:5038
 export GRADLE_USER_HOME="$scratch/gradle" HOME="$scratch/home"
 mkdir -p "$ANDROID_HOME" "$ANDROID_USER_HOME" "$ANDROID_AVD_HOME" "$HOME"
-for component in platforms build-tools platform-tools cmdline-tools; do
+for component in platforms build-tools platform-tools; do
     ln -s "$stock/$component" "$ANDROID_HOME/$component"
 done
 adb="$ANDROID_HOME/platform-tools/adb"
@@ -85,9 +85,21 @@ grep -Eq '^Pkg.Revision[[:space:]]*=[[:space:]]*37[.]3[.]10[[:space:]]*$' \
     "$ANDROID_HOME/emulator/source.properties"
 grep -Eq '^Pkg.Revision[[:space:]]*=[[:space:]]*2[[:space:]]*$' \
     "$imageRoot/x86_64/source.properties"
+for property in AndroidVersion.ApiLevel=35 SystemImage.TagId=default SystemImage.Abi=x86_64; do
+    grep -Fxq "$property" "$imageRoot/x86_64/source.properties"
+done
+# avdmanager derives its SDK root from its canonical tools directory, not
+# ANDROID_HOME. A symlink to stock cmdline-tools makes it scan the stock SDK.
+mkdir -p "$ANDROID_HOME/cmdline-tools"
+cp -RL -- "$stock/cmdline-tools/latest" "$ANDROID_HOME/cmdline-tools/latest"
 avdmanager="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
 printf 'no\n' | "$avdmanager" create avd --name workspace-ci \
     --package 'system-images;android-35;default;x86_64'
+if ! grep -Eq '^image[.]sysdir[.]1[[:space:]]*=[[:space:]]*system-images/android-35/default/x86_64/?[[:space:]]*$' \
+        "$ANDROID_AVD_HOME/workspace-ci.avd/config.ini"; then
+    echo "::error::The AVD was not configured with the pinned API 35 x86_64 system image."
+    exit 1
+fi
 "$adb" start-server
 adb_started=1
 "$ANDROID_HOME/emulator/emulator" @workspace-ci -port 5554 -wipe-data -no-snapshot \
