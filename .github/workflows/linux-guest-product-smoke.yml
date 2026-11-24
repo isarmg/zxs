@@ -392,6 +392,23 @@ jobs:
                   test -c /dev/fuse
                   test "$(stat -c '%u:%a' /usr/bin/fusermount3)" = 0:4755
                   test "$(/usr/bin/fusermount3 --version)" = 'fusermount3 version: 3.18.3'
+                  # fusermount3 uses getpwuid(real_uid) to record a non-root mount owner.
+                  # Only this disposable guest's FUSE fixture needs a named identity.
+                  stage=fuse-fixture-account
+                  fuse_account=zxs-fuse-fixture
+                  test -x /usr/sbin/nologin
+                  test -z "$(getent passwd "$fuse_account" || :)"
+                  test -z "$(getent group "$fuse_account" || :)"
+                  test -z "$(getent group 23100 || :)"
+                  groupadd --gid 23100 "$fuse_account"
+                  useradd --uid 23100 --gid 23100 --no-user-group --no-create-home \
+                    --home-dir /nonexistent --shell /usr/sbin/nologin --no-log-init \
+                    --password '!' "$fuse_account"
+                  test "$(getent passwd 23100 | cut -d: -f1,3,4,6,7)" = \
+                    "$fuse_account:23100:23100:/nonexistent:/usr/sbin/nologin"
+                  test "$(getent group 23100 | cut -d: -f1,3,4)" = "$fuse_account:23100:"
+                  test "$(getent shadow "$fuse_account" | cut -d: -f2)" = '!'
+                  printf '%s\n' 'ZXS-WORKSPACE-FUSE locked ordinary fixture identity verified'
                   fuse_requested=true
                   user_flags=()
                   h2_args=(--workspace-fuse)
