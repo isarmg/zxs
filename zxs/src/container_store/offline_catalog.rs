@@ -1,4 +1,8 @@
-//! Existing-only live-name view under the original offline state lease.
+//! Existing-only observations under the original offline state lease.
+mod verify;
+
+pub(crate) use verify::{Verification, VerifiedLocation, verify_container};
+
 use super::{
     DataRoot, Id, hex, invalid, recycle, recycle_receipt::RecycleRole, replay_selected_entries,
     routes,

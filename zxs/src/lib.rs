@@ -49,6 +49,12 @@ pub fn offline_import_batch_v1() -> std::io::Result<()> {
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[doc(hidden)]
+pub fn offline_verify_container_v1() -> std::io::Result<()> {
+    headless_import_worker::verify::run()
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[doc(hidden)]
 pub fn offline_init_data_v1() -> std::io::Result<()> {
     headless_import_worker::init_data::run()
 }

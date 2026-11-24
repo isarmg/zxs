@@ -119,6 +119,26 @@ pub fn prepare_import_batch_exec(
     )
 }
 
+/// Invoke only the fixed container verifier on the original executable.
+///
+/// # Errors
+/// Fails if the executable, control socket or sealed order cannot be retained.
+pub fn prepare_verify_container_exec(
+    cmd: &mut Command,
+    original: &File,
+    channel: &File,
+    order: &File,
+) -> io::Result<()> {
+    prepare_fixed_peer_exec(
+        cmd,
+        original,
+        channel,
+        order,
+        c"zxs",
+        c"__offline-verify-container-v1",
+    )
+}
+
 /// Select the dedicated enrolled-DATA initialization worker on the pinned binary.
 ///
 /// # Errors

@@ -202,6 +202,40 @@ impl SelectedStart {
         )
     }
 
+    pub(super) fn verify_live_roles(
+        &self,
+        require_state: impl Fn(&HeldDir) -> io::Result<()>,
+    ) -> io::Result<Vec<[u64; 3]>> {
+        require_state(&self.state)?;
+        let held = [&self.system, &self.recycle]
+            .into_iter()
+            .chain(self.data.iter().map(|volume| &volume.root));
+        let coordinates = held
+            .map(HeldDir::live_identity)
+            .collect::<io::Result<_>>()?;
+        require_state(&self.state)?;
+        Ok(coordinates)
+    }
+
+    pub(super) fn offline_verify(
+        &self,
+        id: crate::container_store::Id,
+        require_state: impl Fn(&HeldDir) -> io::Result<()>,
+    ) -> io::Result<offline_catalog::Verification> {
+        offline_catalog::verify_container(
+            &self.system,
+            &self.recycle,
+            &self.data,
+            self.pool,
+            self.recycle_token,
+            id,
+            || {
+                require_state(&self.state)?;
+                self.require_named()
+            },
+        )
+    }
+
     fn require_named(&self) -> io::Result<()> {
         self.state.require_named()?;
         self.system.require_named()?;

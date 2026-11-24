@@ -48,6 +48,7 @@ usage:\n  helper setup-headless check SYSTEM RECYCLE DATA [DATA ...]
   helper import-batch prepare-tree SOURCE TARGET-DATA SYSTEM RECYCLE DATA [DATA ...] [-- RELATIVE NAME ... | --map0]
   helper import-batch show
   helper import-batch apply SYSTEM RECYCLE DATA [DATA ...]
+  helper verify CONTAINER SYSTEM RECYCLE DATA [DATA ...]
   helper --help | --version\n\n\
 Supply already mounted directories in their registered order for maintenance and import.";
 
@@ -67,6 +68,7 @@ enum Command {
     ImportCensus(headless_setup::Preflight),
     ImportSingle(headless_setup::ImportOne),
     ImportBatch(headless_setup::ImportBatch),
+    Verify(headless_setup::OfflineVerify),
     #[cfg(feature = "embedded-zxs")]
     EmbeddedInstall(embedded_image::EmbeddedInstall),
 }
@@ -86,6 +88,9 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     }
     if op == "preflight-import" {
         return headless_setup::Preflight::parse(args).map(Command::ImportCensus);
+    }
+    if op == "verify" {
+        return headless_setup::OfflineVerify::parse(args).map(Command::Verify);
     }
     if op == "import-batch" {
         return headless_setup::ImportBatch::parse(args).map(Command::ImportBatch);
@@ -115,6 +120,7 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::ImportCensus(request) => return request.run(),
         Command::ImportSingle(request) => return request.run(),
         Command::ImportBatch(request) => return request.run(),
+        Command::Verify(request) => return request.run(),
         #[cfg(feature = "embedded-zxs")]
         Command::EmbeddedInstall(s) => {
             s.run()?;

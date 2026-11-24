@@ -28,7 +28,7 @@ use zeroize::Zeroizing;
 mod import_preflight;
 mod offline;
 pub(crate) use import_preflight::Preflight;
-pub(crate) use offline::{ImportBatch, import_command::ImportOne};
+pub(crate) use offline::{ImportBatch, OfflineVerify, import_command::ImportOne};
 
 pub(crate) const DEFAULT_STATE: &str = "/zxs/state/headless";
 const DESCRIPTOR: &str = "server.conf";

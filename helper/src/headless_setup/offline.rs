@@ -25,6 +25,8 @@ mod offline_catalog;
 mod password;
 mod retire_data;
 mod stage;
+mod verify;
+pub(crate) use verify::OfflineVerify;
 
 const EPOCH: usize = FORMAT.len() + 16;
 const SALT: usize = EPOCH + 16;

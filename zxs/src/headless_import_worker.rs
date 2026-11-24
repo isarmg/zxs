@@ -24,6 +24,7 @@ const MAX_ENVELOPE: usize = 72 + 8 + 16 + 16 + 32 + 3 * (2 + PATH_BYTES) + 104 +
 type Payload = [u8; 65];
 
 pub(crate) mod batch;
+pub(crate) mod verify;
 
 #[path = "headless_init_data_worker.rs"]
 pub(crate) mod init_data;

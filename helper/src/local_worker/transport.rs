@@ -25,6 +25,7 @@ pub(crate) enum Kind {
     ImportStep = 45,
     InitData = 46,
     ImportBatch = 47,
+    VerifyContainer = 48,
 }
 
 pub(crate) struct Channel {
