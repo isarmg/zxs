@@ -58,13 +58,17 @@ import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.SSLSession;
 
 /** Direct HTTPS/HTTP2 R3 exchange. One origin, one connection and one request. */
-final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, AutoCloseable {
+final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, RemoteContainerRead.Reader, AutoCloseable {
     private static final Timeout TIMEOUT = Timeout.ofSeconds(20);
     private static final int REPLY_LIMIT = 16 * 1024;
     private static final String ID = "[0-9a-f]{32}";
     private static final Pattern WIRE_ID = Pattern.compile(ID);
     private static final Pattern LOOKUP = Pattern.compile("/zxs/v1/containers/" + ID + "/operations/" + ID);
     private static final Pattern POST = Pattern.compile("/zxs/v1/containers/" + ID + "/branches/(main|" + ID + ")/nodes");
+    private static final String CATALOG_PATH = "/zxs/v1/containers";
+    private static final Pattern DETAIL = Pattern.compile(CATALOG_PATH + "/" + ID);
+    private static final Pattern MAIN_HISTORY = Pattern.compile(CATALOG_PATH + "/" + ID + "/branches/main/nodes");
+    private static final Pattern SEQUENCE = Pattern.compile("[1-9][0-9]{0,19}");
     private static final Pattern LOGIN = Pattern.compile("[a-z0-9][a-z0-9._-]{0,63}");
     private static final Pattern DNS = Pattern.compile("[a-z0-9.-]{1,253}");
     private static final Pattern NUM = Pattern.compile("0|[1-9][0-9]{0,8}");
@@ -137,7 +141,7 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
     @Override
     public RemoteSaveSubmit.Response lookup(String exactOriginPath) throws IOException {
         require(exactOriginPath != null && LOOKUP.matcher(exactOriginPath).matches());
-        return exchange("GET", exactOriginPath, Map.of(), null);
+        return exchange("GET", exactOriginPath, Map.of(), null, CONTROL);
     }
 
     @Override
@@ -150,10 +154,46 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
         try {
             require(completeBody.readNBytes(payload, 0, length) == length && completeBody.read() == -1);
             require(headers.get("Zxs-Sha256").equals(HexFormat.of().formatHex(sha256(payload))));
-            return exchange("POST", exactOriginPath, headers, payload);
+            return exchange("POST", exactOriginPath, headers, payload, CONTROL);
         } finally {
             Arrays.fill(payload, (byte) 0);
         }
+    }
+
+    private record ReplyShape(String media, int limit, boolean control, int bodyLength, String digest) {}
+
+    private static final ReplyShape CONTROL = new ReplyShape("application/json", REPLY_LIMIT, true, -1, null);
+    private static final ReplyShape METADATA =
+            new ReplyShape("application/json", RemoteContainerRead.METADATA_LIMIT, false, -1, null);
+
+    @Override
+    public byte[] metadata(String path, Map<String, String> headers) throws IOException {
+        require(path != null && headers != null);
+        if (CATALOG_PATH.equals(path)) {
+            require("compact".equals(headers.get("Zxs-View"))
+                    && (headers.size() == 1 || (headers.size() == 2
+                    && RemoteContainerRead.id(headers.get("Zxs-After")))));
+        } else if (DETAIL.matcher(path).matches()) {
+            String after = headers.get("Zxs-Detail-After");
+            require("paged".equals(headers.get("Zxs-Detail"))
+                    && matches(headers.get("Zxs-Detail-Sequence"), SEQUENCE)
+                    && (headers.size() == 2 || (headers.size() == 3
+                    && ("main".equals(after) || RemoteContainerRead.id(after)))));
+        } else {
+            require(MAIN_HISTORY.matcher(path).matches() && headers.size() == 1
+                    && RemoteContainerRead.id(headers.get("Zxs-History-Head")));
+        }
+        return exchange("GET", path, headers, null, METADATA).data();
+    }
+
+    @Override
+    public byte[] node(String container, String node, int length, String sha256) throws IOException {
+        require(RemoteContainerRead.id(container) && RemoteContainerRead.id(node)
+                && length >= 0 && length <= PlainText.LIMIT && matches(sha256, SHA));
+        byte[] data = exchange("GET", CATALOG_PATH + "/" + container + "/nodes/" + node + "/data",
+                Map.of(), null, new ReplyShape("application/octet-stream", length, false, length, sha256)).data();
+        require(sha256.equals(HexFormat.of().formatHex(sha256(data))));
+        return data;
     }
 
     static int validatePost(Map<String, String> headers) throws IOException {
@@ -176,8 +216,8 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
         return length;
     }
 
-    private RemoteSaveSubmit.Response exchange(String method, String path, Map<String, String> headers, byte[] body)
-            throws IOException {
+    private RemoteSaveSubmit.Response exchange(String method, String path, Map<String, String> headers,
+                                               byte[] body, ReplyShape shape) throws IOException {
         final SSLContext tls;
         try {
             tls = SSLContext.getInstance("TLS");
@@ -205,7 +245,7 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
                 // The TCP endpoint future alone is not a verified TLS session.
                 waitFor(gate.verified);
                 var request = new BasicHttpRequest(method, host, path);
-                request.setHeader("Accept", "application/json");
+                request.setHeader("Accept", shape.media());
                 request.setHeader("Accept-Encoding", "identity");
                 for (var header : headers.entrySet()) {
                     if (header.getKey().startsWith("Zxs-") || header.getKey().equals("Content-Length")) {
@@ -214,7 +254,7 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
                 }
                 var producer = new BasicRequestProducer(request,
                         body == null ? null : new BasicAsyncEntityProducer(body, ContentType.APPLICATION_OCTET_STREAM));
-                var bounded = new BasicResponseConsumer<>(new BoundedBody()) {
+                var bounded = new BasicResponseConsumer<>(new BoundedBody(shape.limit())) {
                     @Override public void streamEnd(List<? extends Header> trailers)
                             throws HttpException, IOException {
                         require(trailers == null || trailers.isEmpty());
@@ -224,7 +264,7 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
                 var response = waitFor(endpoint.execute(producer, bounded, null));
                 byte[] data = response.getBody();
                 HttpResponse head = response.getHead();
-                int length = responseLength(head);
+                int length = responseLength(head, shape);
                 require(data != null ? data.length == length : length == 0);
                 ensureLive();
                 return new RemoteSaveSubmit.Response(head.getCode(), data != null ? data : new byte[0]);
@@ -237,18 +277,26 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
     }
 
     static int responseLength(HttpResponse head) throws IOException {
+        return responseLength(head, CONTROL);
+    }
+
+    private static int responseLength(HttpResponse head, ReplyShape shape) throws IOException {
         int status = head.getCode();
-        require(status == 200 || status == 404 || status == 409);
+        require(status == 200 || (shape.control() && (status == 404 || status == 409)));
         for (String forbidden : Set.of("transfer-encoding", "content-encoding", "content-range", "trailer")) {
             require(!head.containsHeader(forbidden));
         }
         var lengths = head.getHeaders("content-length");
         require(lengths.length == 1 && matches(lengths[0].getValue(), NUM));
         int size = Integer.parseInt(lengths[0].getValue());
-        require(size <= REPLY_LIMIT);
+        require(size <= shape.limit() && (shape.bodyLength() < 0 || shape.bodyLength() == size));
         if (status != 409) {
             var media = head.getHeaders("content-type");
-            require(media.length == 1 && "application/json".equals(media[0].getValue()));
+            require(media.length == 1 && shape.media().equals(media[0].getValue()));
+        }
+        if (shape.digest() != null) {
+            var digest = head.getHeaders("zxs-sha256");
+            require(digest.length == 1 && shape.digest().equals(digest[0].getValue()));
         }
         return size;
     }
@@ -269,12 +317,15 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
 
     private static final class BoundedBody extends AbstractBinAsyncEntityConsumer<byte[]> {
         private final ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        private final int limit;
+
+        BoundedBody(int limit) { this.limit = limit; }
 
         @Override protected void streamStart(ContentType type) {}
-        @Override protected int capacityIncrement() { return REPLY_LIMIT; }
+        @Override protected int capacityIncrement() { return Math.max(1, Math.min(16_384, limit)); }
 
         @Override protected void data(ByteBuffer source, boolean end) throws IOException {
-            require(source.remaining() <= REPLY_LIMIT - buffer.size());
+            require(source.remaining() <= limit - buffer.size());
             byte[] next = new byte[source.remaining()];
             source.get(next);
             buffer.write(next);
