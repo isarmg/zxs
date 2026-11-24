@@ -25,4 +25,4 @@ cargo install --locked --path .
 
 `bundle-diff /绝对/目录` 与 `bundle-pack /绝对/目录 /绝对/新文件.zip` 都用离线前缀。支持根 `.zxsignore`；当前只比对和生成标准 Deflate ZIP，不解包或提交 ZIP。
 
-[架构与源码](ARCHITECTURE.md) · [ZIP32 规格](docs/specs/zip32-bundle.md) · [本机回执边界](docs/invariants/receipt-recovery.md) · [复现 ext4 检查](docs/guides/linux-ext4-qualification.md)。
+[架构与源码](ARCHITECTURE.md) · [ZIP32 规格](docs/specs/zip32-bundle.md) · [本机回执边界](docs/invariants/receipt-recovery.md) · [Linux 普通文件](docs/invariants/ordinary-linux-work.md) · [复现 ext4 检查](docs/guides/linux-ext4-qualification.md)。

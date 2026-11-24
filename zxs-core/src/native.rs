@@ -254,11 +254,18 @@ impl Folder {
         Ok(out)
     }
 
+    fn admits_write_bits(&self, mode: u32) -> bool {
+        // Group-write is normal for owned editor paths under umask 0002.
+        // The private SQLite/spool/lease subtree does not admit it.
+        let forbidden = if self.private { 0o022 } else { 0o002 };
+        mode & forbidden == 0
+    }
+
     fn verify(&self, m: &Metadata) -> Result<()> {
         if !m.is_dir()
             || (m.dev(), m.ino()) != self.identity
             || m.uid() != self.uid
-            || m.mode() & 0o022 != 0
+            || !self.admits_write_bits(m.mode())
             || (self.private && m.mode() & 0o777 != 0o700)
         {
             return Err(invalid(
@@ -301,7 +308,7 @@ impl Folder {
             .into()
         };
         let actual = dir.metadata()?;
-        if actual.uid() != self.uid || actual.mode() & 0o022 != 0 {
+        if actual.uid() != self.uid || !self.admits_write_bits(actual.mode()) {
             return Err(invalid(
                 "directory under the original root changed protection",
             ));
@@ -341,7 +348,11 @@ impl Folder {
         self.check()?;
         let pin = self.pin(path)?;
         let m = pin.metadata()?;
-        if !m.is_file() || m.uid() != self.uid || m.nlink() != 1 || m.mode() & 0o022 != 0 {
+        if !m.is_file()
+            || m.uid() != self.uid
+            || m.nlink() != 1
+            || !self.admits_write_bits(m.mode())
+        {
             return Err(invalid(
                 "the selected inode is not an owned ordinary single-link file",
             ));
@@ -438,6 +449,7 @@ impl Folder {
                 published.length,
                 published.modified,
             ) != (before.dev, before.ino, before.length, before.modified)
+                || published.mode != before.mode
                 || stamp(&file.metadata()?) != published
             {
                 return Err(invalid("the original published identity changed"));
@@ -476,6 +488,11 @@ impl Folder {
         original: Stamp,
         before_unlink: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
+        if !self.private {
+            return Err(invalid(
+                "verified removal requires the original private workspace",
+            ));
+        }
         let source = self.source(Path::new(name))?;
         if source.before.dev != original.dev
             || source.before.ino != original.ino
