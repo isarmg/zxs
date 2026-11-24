@@ -55,6 +55,16 @@ impl Routes {
         Ok(Some(Self::in_directory(directory)))
     }
 
+    #[cfg(test)]
+    pub(super) fn require_upload_parent(&self, system: &HeldDir) -> io::Result<()> {
+        let at = existing_directory(system)?
+            .ok_or_else(|| invalid("upload lacks the original SYSTEM routes"))?;
+        if at.entity != self.directory.entity || !at.same_mount(&self.directory)? {
+            return Err(invalid("upload has a different SYSTEM authority"));
+        }
+        self.directory.require_named()
+    }
+
     fn in_directory(directory: HeldDir) -> Self {
         Self {
             directory,

@@ -8,7 +8,7 @@ use std::io;
 
 pub(super) const CHUNK: u64 = 8 * 1024 * 1024;
 pub(super) const MAX_BODY: u64 = 1 << 40;
-const MAX_RECORD: usize = 512;
+pub(super) const MAX_RECORD: usize = 512;
 const MAGIC: [u8; 4] = *b"UR1\0";
 const ID_DOMAIN: &[u8] = b"ZXS upload intent v1\0";
 const EMPTY_SHA: [u8; 32] = [
@@ -155,7 +155,7 @@ impl Birth {
         nanos: 0,
     };
 
-    fn valid(self) -> bool {
+    pub(super) fn valid(self) -> bool {
         self.inode != 0 && self.nanos < 1_000_000_000 && (self.seconds != 0 || self.nanos != 0)
     }
 

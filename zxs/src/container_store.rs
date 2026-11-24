@@ -261,7 +261,13 @@ pub(crate) struct Store {
     // Only bootstrap and rename require a shared display-namespace cut.
     names: Mutex<()>,
     archive: Option<recycle::Recycle>,
-    _system_owner: File,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "retains the native SYSTEM lease")
+    )]
+    system_owner: File,
+    #[cfg(test)]
+    uploads: upload::Shared,
 }
 
 impl Store {
@@ -328,7 +334,9 @@ impl Store {
             objects: Mutex::new(BTreeMap::new()),
             names: Mutex::new(()),
             archive: None,
-            _system_owner: owner,
+            system_owner: owner,
+            #[cfg(test)]
+            uploads: upload::Shared::default(),
         }
     }
 

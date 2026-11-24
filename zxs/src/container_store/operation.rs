@@ -1,5 +1,5 @@
 //! Query one operation under the same container gate as publication and recycle.
-use super::{Mutation, Receipt, RecycleReceipt, Store, invalid, read_state};
+use super::{Mutation, Receipt, RecycleReceipt, State, Store, invalid, read_state};
 use std::io;
 
 /// A request has exactly one selected disposition. Unavailable/corrupt media
@@ -16,6 +16,14 @@ impl Store {
         let mut memory = object
             .lock()
             .map_err(|_| invalid("container selection unavailable"))?;
+        self.receipt_under_gate(op, &mut memory)
+    }
+
+    pub(super) fn receipt_under_gate(
+        &self,
+        op: Mutation,
+        memory: &mut Option<State>,
+    ) -> io::Result<Option<OperationReceipt>> {
         let location = self.recycled(op.container)?;
         let result = if let Some((selected, at)) = location.as_ref() {
             // SYSTEM selection alone cannot prove that this operation was
@@ -40,7 +48,7 @@ impl Store {
             }
         } else if let Some(volume) = self.routed(op.container)? {
             volume
-                .load(op.container, &mut memory)?
+                .load(op.container, memory)?
                 .receipts
                 .get(&op.request)
                 .cloned()

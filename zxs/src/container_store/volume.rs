@@ -17,7 +17,8 @@ pub(super) struct DataVolume {
     root: HeldDir,
     data: HeldDir,
     staging: HeldDir,
-    _owner: File,
+    #[cfg_attr(not(test), expect(dead_code, reason = "retains the native DATA lease"))]
+    owner: File,
 }
 
 impl DataVolume {
@@ -36,7 +37,7 @@ impl DataVolume {
             root,
             data,
             staging,
-            _owner: owner,
+            owner,
         })
     }
 
@@ -55,7 +56,7 @@ impl DataVolume {
             root,
             data,
             staging,
-            _owner: owner,
+            owner,
         })
     }
 
@@ -65,6 +66,11 @@ impl DataVolume {
 
     pub(super) fn contents(&self) -> &HeldDir {
         &self.data
+    }
+
+    #[cfg(test)]
+    pub(super) fn upload_owner(&self) -> &File {
+        &self.owner
     }
 
     pub(super) fn staging(&self) -> &HeldDir {

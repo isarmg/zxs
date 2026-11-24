@@ -162,6 +162,18 @@ int zxs_mount_id(int fd, uint64_t *out) {
     *out = observed.stx_mnt_id;
     return 0;
 }
+/* Stable generation evidence for the optional upload lane, on held FDs only. */
+int zxs_upload_birth(int fd, uint64_t *inode, int64_t *seconds, uint32_t *nanos) {
+    const unsigned int need = STATX_INO | STATX_BTIME;
+    struct statx observed;
+    if (statx(fd, "", AT_EMPTY_PATH | AT_NO_AUTOMOUNT, need, &observed) < 0) return -1;
+    if ((observed.stx_mask & need) != need) { errno = ENOTSUP; return -1; }
+    *inode = observed.stx_ino;
+    *seconds = observed.stx_btime.tv_sec;
+    *nanos = observed.stx_btime.tv_nsec;
+    return 0;
+}
+
 static int require_same_mount(int parent, int child) {
     uint64_t a=0,b=0;
     if (zxs_mount_id(parent,&a)<0 || zxs_mount_id(child,&b)<0) return -1;
