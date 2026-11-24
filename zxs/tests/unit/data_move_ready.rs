@@ -139,9 +139,22 @@ fn wrong_actual_source_digest_leaves_unproved_target_untouched_on_both_retries()
     let raw_draft = stage_entry(&f, 1, FIRST).join("payload");
     assert_eq!(fs::read(&raw_draft).unwrap(), wrong);
     assert_eq!(fs::read(f.entry().join("payload")).unwrap(), wrong);
-    assert!(Pending::prepare(&selected).is_err());
+    let original = fs::File::open(&raw_draft).unwrap();
+    let original_inode = std::os::unix::fs::MetadataExt::ino(&original.metadata().unwrap());
+    let retry = Pending::prepare(&selected)
+        .unwrap()
+        .copy_to_ready()
+        .err()
+        .unwrap();
+    assert_eq!(retry.kind(), io::ErrorKind::InvalidData);
+    assert!(retry.to_string().contains("SHA-256"));
     assert!(HeldReady::reopen(&selected).is_err());
+    assert_eq!(
+        std::os::unix::fs::MetadataExt::ino(&fs::metadata(&raw_draft).unwrap()),
+        original_inode
+    );
     assert_eq!(fs::read(&raw_draft).unwrap(), wrong);
+    assert_eq!(fs::read(f.entry().join("payload")).unwrap(), wrong);
     assert!(!f.journal().join("READY").exists());
     assert!(!f.journal().join("new-route").exists());
     no_selection(&f);

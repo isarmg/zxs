@@ -1,6 +1,16 @@
-//! Native DATA move evidence and private staging only; no worker, route switch or cleanup.
+//! One authorized offline DATA move under held STATE and role authority.
 mod records;
 mod source;
+
+#[cfg(target_arch = "x86_64")]
+mod entry;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use entry::{
+    MoveRequest, MoveRoles, execute_move, require_move_absent, require_move_scope,
+    require_stage_absent,
+};
+#[cfg(target_arch = "x86_64")]
+pub(crate) use records::Completion;
 
 use super::{Birth, Checked, Digest, Guard, Intent, Scope, digest, invalid, proof};
 use crate::{
@@ -23,6 +33,7 @@ use std::{
 
 const ACCESS: ReadAccess = ReadAccess::NoAtime;
 const OPERAND_DOMAIN: &[u8] = b"ZXS disk move operand v1\0";
+const ACTIVE_PREFIX: &str = ".server-stage-move-";
 const MOVE_PARENT: &CStr = c"data-relocations";
 const MAX_PRIVATE_ENTRIES: usize = 1 << 17;
 
@@ -50,6 +61,7 @@ struct Selected<'a> {
     operands: (Digest, Digest),
     roots: Roots<'a>,
     outer: &'a dyn Fn() -> io::Result<()>,
+    pulse: &'a dyn Fn() -> io::Result<()>,
     leases: [Lease<'a>; 4],
     routes: HeldDir,
     original_data: HeldDir,
@@ -83,7 +95,7 @@ impl Names {
             route_stage: native_name(&format!(".{cid}.incoming"))?,
             target_stage: native_name(&format!("move-{pair}"))?,
             inactive: native_name(&format!(".move-guard-draft-{pair}"))?,
-            active: native_name(&format!(".server-stage-move-{pair}"))?,
+            active: native_name(&format!("{ACTIVE_PREFIX}{pair}"))?,
         })
     }
 }
@@ -96,7 +108,10 @@ struct Lease<'a> {
 
 impl<'a> Lease<'a> {
     fn hold(root: &'a HeldDir, name: &'static CStr) -> io::Result<Self> {
-        let original = root.existing_opaque_owner(name)?;
+        // Opening an existing owner must not sync the whole role before
+        // the selected operation has even proved its record and native cut.
+        let original = pin(root, name)?.file;
+        original.try_lock().map_err(io::Error::from)?;
         let lease = Self {
             root,
             name,
@@ -118,10 +133,20 @@ impl<'a> Lease<'a> {
 }
 
 impl<'a> Selected<'a> {
+    #[cfg(test)]
     fn retain(
+        roots: Roots<'a>,
+        identity: (Scope, Digest, (Digest, Digest)),
+        outer: &'a dyn Fn() -> io::Result<()>,
+    ) -> io::Result<Self> {
+        Self::retain_live(roots, identity, outer, outer)
+    }
+
+    fn retain_live(
         roots: Roots<'a>,
         (scope, system_token, operands): (Scope, Digest, (Digest, Digest)),
         outer: &'a dyn Fn() -> io::Result<()>,
+        pulse: &'a dyn Fn() -> io::Result<()>,
     ) -> io::Result<Self> {
         let (source, target) = roots.data;
         let roster = [
@@ -133,15 +158,24 @@ impl<'a> Selected<'a> {
         ];
         outer()?;
         role_roots(roster)?;
-        Self::retain_names(roots, (scope, system_token, operands), outer)
+        Self::retain_names_live(roots, (scope, system_token, operands), outer, pulse)
     }
 
-    // Exact names/leases after the outer topology gate. Also used by small
-    // fixture-only native I/G tests on two temporary filesystems.
+    // These narrow fixtures exercise the native cuts on two temporary filesystems.
+    #[cfg(test)]
     fn retain_names(
+        roots: Roots<'a>,
+        identity: (Scope, Digest, (Digest, Digest)),
+        outer: &'a dyn Fn() -> io::Result<()>,
+    ) -> io::Result<Self> {
+        Self::retain_names_live(roots, identity, outer, outer)
+    }
+
+    fn retain_names_live(
         roots: Roots<'a>,
         (scope, system_token, operands): (Scope, Digest, (Digest, Digest)),
         outer: &'a dyn Fn() -> io::Result<()>,
+        pulse: &'a dyn Fn() -> io::Result<()>,
     ) -> io::Result<Self> {
         outer()?;
         let (source, target) = roots.data;
@@ -178,6 +212,7 @@ impl<'a> Selected<'a> {
             operands,
             roots,
             outer,
+            pulse,
             leases,
             routes,
             original_data,
@@ -222,7 +257,7 @@ impl<'a> Selected<'a> {
             remaining = remaining
                 .checked_sub(1)
                 .ok_or_else(|| invalid("the original STATE inventory exceeds its bound"))?;
-            if name.starts_with(b".server-stage-move-") && name != self.names.active.to_bytes() {
+            if name.starts_with(ACTIVE_PREFIX.as_bytes()) && name != self.names.active.to_bytes() {
                 return Err(invalid("another active or unknown DATA move guard exists"));
             }
             Ok(())
@@ -278,19 +313,24 @@ impl<'a> Selected<'a> {
     }
 
     fn vacancies(&self, durable: bool) -> io::Result<()> {
+        self.vacancies_for_copy(durable, false)
+    }
+
+    fn vacancies_for_copy(&self, durable: bool, resuming: bool) -> io::Result<()> {
         let positions = [
             (&self.routes, &self.names.route_stage),
             (&self.target_data, &self.names.cid),
             (&self.target_staging, &self.names.target_stage),
         ];
+        let positions = &positions[..if resuming { 2 } else { 3 }];
         if durable {
-            for (parent, name) in positions {
+            for &(parent, name) in positions {
                 // This flushes only the exact held parents. No DATA body,
                 // name, stage or CR1 is created, removed or replaced here.
                 parent.confirm_absence(name)?;
             }
         }
-        for (parent, name) in positions {
+        for &(parent, name) in positions {
             absent(parent, name)?;
         }
         Ok(())
@@ -301,7 +341,7 @@ impl<'a> Selected<'a> {
             &self.original_data,
             self.scope,
             self.roots.data.0.token,
-            &|| (self.outer)(),
+            self.pulse,
         )
     }
 }

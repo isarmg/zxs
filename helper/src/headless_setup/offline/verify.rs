@@ -1,5 +1,5 @@
 //! Read-only selected-container verification through the exact installed engine.
-use super::{OfflineSession, SelectedRoles, refused, require_held};
+use super::{OfflineSession, SelectedRoles, parse_id, refused};
 use crate::{
     headless_setup::{parse_paths, random},
     local_worker::{
@@ -62,57 +62,9 @@ impl OfflineVerify {
     }
 }
 
-fn parse_id(text: &str) -> Option<Id> {
-    fn nibble(byte: u8) -> Option<u8> {
-        match byte {
-            b'0'..=b'9' => Some(byte - b'0'),
-            b'a'..=b'f' => Some(byte - b'a' + 10),
-            _ => None,
-        }
-    }
-    let raw: &[u8; 32] = text.as_bytes().try_into().ok()?;
-    let mut id = [0; 16];
-    let (pairs, _) = raw.as_chunks::<2>();
-    for (value, two) in id.iter_mut().zip(pairs) {
-        *value = (nibble(two[0])? << 4) | nibble(two[1])?;
-    }
-    (id != [0; 16]).then_some(id)
-}
-
+#[cfg(test)]
 fn live_role_binding(descriptor: &[u8; 32], roles: &[[u64; 3]]) -> io::Result<[u8; 32]> {
-    if !(3..=64).contains(&roles.len()) {
-        return Err(refused());
-    }
-    let count = u8::try_from(roles.len()).map_err(|_| refused())?;
-    let mut hash = Sha256::new();
-    hash.update(ROLE_DOMAIN);
-    hash.update(descriptor);
-    hash.update([count]);
-    for &[device, inode, mount] in roles {
-        if inode == 0 || mount == 0 {
-            return Err(refused());
-        }
-        hash.update(device.to_be_bytes());
-        hash.update(inode.to_be_bytes());
-        hash.update(mount.to_be_bytes());
-    }
-    Ok(hash.finalize().into())
-}
-
-fn original_binding(session: &OfflineSession) -> io::Result<[u8; 32]> {
-    // The original roster is already checked against the protected descriptor.
-    // Hash the exact first held roots, not a replacement reopened by name.
-    let roles = session
-        .selected
-        .roots
-        .iter()
-        .map(|root| {
-            let (entity, mount) = require_held(&root.input(), session.selected.uid)?;
-            Ok([entity.dev, entity.ino, mount.id])
-        })
-        .collect::<io::Result<Vec<_>>>()?;
-    let descriptor = Sha256::digest(session.original.full.as_slice()).into();
-    live_role_binding(&descriptor, &roles)
+    super::live_role_binding(ROLE_DOMAIN, descriptor, roles)
 }
 
 fn order(binding: &[u8; 32], scope: &[u8; 32], id: &Id) -> io::Result<[u8; ORDER_BYTES]> {
@@ -133,7 +85,7 @@ fn capture(
     require_installed: &dyn Fn() -> io::Result<()>,
     id: Id,
 ) -> io::Result<Verification> {
-    let binding = original_binding(session)?;
+    let binding = session.role_binding(ROLE_DOMAIN)?;
     let scope = random::<32>()?;
     let raw = order(&binding, &scope, &id)?;
     let digest = Sha256::digest(raw).into();
@@ -156,7 +108,7 @@ fn capture(
     let verification = Verification::decode(packet, &id)?;
     worker.finish_verify(&channel)?;
     require_installed()?;
-    if original_binding(session)? != binding {
+    if session.role_binding(ROLE_DOMAIN)? != binding {
         return Err(refused());
     }
     Ok(verification)

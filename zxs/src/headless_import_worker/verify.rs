@@ -1,5 +1,5 @@
 //! Fixed existing-only verification under the original offline parent.
-use super::{Channel, Payload, Sha256, fixed, inherited_order_with_limit, refused};
+use super::{Channel, Payload, Sha256, fixed, inherited_order_with_limit, refused, role_binding};
 use crate::{
     container_store::{
         Id,
@@ -36,23 +36,7 @@ pub(crate) fn run() -> io::Result<()> {
 }
 
 fn live_binding(descriptor: [u8; 32], ordered: &[[u64; 3]]) -> io::Result<[u8; 32]> {
-    let count = u8::try_from(ordered.len()).map_err(|_| refused())?;
-    if !(3..=64).contains(&count) {
-        return Err(refused());
-    }
-    let mut hash = Sha256::new();
-    hash.update(ROLE_DOMAIN)?;
-    hash.update(&descriptor)?;
-    hash.update(&[count])?;
-    for [device, inode, mount] in ordered {
-        if *inode == 0 || *mount == 0 {
-            return Err(refused());
-        }
-        for coordinate in [device, inode, mount] {
-            hash.update(&coordinate.to_be_bytes())?;
-        }
-    }
-    Ok(hash.finish())
+    role_binding(ROLE_DOMAIN, descriptor, ordered)
 }
 
 fn order(mut raw: &[u8], binding: [u8; 32]) -> io::Result<([u8; 32], Id)> {

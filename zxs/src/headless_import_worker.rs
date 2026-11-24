@@ -24,6 +24,7 @@ const MAX_ENVELOPE: usize = 72 + 8 + 16 + 16 + 32 + 3 * (2 + PATH_BYTES) + 104 +
 type Payload = [u8; 65];
 
 pub(crate) mod batch;
+pub(crate) mod data_move;
 pub(crate) mod verify;
 
 #[path = "headless_init_data_worker.rs"]
@@ -206,6 +207,26 @@ fn parse_ticket(mut bytes: &[u8]) -> io::Result<ImportIntent> {
     Ok(intent)
 }
 
+fn role_binding(domain: &[u8], descriptor: [u8; 32], ordered: &[[u64; 3]]) -> io::Result<[u8; 32]> {
+    let count = u8::try_from(ordered.len()).map_err(|_| refused())?;
+    if !(3..=64).contains(&count) {
+        return Err(refused());
+    }
+    let mut hash = Sha256::new();
+    hash.update(domain)?;
+    hash.update(&descriptor)?;
+    hash.update(&[count])?;
+    for [device, inode, mount] in ordered {
+        if *inode == 0 || *mount == 0 {
+            return Err(refused());
+        }
+        for coordinate in [device, inode, mount] {
+            hash.update(&coordinate.to_be_bytes())?;
+        }
+    }
+    Ok(hash.finish())
+}
+
 fn fixed<const N: usize>(bytes: &mut &[u8]) -> io::Result<[u8; N]> {
     let (part, tail) = bytes.split_at_checked(N).ok_or_else(refused)?;
     *bytes = tail;
@@ -263,6 +284,15 @@ struct Channel {
 }
 
 impl Channel {
+    fn require_parent(&self) -> io::Result<()> {
+        // SAFETY: this is getppid() with no arguments, not a signal or
+        // pathname lookup. The Helper keeps its original PDEATHSIG barrier.
+        if unsafe { zxs_import_parent() } != self.parent {
+            return Err(refused());
+        }
+        Ok(())
+    }
+
     fn wire(&self, payload: Payload) -> [u8; WIRE] {
         let mut out = [0; WIRE];
         out[..8].copy_from_slice(b"ZXSAMW1\0");

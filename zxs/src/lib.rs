@@ -59,6 +59,12 @@ pub fn offline_init_data_v1() -> std::io::Result<()> {
     headless_import_worker::init_data::run()
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[doc(hidden)]
+pub fn offline_data_move_v1() -> std::io::Result<()> {
+    headless_import_worker::data_move::run()
+}
+
 #[cfg(target_os = "linux")]
 mod display;
 #[cfg(target_os = "linux")]

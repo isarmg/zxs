@@ -107,6 +107,8 @@ pub(crate) struct SelectedStart {
     pool: [u8; 16],
     state: HeldDir,
     system: HeldDir,
+    #[cfg(target_arch = "x86_64")]
+    system_token: [u8; 32],
     data: Vec<DataRoot>,
     recycle: HeldDir,
     recycle_token: [u8; 32],
@@ -120,6 +122,8 @@ impl SelectedStart {
         }
         let state = TrustedRoot::open(Path::new(DEFAULT_STATE))?;
         state.held.share()?; // same original directory lease used by the offline issuer
+        #[cfg(target_arch = "x86_64")]
+        crate::container_store::require_move_absent(&state.held)?;
         let descriptor = Descriptor::read_selected(&open_member(&state.held, DESCRIPTOR)?, uid)?;
         Self::from_original(state, descriptor, ReadAccess::Ordinary)
     }
@@ -177,6 +181,8 @@ impl SelectedStart {
             pool: roots.pool,
             state,
             system,
+            #[cfg(target_arch = "x86_64")]
+            system_token: roots.system.token,
             data,
             recycle,
             recycle_token: roots.recycle.token,
@@ -215,6 +221,45 @@ impl SelectedStart {
             .collect::<io::Result<_>>()?;
         require_state(&self.state)?;
         Ok(coordinates)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub(super) fn offline_move(
+        &self,
+        request: crate::container_store::MoveRequest,
+        coordinates: &[[u64; 3]],
+        require_state: impl Fn(&HeldDir) -> io::Result<()>,
+        pulse: &dyn Fn() -> io::Result<()>,
+    ) -> io::Result<crate::container_store::MoveCompletion> {
+        let live = || -> io::Result<()> {
+            pulse()?;
+            require_state(&self.state)?;
+            let roles = [&self.system, &self.recycle]
+                .into_iter()
+                .chain(self.data.iter().map(|volume| &volume.root));
+            for (held, &expected) in roles.zip(coordinates) {
+                if held.live_identity()? != expected {
+                    return Err(refused());
+                }
+            }
+            pulse()
+        };
+        if coordinates.len() != self.data.len() + 2 {
+            return Err(refused());
+        }
+        crate::container_store::execute_move(
+            crate::container_store::MoveRoles {
+                state: &self.state,
+                system: &self.system,
+                recycle: &self.recycle,
+                data: &self.data,
+                pool: self.pool,
+                system_token: self.system_token,
+            },
+            request,
+            &live,
+            pulse,
+        )
     }
 
     pub(super) fn offline_verify(
@@ -340,7 +385,10 @@ impl SelectedStart {
             data,
             recycle,
             recycle_token,
+            ..
         } = self;
+        #[cfg(target_arch = "x86_64")]
+        crate::container_store::require_move_absent(&state)?;
         let store = Store::open_with_recycle(system, data, recycle, pool, recycle_token)?;
         state.require_named()?;
         Ok(Bound {

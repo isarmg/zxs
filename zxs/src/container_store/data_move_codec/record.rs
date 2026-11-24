@@ -2,6 +2,11 @@
 //! A checked record proves bytes and lineage only, never a live mount, a lease or sync.
 #[path = "native/mod.rs"]
 mod native;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use native::{
+    Completion, MoveRequest, MoveRoles, execute_move, require_move_absent, require_move_scope,
+    require_stage_absent,
+};
 #[path = "proof.rs"]
 pub(in crate::container_store) mod proof;
 
@@ -344,6 +349,7 @@ pub(in crate::container_store) struct JournalBytes<'a> {
 #[derive(Debug)]
 pub(in crate::container_store) struct Journal {
     intent: Checked<Intent>,
+    #[cfg(test)]
     guard: Option<Checked<Guard>>,
     ready: Option<Checked<Ready>>,
     phase: Phase,
@@ -354,6 +360,7 @@ impl Journal {
         &self.intent
     }
 
+    #[cfg(test)]
     pub(in crate::container_store) fn guard(&self) -> Option<&Checked<Guard>> {
         self.guard.as_ref()
     }
@@ -396,6 +403,7 @@ impl Journal {
         };
         Ok(Self {
             intent,
+            #[cfg(test)]
             guard,
             ready,
             phase,

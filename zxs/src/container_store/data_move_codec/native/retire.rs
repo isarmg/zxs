@@ -11,14 +11,15 @@ use super::super::super::super::super::{
 use super::{
     BoundJournal, CStr, CUT_BYTES, Chosen, Draft, File, HAS_SWITCHED, HeldDir, HeldGuard,
     HeldSwitch, I, INTENT_BYTES, Intent, PROOF, Place, S, Selected, Switched, absent, birth,
-    create, invalid, io, pin, positions, read_raw, read_ready, recover_target, require_candidate,
+    invalid, io, pin, positions, read_raw, read_ready, recover_target, require_candidate,
     require_layout, require_marker, require_pending_absence, same_file,
 };
 use crate::fs::OpaquePin;
 use done::BoundDone;
 use tree::SourcePlan;
 
-pub(in crate::container_store) use done::{Completion, HistoryRequest};
+pub(crate) use done::Completion;
+pub(in crate::container_store) use done::HistoryRequest;
 
 pub(super) const D: &CStr = c"DONE";
 pub(super) const FINISHED: &[&CStr] = &[I, PROOF, super::TARGET, super::R, S, D];
@@ -135,6 +136,13 @@ impl<'held, 'scope> Retiring<'held, 'scope> {
     fn require(&self, finished: bool) -> io::Result<()> {
         let current = self.cut.selected;
         (current.outer)()?;
+        let j = &self.cut.journal;
+        j.draft_absent(S)?;
+        if j.parent.pin_record(&j.scoped_leaf(D, true)?)?.is_some() {
+            // A known draft may have survived normal finish, but only after
+            // the original source root was already fully retired.
+            absent(&current.original_data, &current.names.cid)?;
+        }
         self.cut
             .require_position_with(if finished { FINISHED } else { HAS_SWITCHED })?;
         require_marker(&self.cut.journal.directory, Some(&self.switched), &self.raw)
@@ -191,7 +199,10 @@ impl<'held, 'scope> Retiring<'held, 'scope> {
     fn finish(self, raw: [u8; CUT_BYTES]) -> io::Result<Completion> {
         self.require_finished_source(false)?;
         let directory = &self.cut.journal.directory;
-        let written = create(directory, D, &raw)?;
+        let written = self
+            .cut
+            .journal
+            .publish(D, &raw, || self.require_finished_source(false))?;
         let completed = BoundDone::open(HistoryRequest::from_selection(self.cut.selected))?;
         same_file(directory, &written.file, completed.done_file())?;
         completed

@@ -14,21 +14,21 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const C: Id = [0x19; 16];
+pub(super) const C: Id = [0x19; 16];
 const O: Id = [0x2f; 16];
 const POOL: Id = [0x39; 16];
 const SYSTEM: Digest = [0x3a; 32];
 const FROM: Digest = [0x3b; 32];
 const TO: Digest = [0x3c; 32];
 const R: Digest = [0x3d; 32];
-const RAW: &[u8] = b"original independent raw bytes";
+pub(super) const RAW: &[u8] = b"original independent raw bytes";
 
-struct Fixture {
-    state: HeldDir,
+pub(super) struct Fixture {
+    pub(super) state: HeldDir,
     system: HeldDir,
     recycle: HeldDir,
-    source: DataRoot,
-    target: DataRoot,
+    pub(super) source: DataRoot,
+    pub(super) target: DataRoot,
     _local: PrivateTemp,
     _to: PrivateTemp,
 }
@@ -44,7 +44,7 @@ fn held(other: &HeldDir) -> HeldDir {
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let local = PrivateTemp::under(&std::env::temp_dir());
         let remote = PrivateTemp::under(Path::new("/dev/shm"));
         let state = private(&local, "state");
@@ -145,7 +145,7 @@ impl Fixture {
         )
     }
 
-    fn selected<'a>(&'a self, live: &'a dyn Fn() -> io::Result<()>) -> Selected<'a> {
+    pub(super) fn selected<'a>(&'a self, live: &'a dyn Fn() -> io::Result<()>) -> Selected<'a> {
         // Only the bootstrapped R fixture shares a filesystem with SOURCE.
         // These primitive tests consume its held names, not its physical
         // enrollment; retain() separately requires the real three-way split.
@@ -173,7 +173,7 @@ impl Fixture {
             .join(format!("move-{}-{}", hex(C), hex(O)))
     }
 
-    fn marker(&self, active: bool) -> PathBuf {
+    pub(super) fn marker(&self, active: bool) -> PathBuf {
         let prefix = if active {
             ".server-stage-move-"
         } else {

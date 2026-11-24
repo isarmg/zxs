@@ -61,7 +61,7 @@ impl SourcePlan {
         let mut rows = Vec::new();
         let mut partial = false;
         let mut suffix = false;
-        let evidence = source::walk(target, selected.scope, selected.outer, |receipt| {
+        let evidence = source::walk(target, selected.scope, selected.pulse, |receipt| {
             let from = source_proof.for_receipt(receipt)?;
             let aim = target_proof.for_receipt(receipt)?;
             if Member::open(target, receipt)?.row != aim {

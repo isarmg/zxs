@@ -5,6 +5,8 @@ mod arrival;
 pub(super) mod switch;
 #[path = "ready_tree.rs"]
 mod tree;
+#[path = "copy_work.rs"]
+mod work;
 
 use super::super::super::super::{BYTES as ROUTE_BYTES, encode as encode_route};
 use super::super::super::{
@@ -12,8 +14,8 @@ use super::super::super::{
     proof::{Expect, Proof},
 };
 use super::{
-    BoundJournal, Checked, Digest, File, HeldDir, HeldGuard, I, OpaquePin, PROOF, Pending, Route,
-    Selected, absent, birth, create, intend, invalid, pin, positions, read_raw, same_file,
+    BoundJournal, Checked, File, HeldDir, HeldGuard, I, OpaquePin, PROOF, Pending, Route, Selected,
+    absent, birth, intend, invalid, pin, positions, read_raw, same_file,
 };
 use arrival::Place;
 use std::{ffi::CStr, io};
@@ -106,11 +108,13 @@ impl<'held, 'scope> Pending<'held, 'scope> {
     ) -> io::Result<HeldReady<'held, 'scope>> {
         let guard = self.arm()?;
         let armed = Armed { plan: self, guard };
-        armed.require(BEFORE_COPY)?;
         let journal = &armed.plan.journal;
         let expected = Expect::source(&journal.original);
         let proof = Proof::decode(&armed.plan.source.bytes, &expected)?;
-        let target = Tree::copy(&armed, &proof)?;
+        let owned = work::Work::open(&armed)?;
+        owned.restart(&proof)?;
+        armed.require(BEFORE_COPY)?;
+        let target = Tree::copy(&armed, &proof, owned.into_stage()?)?;
         let (candidate, sidecar, planned) = stage_ready_inputs(&armed, &target)?;
         let draft = Draft {
             target,
@@ -119,7 +123,10 @@ impl<'held, 'scope> Pending<'held, 'scope> {
         };
         recheck_pending(&armed, &draft, &planned)?;
         let raw = planned.encode(&journal.original)?;
-        let ready = create(&journal.directory, R, &raw)?;
+        let ready = journal.publish(R, &raw, || {
+            armed.require_bound(HAS_CANDIDATE)?;
+            draft.require(&armed, Place::Private, &planned)
+        })?;
         HeldReady {
             checked: Ready::decode(&raw, &journal.original)?,
             armed,
@@ -139,13 +146,20 @@ fn stage_ready_inputs(
     let journal = &armed.plan.journal.directory;
     armed.require(BEFORE_COPY)?;
     target.require(Place::Private.tree_site(armed.plan.selected))?;
-    let sidecar = create(journal, TARGET, &target.bytes)?;
+    let sidecar = armed.plan.journal.publish(TARGET, &target.bytes, || {
+        armed.require_bound(BEFORE_COPY)?;
+        target.require(Place::Private.tree_site(armed.plan.selected))
+    })?;
     let i = armed.plan.journal.original.value();
     let raw = encode_route(i.scope.container, i.target)?;
     armed.require(HAS_TARGET_PROOF)?;
     sidecar.require(journal, TARGET)?;
     target.require(Place::Private.tree_site(armed.plan.selected))?;
-    let candidate = create(journal, CANDIDATE, &raw)?;
+    let candidate = armed.plan.journal.publish(CANDIDATE, &raw, || {
+        armed.require_bound(HAS_TARGET_PROOF)?;
+        sidecar.require(journal, TARGET)?;
+        target.require(Place::Private.tree_site(armed.plan.selected))
+    })?;
     let ready = Ready {
         guard: armed.guard.checked.value().birth,
         target_inode: target.at.entity.inode,
@@ -194,6 +208,7 @@ impl<'held, 'scope> HeldReady<'held, 'scope> {
             route,
             source,
             journal,
+            resuming_copy: false,
         };
         let guard = plan.active()?;
         let armed = Armed { plan, guard };
@@ -245,6 +260,8 @@ impl<'held, 'scope> HeldReady<'held, 'scope> {
     }
 
     fn require_position(&self) -> io::Result<()> {
+        let journal = &self.armed.plan.journal;
+        journal.drafts_absent(&[TARGET, CANDIDATE, R, c"SWITCHED", c"DONE"])?;
         self.armed.require_scope(self.place.layout())?;
         self.place.require_absence(&self.armed)?;
         self.require_records()
@@ -261,7 +278,8 @@ impl<'held, 'scope> HeldReady<'held, 'scope> {
         self.ready.require(directory, R)
     }
 
-    pub(super) fn id(&self) -> Digest {
+    #[cfg(test)]
+    pub(super) fn id(&self) -> super::super::Digest {
         self.checked.id()
     }
 }
@@ -367,3 +385,7 @@ fn require_layout(directory: &HeldDir, layout: &[&CStr]) -> io::Result<()> {
     }
     directory.require_named()
 }
+
+#[cfg(test)]
+#[path = "../../../../tests/unit/data_move_copy_restart.rs"]
+mod copy_restart_tests;

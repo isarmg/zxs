@@ -29,6 +29,11 @@ pub(crate) use operation::OperationReceipt;
 use placement::{Intake, Placement, Sample};
 pub(crate) use recycle::RecycleReceipt;
 use routes::Routes;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use routes::data_move_codec::{
+    Completion as MoveCompletion, MoveRequest, MoveRoles, execute_move, require_move_absent,
+    require_move_scope, require_stage_absent,
+};
 use stage::{FlatStage, NameCut, Publication};
 use std::{
     collections::BTreeMap,

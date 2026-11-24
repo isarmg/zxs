@@ -48,6 +48,7 @@ usage:\n  helper setup-headless check SYSTEM RECYCLE DATA [DATA ...]
   helper import-batch prepare-tree SOURCE TARGET-DATA SYSTEM RECYCLE DATA [DATA ...] [-- RELATIVE NAME ... | --map0]
   helper import-batch show
   helper import-batch apply SYSTEM RECYCLE DATA [DATA ...]
+  helper disk move CID OP_ID SOURCE_DATA TARGET_DATA SYSTEM RECYCLE DATA [DATA ...]
   helper verify CONTAINER SYSTEM RECYCLE DATA [DATA ...]
   helper --help | --version\n\n\
 Supply already mounted directories in their registered order for maintenance and import.";
@@ -69,6 +70,7 @@ enum Command {
     ImportSingle(headless_setup::ImportOne),
     ImportBatch(headless_setup::ImportBatch),
     Verify(headless_setup::OfflineVerify),
+    DiskMove(headless_setup::DiskMove),
     #[cfg(feature = "embedded-zxs")]
     EmbeddedInstall(embedded_image::EmbeddedInstall),
 }
@@ -88,6 +90,12 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     }
     if op == "preflight-import" {
         return headless_setup::Preflight::parse(args).map(Command::ImportCensus);
+    }
+    if op == "disk" {
+        if args.next().is_none_or(|action| action != "move") {
+            return Err("expected disk move");
+        }
+        return headless_setup::DiskMove::parse(args).map(Command::DiskMove);
     }
     if op == "verify" {
         return headless_setup::OfflineVerify::parse(args).map(Command::Verify);
@@ -121,6 +129,7 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::ImportSingle(request) => return request.run(),
         Command::ImportBatch(request) => return request.run(),
         Command::Verify(request) => return request.run(),
+        Command::DiskMove(request) => return request.run(),
         #[cfg(feature = "embedded-zxs")]
         Command::EmbeddedInstall(s) => {
             s.run()?;

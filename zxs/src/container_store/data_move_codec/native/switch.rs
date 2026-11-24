@@ -4,10 +4,10 @@ pub(in super::super) mod retire;
 use super::super::super::super::{CUT_BYTES, INTENT_BYTES, Intent, Switched};
 use super::super::{Source, decode_route, intend_with_old};
 use super::{
-    Armed, BoundJournal, CANDIDATE, CStr, Checked, Digest, Draft, File, HeldDir, HeldGuard,
-    HeldReady, I, OpaquePin, PROOF, Pending, Place, R, READY_BYTES, ROUTE_BYTES, Ready, Selected,
-    TARGET, absent, birth, create, invalid, io, pin, positions, read_raw, read_ready,
-    recover_target, require_candidate, require_layout, same_file,
+    Armed, BoundJournal, CANDIDATE, CStr, Checked, Draft, File, HeldDir, HeldGuard, HeldReady, I,
+    OpaquePin, PROOF, Pending, Place, R, READY_BYTES, ROUTE_BYTES, Ready, Selected, TARGET, absent,
+    birth, invalid, io, pin, positions, read_raw, read_ready, recover_target, require_candidate,
+    require_layout, same_file,
 };
 use std::{
     ffi::{c_char, c_int},
@@ -187,6 +187,7 @@ impl<Origin> Chosen<'_, '_, Origin> {
     fn require_position_with(&self, files: &[&CStr]) -> io::Result<()> {
         let selected = self.selected;
         selected.require_local()?;
+        self.journal.drafts_absent(&[TARGET, CANDIDATE, R])?;
         self.journal.require_original()?;
         require_layout(&self.journal.directory, files)?;
         let i = self.journal.original.value();
@@ -224,6 +225,10 @@ impl<'held, 'scope> Chosen<'held, 'scope> {
 
     fn qualify(&self, marker: Option<&OpaquePin>, bytes: &[u8; CUT_BYTES]) -> io::Result<()> {
         self.selected.pre_ready_names()?;
+        self.journal.draft_absent(c"DONE")?;
+        if marker.is_some() {
+            self.journal.draft_absent(S)?;
+        }
         self.require_position(marker.is_some())?;
         require_marker(&self.journal.directory, marker, bytes)?;
         self.source.require_same(&self.selected.observe_source()?)?;
@@ -251,7 +256,12 @@ impl<'held, 'scope> Chosen<'held, 'scope> {
         self.require_route()?;
         let marker = match previous {
             Some(exact) => exact,
-            None => create(directory, S, &bytes)?,
+            None => self.journal.publish(S, &bytes, || {
+                (self.selected.outer)()?;
+                self.journal.draft_absent(c"DONE")?;
+                self.require_position(false)?;
+                require_marker(directory, None, &bytes)
+            })?,
         };
 
         self.require_position(true)?;
@@ -314,7 +324,8 @@ impl<'held, 'scope> HeldSwitch<'held, 'scope> {
         }
     }
 
-    pub(in super::super) fn id(&self) -> io::Result<Digest> {
+    #[cfg(test)]
+    pub(in super::super) fn id(&self) -> io::Result<super::super::super::Digest> {
         (self.selected.selected.outer)()?;
         self.selected.require_position(true)?;
         require_marker(

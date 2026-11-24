@@ -1,14 +1,24 @@
 //! One immutable INTENT and one native inactive-to-active interlock.
+#[path = "publish.rs"]
+mod publish;
 #[path = "ready.rs"]
 mod ready;
 use super::super::super::{BYTES as ROUTE_BYTES, decode as decode_route};
 use super::super::{GUARD_BYTES, INTENT_BYTES};
+#[cfg(test)]
+use super::Digest;
 use super::{
-    Birth, Checked, Digest, File, Guard, HeldDir, Intent, MOVE_PARENT, OpaquePin, ReadAccess,
-    Selected, Source, absent, birth, invalid, no_replace, pin,
+    Birth, Checked, File, Guard, HeldDir, Intent, MOVE_PARENT, OpaquePin, ReadAccess, Selected,
+    Source, absent, birth, invalid, no_replace, pin,
     proof::{Expect, Proof},
     read_raw, same_file,
 };
+use ready::{
+    HeldReady,
+    switch::{HeldSwitch, retire},
+};
+pub(crate) use retire::Completion;
+pub(super) use retire::{HistoryRequest, history};
 use std::{
     ffi::CStr,
     io::{self, Write},
@@ -54,12 +64,28 @@ impl Route {
     }
 
     fn durable_vacancies(&self, selected: &Selected<'_>) -> io::Result<()> {
-        self.durable_vacancies_with(selected, || selected.vacancies(true))
+        self.durable_copy_vacancies(selected, false)
     }
 
+    fn durable_copy_vacancies(&self, selected: &Selected<'_>, resuming: bool) -> io::Result<()> {
+        self.durable_positions_with(selected, resuming, || {
+            selected.vacancies_for_copy(true, resuming)
+        })
+    }
+
+    #[cfg(test)]
     fn durable_vacancies_with(
         &self,
         selected: &Selected<'_>,
+        flush: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
+        self.durable_positions_with(selected, false, flush)
+    }
+
+    fn durable_positions_with(
+        &self,
+        selected: &Selected<'_>,
+        resuming: bool,
         flush: impl FnOnce() -> io::Result<()>,
     ) -> io::Result<()> {
         // The exact old CR1 must still be the selected incarnation after
@@ -68,7 +94,7 @@ impl Route {
         self.require(selected)?;
         flush()?;
         self.require(selected)?;
-        selected.vacancies(false)
+        selected.vacancies_for_copy(false, resuming)
     }
 }
 
@@ -87,6 +113,7 @@ impl BoundJournal {
         route: &Route,
         source: &Source,
         has_guard: bool,
+        resuming: bool,
     ) -> io::Result<Self> {
         let (parent, directory, fresh) = positions(selected, has_guard)?;
         let candidate = intend(selected, route, source, &directory)?;
@@ -101,10 +128,10 @@ impl BoundJournal {
             sidecar.require(&directory, PROOF)?;
             (create(&directory, I, &raw)?, sidecar)
         } else {
-            require_pre_ready_files(&directory)?;
+            require_pre_ready_files(&directory, resuming)?;
             (pin(&directory, I)?, pin(&directory, PROOF)?)
         };
-        require_pre_ready_files(&directory)?;
+        require_pre_ready_files(&directory, resuming)?;
         Self::bind((parent, directory), (record, sidecar), &candidate, source)
     }
 
@@ -152,20 +179,20 @@ impl BoundJournal {
         Ok((journal, found_proof))
     }
 
-    fn settle(&self, selected: &Selected<'_>) -> io::Result<()> {
-        self.require()?;
+    fn settle(&self, selected: &Selected<'_>, resuming: bool) -> io::Result<()> {
+        self.require(resuming)?;
         (selected.outer)()?;
         self.sidecar.file.sync_all()?;
         self.record.file.sync_all()?;
         self.directory.file.sync_all()?;
         self.parent.file.sync_all()?;
         selected.roots.system.file.sync_all()?;
-        self.require()?;
+        self.require(resuming)?;
         selected.require()
     }
 
-    fn require(&self) -> io::Result<()> {
-        require_pre_ready_files(&self.directory)?;
+    fn require(&self, resuming: bool) -> io::Result<()> {
+        require_pre_ready_files(&self.directory, resuming)?;
         self.require_original()
     }
 
@@ -205,7 +232,7 @@ fn positions(selected: &Selected<'_>, has_guard: bool) -> io::Result<(HeldDir, H
     Ok((parent, directory, fresh))
 }
 
-fn require_pre_ready_files(directory: &HeldDir) -> io::Result<()> {
+fn require_pre_ready_files(directory: &HeldDir, resuming: bool) -> io::Result<()> {
     let mut files = (false, false);
     directory.each_name(ReadAccess::NoAtime, |name| match name {
         b"INTENT" if !files.0 => {
@@ -216,6 +243,7 @@ fn require_pre_ready_files(directory: &HeldDir) -> io::Result<()> {
             files.1 = true;
             Ok(())
         }
+        b"target-proof" | b"new-route" if resuming => Ok(()),
         _ => Err(invalid("the DATA move journal is not strictly pre-READY")),
     })?;
     if files != (true, true) {
@@ -292,34 +320,55 @@ pub(super) struct Pending<'held, 'scope> {
     route: Route,
     source: Source,
     journal: BoundJournal,
+    resuming_copy: bool,
 }
 
 impl<'held, 'scope> Pending<'held, 'scope> {
     pub(super) fn prepare(selected: &'held Selected<'scope>) -> io::Result<Self> {
         selected.pre_ready_names()?;
+        if let Some(parent) = selected.roots.system.child_directory(MOVE_PARENT)? {
+            for stage in [c"SWITCHED", c"DONE"] {
+                absent(&parent, &publish::scoped_leaf(selected.scope, stage, true)?)?;
+            }
+        }
         let state = selected.roots.state;
-        let has_guard = state.pin_record(&selected.names.active)?.is_some()
-            || state.pin_record(&selected.names.inactive)?.is_some();
+        let active = state.pin_record(&selected.names.active)?.is_some();
+        let has_guard = active || state.pin_record(&selected.names.inactive)?.is_some();
+        let resuming_copy = selected
+            .target_staging
+            .pin_record(&selected.names.target_stage)?
+            .is_some();
+        if resuming_copy && !active {
+            return Err(invalid(
+                "the target scratch does not have its original active guard",
+            ));
+        }
         let route = Route::original(selected)?;
-        selected.vacancies(false)?;
+        selected.vacancies_for_copy(false, resuming_copy)?;
         let source = selected.observe_source()?;
         route.require(selected)?;
-        let journal = BoundJournal::open(selected, &route, &source, has_guard)?;
+        let journal = BoundJournal::open(selected, &route, &source, has_guard, resuming_copy)?;
         let result = Self {
             selected,
             route,
             source,
             journal,
+            resuming_copy,
         };
         result.require_held()?;
         result.require_existing_guard_shape()?;
-        result.route.durable_vacancies(selected)?;
-        result.journal.settle(selected)?;
+        result
+            .route
+            .durable_copy_vacancies(selected, resuming_copy)?;
+        if !resuming_copy {
+            result.journal.settle(selected, false)?;
+        }
         result.require_held()?;
         Ok(result)
     }
 
-    pub(super) fn id(&self) -> Digest {
+    #[cfg(test)]
+    pub(super) fn id(&self) -> super::Digest {
         self.journal.original.id()
     }
 
@@ -336,7 +385,7 @@ impl<'held, 'scope> Pending<'held, 'scope> {
 
     fn require_held(&self) -> io::Result<()> {
         (self.selected.outer)()?;
-        require_pre_ready_files(&self.journal.directory)?;
+        require_pre_ready_files(&self.journal.directory, self.resuming_copy)?;
         self.require_bound()
     }
 
@@ -367,12 +416,16 @@ impl<'held, 'scope> Pending<'held, 'scope> {
         self.require_held()?;
         selected.pre_ready_names()?;
         self.source.require_same(&selected.observe_source()?)?;
-        self.route.durable_vacancies(selected)?;
+        self.route
+            .durable_copy_vacancies(selected, self.resuming_copy)?;
         let holding =
             if let Some(original) = HeldGuard::open(state, active, &self.journal.original)? {
                 absent(state, draft)?;
                 original
             } else {
+                if self.resuming_copy {
+                    return Err(invalid("the resumed copy lost its originally active guard"));
+                }
                 let prior = HeldGuard::open(state, draft, &self.journal.original)?
                     .map_or_else(|| self.stage_guard(state, draft), Ok)?;
                 // A known visible but unconfirmed inactive prep is not yet G.
@@ -465,7 +518,8 @@ impl HeldGuard {
         self.pin.require(state, name)
     }
 
-    pub(super) fn id(&self) -> Digest {
+    #[cfg(test)]
+    pub(super) fn id(&self) -> super::Digest {
         self.checked.id()
     }
 }
@@ -473,3 +527,40 @@ impl HeldGuard {
 #[cfg(test)]
 #[path = "../../../../tests/unit/data_move_native.rs"]
 mod tests;
+pub(super) fn advance(
+    selected: &Selected<'_>,
+    journal: Option<&HeldDir>,
+) -> io::Result<Completion> {
+    if let Some(journal) = journal {
+        journal.require_named()?;
+        if journal.pin_record(c"SWITCHED")?.is_some() {
+            return retire::resume(selected);
+        }
+        if journal.pin_record(c"READY")?.is_some() {
+            let name = &selected.names.cid;
+            let canonical = pin(&selected.routes, name)?;
+            let bytes = read_raw(&canonical, ROUTE_BYTES)?
+                .try_into()
+                .map_err(|_| invalid("canonical DATA move route has an invalid extent"))?;
+            let (id, token) = decode_route(bytes)?;
+            canonical.require(&selected.routes, name)?;
+            if id != selected.scope.container {
+                return Err(invalid("canonical DATA move route has the wrong container"));
+            }
+            if token == selected.roots.data.1.token {
+                return HeldSwitch::resume(selected)?.complete();
+            }
+            if token != selected.roots.data.0.token {
+                return Err(invalid(
+                    "canonical DATA move route selects neither original role",
+                ));
+            }
+            return HeldReady::reopen(selected)?.arrive()?.switch()?.complete();
+        }
+    }
+    Pending::prepare(selected)?
+        .copy_to_ready()?
+        .arrive()?
+        .switch()?
+        .complete()
+}

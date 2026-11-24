@@ -21,18 +21,13 @@ pub(super) struct Tree {
 }
 
 impl Tree {
-    pub(super) fn copy(armed: &Armed<'_, '_>, proof: &Proof<'_>) -> io::Result<Self> {
+    pub(super) fn copy(armed: &Armed<'_, '_>, proof: &Proof<'_>, at: HeldDir) -> io::Result<Self> {
         let plan = &armed.plan;
         let selected = plan.selected;
-        let storage = &selected.target_staging;
         let source = &plan.source.original;
-        if source.entity.device == storage.entity.device || source.same_mount(storage)? {
-            return Err(invalid("DATA move staging is not on a distinct filesystem"));
-        }
-        let at = storage.new_child_directory_when(&selected.names.target_stage, || {
-            armed.require_leaf(storage)
-        })?;
-        let live = selected.outer;
+        armed.require_leaf(&at)?;
+        at.only(None)?;
+        let live = selected.pulse;
         let mut evidence = source::walk(source, selected.scope, live, |receipt| {
             let input = Member::open(source, receipt)?;
             if input.row != proof.for_receipt(receipt)? {
@@ -71,6 +66,14 @@ impl Tree {
             return Err(invalid("the cold DATA move target differs from READY"));
         }
         Ok(Self { at, bytes })
+    }
+
+    pub(super) fn current_metadata(armed: &Armed<'_, '_>, at: &HeldDir) -> io::Result<Vec<u8>> {
+        observe(
+            (armed.plan.selected, &armed.plan.journal.original),
+            at,
+            None,
+        )
     }
 
     pub(super) fn require_metadata(&self, armed: &Armed<'_, '_>) -> io::Result<()> {
@@ -126,7 +129,7 @@ fn copy_payload(
     armed.require_leaf(output)?;
     input.require()?;
     let mut raw = output.create_opaque_record(c"payload")?;
-    check_body(body, &source.file, &mut raw, armed.plan.selected.outer)?;
+    check_body(body, &source.file, &mut raw, armed.plan.selected.pulse)?;
     // Pin the output of the completed write before the next lifecycle cut.
     // An equal-length change at that cut must not become the copied witness.
     let exact = pin_written(output, c"payload", &raw)?;
@@ -150,7 +153,7 @@ fn observe(
     at: &HeldDir,
     full: Option<&Proof<'_>>,
 ) -> io::Result<Vec<u8>> {
-    let live = selected.outer;
+    let live = selected.pulse;
     let mut evidence = source::walk(at, selected.scope, live, |receipt| {
         let member = Member::open(at, receipt)?;
         if let Some(expect) = full {
@@ -185,7 +188,7 @@ fn bind(intent: &Checked<Intent>, at: &HeldDir, evidence: &mut Evidence) -> io::
     evidence.bind(Side::Target, i.scope, i.target, at.entity.inode)
 }
 
-fn check_body(
+pub(super) fn check_body(
     body: &Body,
     file: &File,
     output: &mut impl Write,

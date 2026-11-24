@@ -1,8 +1,8 @@
 //! Waitable children for the exact installed ZXS offline workers.
 use super::{bad, transport::Channel};
 use helper_linux_evidence::diagnostic_process::{
-    prepare_import_batch_exec, prepare_import_one_exec, prepare_init_data_exec,
-    prepare_verify_container_exec, require_waitable_children,
+    prepare_data_move_exec, prepare_import_batch_exec, prepare_import_one_exec,
+    prepare_init_data_exec, prepare_verify_container_exec, require_waitable_children,
 };
 use rustix::{
     io::Errno,
@@ -49,6 +49,14 @@ impl Worker {
         lease: &File,
     ) -> io::Result<Self> {
         Self::spawn_storage(exe, peer, order, lease, prepare_verify_container_exec)
+    }
+    pub(crate) fn spawn_data_move(
+        exe: &File,
+        peer: &File,
+        order: &File,
+        lease: &File,
+    ) -> io::Result<Self> {
+        Self::spawn_storage(exe, peer, order, lease, prepare_data_move_exec)
     }
     pub(crate) fn spawn_data_init(
         exe: &File,
@@ -127,6 +135,12 @@ impl Worker {
     }
     pub(crate) fn finish_verify(&mut self, channel: &Channel) -> io::Result<()> {
         self.finish_offline(channel, "the original verify worker did not exit normally")
+    }
+    pub(crate) fn finish_data_move(&mut self, channel: &Channel) -> io::Result<()> {
+        self.finish_offline(
+            channel,
+            "the original DATA move worker did not exit normally",
+        )
     }
     fn finish_offline(&mut self, channel: &Channel, failure: &'static str) -> io::Result<()> {
         let status = self.child.wait()?;

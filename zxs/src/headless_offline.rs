@@ -48,6 +48,18 @@ impl OfflineFence {
 }
 
 pub(super) fn retain() -> io::Result<(OfflineFence, SelectedStart)> {
+    retain_with(crate::container_store::require_move_absent)
+}
+
+pub(super) fn retain_for_move(
+    request: crate::container_store::MoveRequest,
+) -> io::Result<(OfflineFence, SelectedStart)> {
+    retain_with(|state| crate::container_store::require_move_scope(state, request))
+}
+
+fn retain_with(
+    check_stage: impl FnOnce(&HeldDir) -> io::Result<()>,
+) -> io::Result<(OfflineFence, SelectedStart)> {
     let uid = local_uid();
     if matches!(uid, 0 | 65534 | u32::MAX) {
         return Err(refused());
@@ -55,6 +67,7 @@ pub(super) fn retain() -> io::Result<(OfflineFence, SelectedStart)> {
     let lease = File::from(io::stdin().as_fd().try_clone_to_owned()?);
     let state = TrustedRoot::open(Path::new(DEFAULT_STATE))?;
     verify_lease(&lease, &state.held, uid)?;
+    check_stage(&state.held)?;
     let original = state
         .held
         .opaque_pin_with(DESCRIPTOR, ReadAccess::NoAtime)?

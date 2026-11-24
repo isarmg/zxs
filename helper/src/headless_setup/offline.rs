@@ -6,6 +6,7 @@ use super::{
 };
 use crate::pinned::Entity;
 use rustix::fs::{FlockOperation, Mode, OFlags, RawDir, ResolveFlags, flock, openat, openat2};
+use sha2::{Digest, Sha256};
 use std::{
     fs::{File, Metadata},
     io::{self, Read},
@@ -16,9 +17,8 @@ use std::{
 use zeroize::Zeroizing;
 
 mod add_data;
-#[cfg(test)]
-#[path = "../../tests/maintenance/disk_move_evidence.rs"]
-mod disk_move_evidence;
+mod disk_move;
+pub(crate) use disk_move::DiskMove;
 pub(super) mod import_command;
 mod import_one;
 mod init_data;
@@ -98,6 +98,10 @@ fn read(dir: &File, name: &str, uid: u32) -> io::Result<Record> {
     Ok(Record { held, meta, full })
 }
 
+fn is_other_stage(name: &[u8], allowed: Option<&str>) -> bool {
+    name.starts_with(b".server-stage-") && allowed.map(str::as_bytes) != Some(name)
+}
+
 fn require_no_stage(dir: &File, allowed_stage: Option<&str>) -> io::Result<()> {
     let reader = File::from(openat2(
         dir,
@@ -111,7 +115,7 @@ fn require_no_stage(dir: &File, allowed_stage: Option<&str>) -> io::Result<()> {
     while let Some(row) = rows.next() {
         let row = row?;
         let name = row.file_name().to_bytes();
-        if name.starts_with(b".server-stage-") && allowed_stage.map(str::as_bytes) != Some(name) {
+        if is_other_stage(name, allowed_stage) {
             return Err(io::Error::other(
                 "an original descriptor stage remains; preserve it for offline inspection",
             ));
@@ -128,6 +132,47 @@ fn field<'a>(raw: &mut &'a [u8], len: usize) -> io::Result<&'a [u8]> {
 
 fn fixed<const N: usize>(raw: &mut &[u8]) -> io::Result<[u8; N]> {
     field(raw, N)?.try_into().map_err(|_| refused())
+}
+
+fn parse_id(text: &str) -> Option<[u8; 16]> {
+    fn nibble(byte: u8) -> Option<u8> {
+        match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            _ => None,
+        }
+    }
+    let raw: &[u8; 32] = text.as_bytes().try_into().ok()?;
+    let mut id = [0; 16];
+    let (pairs, _) = raw.as_chunks::<2>();
+    for (value, two) in id.iter_mut().zip(pairs) {
+        *value = (nibble(two[0])? << 4) | nibble(two[1])?;
+    }
+    (id != [0; 16]).then_some(id)
+}
+
+fn live_role_binding(
+    domain: &[u8],
+    descriptor: &[u8; 32],
+    roles: &[[u64; 3]],
+) -> io::Result<[u8; 32]> {
+    if !(3..=64).contains(&roles.len()) {
+        return Err(refused());
+    }
+    let count = u8::try_from(roles.len()).map_err(|_| refused())?;
+    let mut hash = Sha256::new();
+    hash.update(domain);
+    hash.update(descriptor);
+    hash.update([count]);
+    for &[device, inode, mount] in roles {
+        if inode == 0 || mount == 0 {
+            return Err(refused());
+        }
+        hash.update(device.to_be_bytes());
+        hash.update(inode.to_be_bytes());
+        hash.update(mount.to_be_bytes());
+    }
+    Ok(hash.finalize().into())
 }
 
 impl SelectedRoles {
@@ -227,6 +272,22 @@ impl SelectedRoles {
 }
 
 impl OfflineSession {
+    fn role_binding(&self, domain: &[u8]) -> io::Result<[u8; 32]> {
+        // The original roster is already checked against the protected descriptor.
+        // Hash the exact first held roots, not a replacement reopened by name.
+        let roles = self
+            .selected
+            .roots
+            .iter()
+            .map(|root| {
+                let (entity, mount) = require_held(&root.input(), self.selected.uid)?;
+                Ok([entity.dev, entity.ino, mount.id])
+            })
+            .collect::<io::Result<Vec<_>>>()?;
+        let descriptor = Sha256::digest(self.original.full.as_slice()).into();
+        live_role_binding(domain, &descriptor, &roles)
+    }
+
     fn data_token(&self, bytes: &[u8]) -> io::Result<[u8; 32]> {
         self.selected
             .roots

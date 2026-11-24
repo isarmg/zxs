@@ -139,6 +139,26 @@ pub fn prepare_verify_container_exec(
     )
 }
 
+/// Invoke only the fixed offline DATA mover on the original executable.
+///
+/// # Errors
+/// Fails if the exact executable, control socket or sealed order cannot be retained.
+pub fn prepare_data_move_exec(
+    cmd: &mut Command,
+    original: &File,
+    channel: &File,
+    order: &File,
+) -> io::Result<()> {
+    prepare_fixed_peer_exec(
+        cmd,
+        original,
+        channel,
+        order,
+        c"zxs",
+        c"__offline-data-move-v1",
+    )
+}
+
 /// Select the dedicated enrolled-DATA initialization worker on the pinned binary.
 ///
 /// # Errors

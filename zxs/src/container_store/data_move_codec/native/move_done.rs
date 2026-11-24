@@ -1,5 +1,6 @@
 //! Historical DONE holds only the current STATE and SYSTEM roles, never old DATA.
 use super::super::super::super::super::{MAX_PRIVATE_ENTRIES, MOVE_PARENT, Names, Scope, child};
+use super::super::super::super::publish;
 use super::super::{R, READY_BYTES, TARGET};
 use super::{
     CStr, CUT_BYTES, D, Digest, Expect, FINISHED, File, HeldDir, HeldGuard, I, INTENT_BYTES,
@@ -16,7 +17,7 @@ const FIXED: [(&CStr, usize); 4] = [
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::container_store) enum Completion {
+pub(crate) enum Completion {
     Completed(Digest),
     Historical(Digest),
 }
@@ -159,6 +160,12 @@ impl<'a> BoundDone<'a> {
     fn require(&self, released: bool) -> io::Result<()> {
         self.request.require(&self.names)?;
         self.parent.require_named()?;
+        for name in [TARGET, c"new-route", super::super::R, S, D] {
+            absent(
+                &self.parent,
+                &publish::scoped_leaf(self.request.identity.0, name, true)?,
+            )?;
+        }
         self.directory.require_named()?;
         self.routes.require_named()?;
         require_layout(&self.directory, FINISHED)?;
