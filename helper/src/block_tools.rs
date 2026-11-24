@@ -142,12 +142,6 @@ pub(crate) struct Query {
     rates: bool,
 }
 impl Query {
-    pub(crate) fn inventory(rates: bool) -> Self {
-        Self {
-            device: None,
-            rates,
-        }
-    }
     pub(crate) fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
         use std::os::unix::ffi::OsStrExt;
         let (mut device, mut rates) = (None, false);

@@ -2,16 +2,6 @@
 use rustix::rand::{GetRandomFlags, getrandom};
 use std::io;
 
-/// Preserve the existing error for installation identities and repair offers.
-pub(crate) fn operation<const N: usize>() -> io::Result<[u8; N]> {
-    complete(|| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "incomplete or zero identity from the OS; nothing issued",
-        )
-    })
-}
-
 pub(crate) fn headless<const N: usize>() -> io::Result<[u8; N]> {
     complete(|| io::Error::other("OS did not return complete fresh randomness"))
 }

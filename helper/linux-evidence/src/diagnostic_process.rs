@@ -5,10 +5,7 @@ use std::{
     fs::File,
     io,
     mem::MaybeUninit,
-    os::{
-        fd::AsRawFd,
-        unix::process::CommandExt,
-    },
+    os::{fd::AsRawFd, unix::process::CommandExt},
     process::Command,
 };
 

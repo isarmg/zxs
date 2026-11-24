@@ -72,7 +72,8 @@ impl Fixture {
 
     fn write(&self, receipt: &[u8]) {
         record(
-            &self.scratch
+            &self
+                .scratch
                 .path()
                 .join("system/container-moves")
                 .join(hex(&CID)),

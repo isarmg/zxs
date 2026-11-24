@@ -76,7 +76,7 @@ pub(super) fn passive_mountinfo() -> io::Result<File> {
 const STATUS_MAX: usize = 64 * 1024;
 
 /// Process-local sandbox eligibility only. Does not consult a pool or issue
-/// maintenance authority. A fresh CLI sets NoNewPrivs before taking maintenance custody.
+/// maintenance authority. A fresh CLI sets `NoNewPrivs` before taking maintenance custody.
 pub(crate) fn diagnostic_worker(uid: u32, gid: u32) -> io::Result<()> {
     let mut data = Vec::new();
     thread_file(c"thread-self/status")?

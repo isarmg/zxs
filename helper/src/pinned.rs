@@ -576,9 +576,6 @@ impl LocalDataFile {
     pub(crate) fn require_same_path(&self) -> io::Result<()> {
         self.pin.require_same_path()
     }
-    pub(crate) fn require_named_mount(&self) -> io::Result<Mount> {
-        self.pin.require_same_named_mount()
-    }
 
     // Selection keeps the admitted regular-file handle alive. Reopening the operand's
     // pathname instead could read a different object or open a device or FIFO.

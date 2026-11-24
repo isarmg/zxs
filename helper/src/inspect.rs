@@ -1,4 +1,4 @@
-use crate::pinned::{Entity, Kind, LocalDataFile, Mount, Pinned, invalid};
+use crate::pinned::{Entity, Kind, LocalDataFile, Pinned, invalid};
 use std::fmt::Write as _;
 use std::fs::{File, Metadata};
 use std::io::{self, Read};
@@ -65,9 +65,6 @@ impl Stamp {
             changed: (meta.ctime(), meta.ctime_nsec()),
         })
     }
-    pub(crate) fn len(&self) -> u64 {
-        self.size
-    }
 }
 
 pub(crate) struct Input {
@@ -89,18 +86,6 @@ impl Input {
             ));
         }
         Ok(Self { pinned, stamp })
-    }
-    pub(crate) fn len(&self) -> u64 {
-        self.stamp.size
-    }
-    // An ext image is carried through a name-resolving readonly bind, not
-    // copied into a second file. Also require the current name's original mount.
-    pub(crate) fn copy_mount(&self) -> io::Result<Mount> {
-        let mount = self.pinned.require_named_mount()?;
-        if Stamp::of(&self.pinned.metadata()?)? != self.stamp {
-            return Err(invalid("selected copy metadata changed"));
-        }
-        Ok(mount)
     }
     pub(crate) fn reader(&self) -> io::Result<File> {
         let file = self.pinned.reader()?;

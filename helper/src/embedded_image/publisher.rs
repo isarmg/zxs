@@ -9,8 +9,8 @@ use super::{
     verify,
 };
 use crate::{
-    foreground::PublicConfirmation,
     asset_digest::lower_hex,
+    foreground::PublicConfirmation,
     path_rules::QuotedPath,
     pinned::{Entity, Mount},
     product_layout,

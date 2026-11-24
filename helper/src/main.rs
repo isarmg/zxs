@@ -305,7 +305,10 @@ mod arguments {
             reject(name, &["/saved/volume", "--sha256", &digest]);
         }
         for name in ["repair-fat32-copy", "repair-exfat-copy", "repair-ext4-copy"] {
-            reject(name, &["/saved/volume", "--sha256", &digest, "--output", "/new-dir"]);
+            reject(
+                name,
+                &["/saved/volume", "--sha256", &digest, "--output", "/new-dir"],
+            );
         }
         for name in [
             "__fat32-sealed-v1",
