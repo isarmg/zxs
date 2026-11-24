@@ -221,12 +221,14 @@ class Smoke:
                             "node_id": node, "length": len(body), "sha256": digest(body),
                             "target": target}, "SAVE receipt does not exactly identify original content")
 
-    def send_without_reading(self, method, target, fields, body, operation):
-        wire = (f"{method} {target} HTTP/1.1\r\nHost: {HOST}:{PORT}\r\n"
+    def wire_head(self, method, target, fields):
+        return (f"{method} {target} HTTP/1.1\r\nHost: {HOST}:{PORT}\r\n"
                 f"Authorization: {self.authorization}\r\n"
                 + "".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n").encode("ascii")
+
+    def send_without_reading(self, method, target, fields, body, operation):
         with socket.create_connection((HOST, PORT), timeout=15) as discarded:
-            discarded.sendall(wire + body)
+            discarded.sendall(self.wire_head(method, target, fields) + body)
             deadline = time.monotonic() + 40
             while time.monotonic() < deadline:
                 status, raw = self.request("GET", self.container + "/operations/" + operation,
@@ -237,6 +239,56 @@ class Smoke:
                 require(receipt == {"state": "not_found"}, "unknown operation state")
                 time.sleep(0.2)
         raise RuntimeError("receipt not visible after reply was discarded")
+
+    def interrupt_append(self, endpoint, append, before, after, original_receipt):
+        staging = self.physical_container(self.container).parents[1] / "staging"
+        require(not any(staging.iterdir()), "unexpected previous fixture intake")
+        part = after[:len(after) // 2]
+        require(0 < len(part) < len(after), "fixture must actually omit part of the declared body")
+        with socket.create_connection((HOST, PORT), timeout=15) as client:
+            client.sendall(self.wire_head("POST", endpoint, append) + part)
+            deadline = time.monotonic() + 25
+            while time.monotonic() < deadline:
+                stages = tuple(staging.iterdir())
+                require(len(stages) <= 1, "more than one fixture intake stage")
+                if stages:
+                    stage = stages[0]
+                    require(stage.resolve(strict=True) == stage and stage.is_dir(),
+                            "unexpected fixture intake stage")
+                    payload = stage / "payload"
+                    try:
+                        info = payload.lstat()
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        require(payload.is_file() and not payload.is_symlink() and info.st_size <= len(part),
+                                "unexpected fixture intake payload")
+                        if info.st_size == len(part):
+                            with payload.open("rb") as staged:
+                                require(staged.read(len(part) + 1) == part,
+                                        "fixture intake payload differs from the exact sent prefix")
+                            break
+                time.sleep(0.1)
+            else:
+                raise RuntimeError("server never staged the exact sent prefix")
+            # No more upload bytes can follow, but the peer can still return
+            # its exact application rejection. This is not a process kill.
+            client.shutdown(socket.SHUT_WR)
+            with http.client.HTTPResponse(client, method="POST") as reply:
+                reply.begin()
+                require(reply.status == 422 and reply.headers.get_all("Content-Length") == ["0"]
+                        and reply.read(1) == b"", "interrupted body did not receive exact length rejection")
+
+        require(not any(staging.iterdir()), "unpublished fixture intake was not removed")
+        require(self.receipt(self.next_operation, 404) == {"state": "not_found"}
+                and self.receipt(self.first_operation) == original_receipt,
+                "incomplete upload selected evidence or changed the original receipt")
+        _, raw = self.request("GET", self.container, 200, headers={"Zxs-Detail": "paged"})
+        detail = json.loads(raw)
+        require(detail["sequence"] == 1 and detail["heads"] == [{"branch": "main", "head": self.first_node}],
+                "incomplete upload changed the existing head or sequence")
+        self.request("GET", self.container + "/nodes/" + self.next_node + "/data", 404)
+        self.read_body(self.first_node, before)
 
     def physical_container(self, container):
         leaf = container.rsplit("/", 1)[1]
@@ -314,6 +366,9 @@ class Smoke:
         require(self.receipt(self.next_operation, 404) == {"state": "not_found"},
                 "new operation is not absent")
 
+        self.interrupt_append(endpoint, append, base, new, receipt)
+
+        # Retry the same operation with exactly the originally declared body.
         # Send the complete request but never read the reply. This represents a
         # lost client reply, not power loss. Wait for the *same* operation receipt.
         accepted = self.send_without_reading("POST", endpoint, append, new, self.next_operation)
@@ -330,6 +385,7 @@ class Smoke:
                 "retry changed the sequence or main head")
         self.read_body(self.first_node, base)
         self.read_body(self.next_node, new)
+        print("ZXS-PRODUCT-SMOKE interrupted staged upload preserved old body and same ID completed", flush=True)
         self.recycle(receipt, accepted, base, new)
 
 

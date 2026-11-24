@@ -23,7 +23,7 @@
 
 ### Linux 一次性客机产品冒烟
 
-手动工作流 [Linux disposable ZXS product smoke](../.github/workflows/linux-guest-product-smoke.yml) 从同一提交构建 Helper 与 ZXS，无网卡客机内用普通服务账号在真实终端完成首设，并在本机 HTTP 入口验证完整首节点、完整追加、两块 DATA 分别落盘、跨卷回收并核对原正文，及保存和回收未读取应答后的正常重启、同号重试。停机后卸载一块已登记 DATA，核对冷启动明确拒绝底层空挂载点；原盘重新挂载后，同一命令必须能启动。盘均为该作业新建的独立文件系统。它不验证运行时掉盘、介质断电、Workspace/FUSE 或外部 HTTPS，也不生成发行制品。源码已准备，尚未运行。
+手动工作流 [Linux disposable ZXS product smoke](../.github/workflows/linux-guest-product-smoke.yml) 从同一提交构建 Helper 与 ZXS，无网卡客机内用普通服务账号在真实终端完成首设，并在本机 HTTP 入口验证完整首节点、完整追加、已暂存但未传完的正常中断及同号完成、两块 DATA 分别落盘、跨卷回收并核对原正文，及保存和回收未读取应答后的正常重启、同号重试。停机后卸载一块已登记 DATA，核对冷启动明确拒绝底层空挂载点；原盘重新挂载后，同一命令必须能启动。盘均为该作业新建的独立文件系统。它不验证运行时掉盘、介质断电、Workspace/FUSE 或外部 HTTPS，也不生成发行制品。源码已准备，尚未运行。
 
 
 选择同一手动工作流的 `workspace_h2` 选项，可另验同一提交的 Workspace HTTPS 客户端在客机回环真实协商 HTTP/2、全量提交、查询原回执及读取完整正文。测试证书及转接只存在于无外部网卡客机；不修改产品入口，也不启动 Qt 或挂载 FUSE。此额外路径尚未运行。

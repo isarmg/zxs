@@ -471,6 +471,7 @@ jobs:
             tr -d '\r' < serial.log | grep -aE '^ZXS-(PRODUCT-SMOKE|WORKSPACE-H2|WORKSPACE-FUSE) ' || true
           fi
           test "$boot_status" -eq 0
+          test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-PRODUCT-SMOKE interrupted staged upload preserved old body and same ID completed')" -eq 1
           test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-PRODUCT-SMOKE setup, full append, two DATA disks, recycle and exact retries passed')" -eq 1
           test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-PRODUCT-SMOKE cold start rejected absent enrolled DATA disk')" -eq 1
           test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-PRODUCT-SMOKE same service became ready after original DATA remount')" -eq 1
