@@ -23,7 +23,7 @@
 | [外部文件导入](../helper/docs/guides/offline-imports.md) | [仅静态] [固定批次](docs/specs/offline-import-batch.md)仍需跨进程验父进程失答、原回执无源重放和半批恢复。保留来源；不就地覆盖非空盘，不迁移旧池。 |
 | 运行时断电、掉盘与权限变化 | [仅静态] 验缺盘冷启动、原盘恢复、其他容器独立可用、离线盘相关全局结果拒绝、掉电后的确定回执以及撤权不误报未找到。 |
 | [会话与后端复用](docs/specs/sessions.md) | [仅静态] 待已验证的 HTTPS/H2 入口确认新旧模式、到期、重启与只读原回执找回。 |
-| [分块上传与续传](docs/specs/resumable-uploads.md) | [设计中] R3 写入仍传整份文件；Range 读取与同号查回执都不等于按偏移续传。 |
+| [分块上传与续传](docs/specs/resumable-uploads.md) | [仅静态] 已接入正式监听，旧 R3 不变。[真实会话与流式中转验收](docs/guides/resumable-upload-installed-qualification.md)待跑，覆盖慢块、断流、重开与原回执。 |
 
 ## 可复核的验收入口
 

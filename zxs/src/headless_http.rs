@@ -2,7 +2,6 @@
 mod browse;
 mod payload;
 mod reuse;
-#[cfg(test)]
 pub(crate) mod upload;
 
 pub(crate) use payload::PayloadReply;
@@ -11,6 +10,7 @@ pub(super) use reuse::ReuseBudget;
 use reuse::{BackendProfile, MAX_EXCHANGES, NEXT_HEAD, can_reuse, profile, session_outcome};
 
 use crate::{
+    container_store::upload::{Scope, Uploads},
     headless_auth::{Account, AuthError},
     workspace_protocol::{self, Request},
 };
@@ -93,6 +93,7 @@ pub(crate) enum Problem {
     LoginThrottled(u64),
     Denied,
     Missing,
+    UploadAbsent,
     Conflict,
     TooLarge,
     InvalidBody,
@@ -105,7 +106,7 @@ impl Problem {
             Self::Unauthorized | Self::BearerUnauthorized => "401 Unauthorized",
             Self::LoginThrottled(_) => "429 Too Many Requests",
             Self::Denied => "403 Forbidden",
-            Self::Missing => "404 Not Found",
+            Self::Missing | Self::UploadAbsent => "404 Not Found",
             Self::Conflict => "409 Conflict",
             Self::TooLarge => "413 Content Too Large",
             Self::InvalidBody => "422 Unprocessable Content",
@@ -226,11 +227,12 @@ fn head(raw: &[u8]) -> Result<Head<'_>, Problem> {
 
 /// One bounded reader serves the accepted socket through complete sequential v1
 /// exchanges. A legacy Basic request still performs one exchange and closes.
-pub(crate) fn serve_connection(
+pub(crate) fn serve_connection<'store>(
     account: &Account,
     stream: &TcpStream,
     stopping: &dyn Fn() -> bool,
     budget: &ReuseBudget,
+    bind_upload: impl Fn(Scope) -> io::Result<Uploads<'store>>,
     dispatch: impl Fn(Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome,
 ) -> io::Result<()> {
     let mut input = BufReader::new(stream);
@@ -263,6 +265,15 @@ pub(crate) fn serve_connection(
         let mode = profile(&head);
         let reply = match mode {
             BackendProfile::Login => session_outcome(account, &head, stopping).into(),
+            BackendProfile::Upload => {
+                let mut ingress = upload::Ingress {
+                    now: &Instant::now,
+                    wait: &mut |left| stream.set_read_timeout(Some(left)),
+                    stopping,
+                };
+                upload::resource(&bind_upload, account, &head, &mut input, &mut ingress)
+                    .unwrap_or_else(|problem| Outcome::Failed(problem).into())
+            }
             BackendProfile::Legacy | BackendProfile::Bearer => {
                 let Some(reply) = resource(account, &head, &mut input, mode, stopping, &dispatch)
                 else {
@@ -394,6 +405,7 @@ struct HeaderExtras {
     etag: Option<[u8; 32]>,
     content_range: Option<ContentRange>,
     accept_ranges: bool,
+    upload_absent: bool,
 }
 
 fn headers(
@@ -417,6 +429,9 @@ fn headers(
     }
     if let Some(seconds) = extras.retry_after {
         write!(output, "Retry-After: {seconds}\r\n")?;
+    }
+    if extras.upload_absent {
+        output.write_all(b"Zxs-Upload-Status: not-found\r\n")?;
     }
     write!(output, "Content-Length: {length}\r\n")?;
     if let Some(digest) = extras.digest {
@@ -458,6 +473,7 @@ fn write_problem(output: &mut impl Write, problem: Problem) -> io::Result<()> {
         Problem::Unauthorized => extras.challenge = Some("Basic realm=\"zxs\", charset=\"UTF-8\""),
         Problem::BearerUnauthorized => extras.challenge = Some("Bearer"),
         Problem::LoginThrottled(seconds) => extras.retry_after = Some(seconds),
+        Problem::UploadAbsent => extras.upload_absent = true,
         _ => {}
     }
     headers(output, problem.status(), None, 0, false, extras)

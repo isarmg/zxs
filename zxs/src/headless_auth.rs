@@ -233,23 +233,31 @@ pub(crate) struct Permit<'owner> {
     expires: Option<Instant>,
 }
 
-/// A live bearer, not a Basic admission or a capability to mutate storage.
-pub(crate) struct BrowsePermit<'owner> {
+/// Evidence of the current account and expiry. This does not select a route
+/// or grant the holder access to a legacy mutation.
+pub(crate) struct BearerPermit<'owner> {
     original: Permit<'owner>,
     expires: Instant,
 }
 
 impl<'owner> Permit<'owner> {
-    pub(crate) fn browse(self) -> Result<BrowsePermit<'owner>, AuthError> {
+    pub(crate) fn bearer_evidence(self) -> Result<BearerPermit<'owner>, AuthError> {
         let expires = self.expires.ok_or(AuthError::Invalid)?;
-        Ok(BrowsePermit {
+        Ok(BearerPermit {
             original: self,
             expires,
         })
     }
 }
 
-impl BrowsePermit<'_> {
+impl BearerPermit<'_> {
+    pub(crate) fn upload_scope(&self) -> crate::container_store::upload::Scope {
+        crate::container_store::upload::Scope {
+            pool: self.original.pool,
+            epoch: self.original.epoch,
+        }
+    }
+
     pub(crate) fn require(
         &self,
         account: &Account,
@@ -373,45 +381,6 @@ impl Account {
 }
 
 impl Permit<'_> {
-    /// Staged upload-only path. Invalid from this *already authenticated*
-    /// check means exact Bearer expiry, not an arbitrary filesystem errno.
-    #[cfg(test)]
-    pub(crate) fn with_upload_admission<T>(
-        self,
-        account: &Account,
-        now: &dyn Fn() -> Instant,
-        stopping: &dyn Fn() -> bool,
-        one_request: impl FnOnce(
-            crate::container_store::upload::Scope,
-            &dyn Fn() -> Result<(), AuthError>,
-        ) -> T,
-    ) -> Result<T, AuthError> {
-        use crate::container_store::upload::Scope;
-
-        let expires = self.expires.ok_or(AuthError::Invalid)?;
-        let check = || {
-            if !std::ptr::eq(account, self.account)
-                || self.pool != account.pool
-                || self.epoch != account.epoch
-            {
-                return Err(AuthError::Unavailable);
-            }
-            account.require_open(stopping)?;
-            if now() >= expires {
-                return Err(AuthError::Invalid);
-            }
-            Ok(())
-        };
-        check()?;
-        Ok(one_request(
-            Scope {
-                pool: self.pool,
-                epoch: self.epoch,
-            },
-            &check,
-        ))
-    }
-
     /// HTTP adapter runs the new typed dispatch here (exactly one complete
     /// request). Check the permit before inspecting Store, and pass the
     /// borrowed predicate into selection. The predicate never takes a Store

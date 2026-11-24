@@ -21,6 +21,8 @@ cargo install --locked --path .
 
 离线 `open` 查看待决，不连网。重新明确认证后的 `reconcile` 自动按原号查回执，不自动重发。原基线更新不会覆盖你后来保存的内容。
 
+大文件需要分块时可显式选择[断点上传](docs/guides/resumable-upload.md)；不是默认传输方式。
+
 ## 本机代码包
 
 `bundle-diff /绝对/目录` 与 `bundle-pack /绝对/目录 /绝对/新文件.zip` 都用离线前缀。支持根 `.zxsignore`；当前只比对和生成标准 Deflate ZIP，不解包或提交 ZIP。

@@ -42,7 +42,6 @@ pub(super) fn project(reply: Reply) -> Result<Outcome, Problem> {
     Ok(Outcome::Json(out.0.into_bytes()))
 }
 
-#[cfg(test)]
 pub(super) fn upload(progress: core::upload::Progress) -> Result<Outcome, Problem> {
     use core::upload::Status;
 

@@ -27,6 +27,8 @@ pub use payloads::{ByteWindow, PayloadError, PayloadSession};
 mod receipts;
 #[cfg(target_os = "linux")]
 pub use receipts::ReceiptSession;
+#[cfg(target_os = "linux")]
+pub(crate) mod upload;
 
 const IDLE: Duration = Duration::from_secs(30);
 const CHUNK: usize = 64 * 1024;
@@ -147,13 +149,13 @@ impl H2Channel {
         })
     }
 
-    async fn request(
+    async fn open_stream(
         &self,
         mut request: Request<()>,
         auth: &HeaderValue,
-        upload: Option<(File, &Body)>,
+        end: bool,
         before_send: impl FnOnce() -> Result<()>,
-    ) -> Result<Response<RecvStream>> {
+    ) -> Result<(h2::client::ResponseFuture, SendStream<Bytes>)> {
         let target = request
             .uri()
             .path_and_query()
@@ -171,7 +173,19 @@ impl H2Channel {
             .insert(header::AUTHORIZATION, auth.clone());
         let mut available = timeout(IDLE, self.sender.clone().ready()).await??;
         before_send()?;
-        let (head, mut tx) = available.send_request(request, upload.is_none())?;
+        Ok(available.send_request(request, end)?)
+    }
+
+    async fn request(
+        &self,
+        request: Request<()>,
+        auth: &HeaderValue,
+        upload: Option<(File, &Body)>,
+        before_send: impl FnOnce() -> Result<()>,
+    ) -> Result<Response<RecvStream>> {
+        let (head, mut tx) = self
+            .open_stream(request, auth, upload.is_none(), before_send)
+            .await?;
         if let Some((file, expected)) = upload {
             send_complete(&mut tx, file, expected).await?;
         }

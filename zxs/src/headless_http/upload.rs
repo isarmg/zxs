@@ -1,18 +1,21 @@
-//! Staged authenticated adapter. Nothing in the production listener selects it.
-use super::{Head, Outcome, Problem, head, read_head, write_outcome};
+//! Explicit Bearer upload requests, on the same bounded backend connection.
+use super::{Head, Outcome, Problem, Reply, bearer_problem};
+#[cfg(test)]
+use super::{head, read_head, write_outcome};
+#[cfg(test)]
+use crate::{container_store::Store, fs::HeldDir};
 use crate::{
-    container_store::{
-        Store,
-        upload::{Authorize, expired_upload_authority},
-    },
-    fs::HeldDir,
-    headless_auth::{Account, AuthError},
+    container_store::upload::{Authorize, Scope, Uploads, expired_upload_authority},
+    headless_auth::{Account, AuthError, Permit},
     workspace_protocol::http::uploads,
 };
 use std::{
-    io::{self, BufRead, Read, Write},
+    io::{self, Read},
     time::{Duration, Instant},
 };
+
+#[cfg(test)]
+use std::io::{BufRead, Write};
 
 const RAW_INGRESS: Duration = Duration::from_secs(180);
 const CONTROL_INGRESS: Duration = Duration::from_secs(60);
@@ -80,13 +83,6 @@ impl<R: Read> Read for Timed<'_, '_, R> {
     }
 }
 
-fn auth_problem(error: AuthError) -> Problem {
-    match error {
-        AuthError::Invalid => Problem::BearerUnauthorized,
-        AuthError::Unavailable => Problem::Unavailable,
-    }
-}
-
 fn authority(error: AuthError) -> io::Error {
     match error {
         AuthError::Invalid => expired_upload_authority(),
@@ -94,44 +90,54 @@ fn authority(error: AuthError) -> io::Error {
     }
 }
 
-fn resource(
-    binding: (&Store, &HeldDir),
-    account: &Account,
+pub(super) fn resource<'account, 'store>(
+    bind: impl FnOnce(Scope) -> io::Result<Uploads<'store>>,
+    account: &'account Account,
     request: &Head<'_>,
     reader: &mut impl Read,
     ingress: &mut Ingress<'_>,
-) -> Result<Outcome, Problem> {
+) -> Result<Reply<'account>, Problem> {
+    let stopping = ingress.stopping;
+    let now = ingress.now;
     let permit = account
-        .authenticate_bearer(&request.fields, ingress.stopping)
-        .map_err(auth_problem)?;
-    permit
-        .with_upload_admission(account, ingress.now, ingress.stopping, |scope, live| {
-            let frame = uploads::frame(request.method, request.target, &request.fields)?;
-            let authorize = || live().map_err(authority);
-            let timed = Timed {
-                raw: reader,
-                io: ingress,
-                authorize: &authorize,
-                limit: if frame.raw() {
-                    RAW_INGRESS
-                } else {
-                    CONTROL_INGRESS
-                },
-                deadline: None,
-            };
-            let mut bounded = timed.take(frame.extent());
-            let result = uploads::exchange(binding, scope, frame, &mut bounded, &authorize)?;
-            if bounded.limit() != 0 {
-                return Err(Problem::Unavailable);
-            }
-            Ok(result)
-        })
-        .map_err(auth_problem)?
+        .authenticate_bearer(&request.fields, stopping)
+        .and_then(Permit::bearer_evidence)
+        .map_err(bearer_problem)?;
+    let require = || permit.require(account, stopping, now());
+    require().map_err(bearer_problem)?;
+    let scope = permit.upload_scope();
+    let result = (|| {
+        let frame = uploads::frame(request.method, request.target, &request.fields)?;
+        let authorize = || require().map_err(authority);
+        let timed = Timed {
+            raw: reader,
+            io: ingress,
+            authorize: &authorize,
+            limit: if frame.raw() {
+                RAW_INGRESS
+            } else {
+                CONTROL_INGRESS
+            },
+            deadline: None,
+        };
+        let mut bounded = timed.take(frame.extent());
+        let outcome = uploads::exchange(|| bind(scope), scope, frame, &mut bounded, &authorize)?;
+        if bounded.limit() != 0 {
+            return Err(Problem::Unavailable);
+        }
+        Ok(outcome)
+    })();
+    // The underlying selection may already be durable when cleanup finishes
+    // after expiry. Withhold the reply; the original operation GET is final.
+    require().map_err(bearer_problem)?;
+    Ok(Reply::guarded(
+        result.unwrap_or_else(Outcome::Failed),
+        permit,
+    ))
 }
 
-/// Exercise the exact HTTP head/body and response with a qualified native
-/// Store in tests. Other production routes and keepalive are not selected
-/// or changed in this packet.
+/// Drive the same adapter and its final before-wire proof on a fake clock.
+#[cfg(test)]
 pub(crate) fn fixture_exchange(
     binding: (&Store, &HeldDir),
     account: &Account,
@@ -142,8 +148,21 @@ pub(crate) fn fixture_exchange(
     let outcome = match read_head(reader, || Ok(())) {
         Ok(Some(raw)) => match head(&raw) {
             Ok(request) if uploads::is_target(request.target) => {
-                resource(binding, account, &request, reader, &mut ingress)
-                    .unwrap_or_else(Outcome::Failed)
+                match resource(
+                    |scope| Uploads::bind(binding.0, binding.1, scope),
+                    account,
+                    &request,
+                    reader,
+                    &mut ingress,
+                ) {
+                    Ok(reply) => {
+                        match reply.before_wire(account, ingress.stopping, (ingress.now)()) {
+                            Ok(()) => reply.outcome,
+                            Err(problem) => Outcome::Failed(problem),
+                        }
+                    }
+                    Err(problem) => Outcome::Failed(problem),
+                }
             }
             Ok(_) => Outcome::Failed(Problem::Missing),
             Err(problem) => Outcome::Failed(problem),

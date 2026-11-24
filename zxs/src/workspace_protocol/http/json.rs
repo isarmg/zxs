@@ -53,12 +53,10 @@ pub(super) fn decode(request: &Request, input: &mut impl Read, length: u64) -> O
 pub(super) struct Parser<'a>(&'a str);
 
 impl<'a> Parser<'a> {
-    #[cfg(test)]
     pub(super) fn new(raw: &'a str) -> Self {
         Self(raw)
     }
 
-    #[cfg(test)]
     pub(super) fn unsigned(&mut self) -> Option<u64> {
         let raw = self.space();
         let length = raw.bytes().take_while(u8::is_ascii_digit).count();

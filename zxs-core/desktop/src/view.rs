@@ -436,6 +436,8 @@ impl Desktop {
             Effect::Freeze => "Freeze this exact full file locally",
             Effect::Send => "Submit this original operation",
             Effect::FirstUpload => "Submit as a new remote file",
+            Effect::FirstResumable => "Submit a new file with resumable upload",
+            Effect::Resume => "Continue this exact frozen upload",
         });
         ui.label(format!("File: {}", card.path));
         match &card.target {
@@ -451,7 +453,9 @@ impl Desktop {
                     "Destination account: {} · {}",
                     self.view.authority, self.view.account
                 ));
-                ui.label("Submit will stage this exact full file and use one original operation. The ordinary file is not replaced.");
+                if card.intent.is_none() {
+                    ui.label("Submit will stage this exact full file and use one original operation. The ordinary file is not replaced.");
+                }
             }
         }
         ui.label(format!("Full body: {} bytes", card.body.length));
@@ -460,6 +464,19 @@ impl Desktop {
             ui.label(format!("Operation: {}", intent.operation_id));
             ui.label(format!("New node: {}", intent.node_id));
             ui.label("Only authoritative absence of this exact receipt permits sending these frozen bytes.");
+        }
+        if matches!(card.effect, Effect::FirstResumable | Effect::Resume) {
+            ui.label("Checks the original receipt first, then uploads only the remaining chunks and publishes. No full-file fallback.");
+            if let Some(done) = card.claim.confirmed_bytes() {
+                ui.label(format!(
+                    "Server-confirmed bytes: {done}/{} (not a publication receipt)",
+                    card.body.length
+                ));
+            }
+            if self.waiting {
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(300));
+            }
         }
         if card.claim.revoked() {
             ui.label("This choice was canceled before it was accepted. Close it and review again.");
@@ -473,10 +490,11 @@ impl Desktop {
         } else if ui
             .add_enabled(
                 !self.waiting && previously_shown && card.claim.live(),
-                egui::Button::new(if matches!(card.effect, Effect::FirstUpload) {
-                    "Submit new file"
-                } else {
-                    "Confirm this exact choice"
+                egui::Button::new(match card.effect {
+                    Effect::FirstUpload => "Submit new file",
+                    Effect::FirstResumable => "Submit new file with resume",
+                    Effect::Resume => "Continue and publish this original",
+                    _ => "Confirm this exact choice",
                 }),
             )
             .clicked_by(PointerButton::Primary)
@@ -580,6 +598,7 @@ impl Desktop {
                 });
                 ui.separator();
                 ui.heading("New remote file");
+                let mut first_review = None;
                 ui.horizontal(|ui| {
                     ui.label("Ordinary file:");
                     let file = ui.text_edit_singleline(&mut self.first_path);
@@ -595,15 +614,21 @@ impl Desktop {
                         self.first_name_automatic = false;
                     }
                     if ui.button("Review first upload").clicked() || field_enter(&file, enter) || field_enter(&name, enter) {
-                        if !absolute_file(&self.first_path) {
-                            self.local_notice = Some("Choose an ordinary file using an absolute path.");
-                        } else if let Ok(name) = DisplayName::parse(&self.first_name) {
-                            action = Some(Action::ReviewFirst { path: self.first_path.as_str().into(), name });
-                        } else {
-                            self.local_notice = Some("Enter one exact remote filename, without a directory or trailing dot or space.");
-                        }
+                        first_review = Some(false);
                     }
                 });
+                if ui.button("Review resumable upload").clicked() {
+                    first_review = Some(true);
+                }
+                if let Some(resumable) = first_review {
+                    if !absolute_file(&self.first_path) {
+                        self.local_notice = Some("Choose an ordinary file using an absolute path.");
+                    } else if let Ok(name) = DisplayName::parse(&self.first_name) {
+                        action = Some(Action::ReviewFirst { path: self.first_path.as_str().into(), name, resumable });
+                    } else {
+                        self.local_notice = Some("Enter one exact remote filename, without a directory or trailing dot or space.");
+                    }
+                }
                 ui.separator();
                 ui.horizontal(|ui| {
                     if ui.button("Refresh catalog").clicked() { action = Some(Action::Catalog { more: false }); }
@@ -701,6 +726,10 @@ impl Desktop {
                             ui.label(op.as_str());
                             if ui.add_enabled(self.view.connected, egui::Button::new("Check original receipt")).clicked() {
                                 action = Some(Action::Lookup(op.clone()));
+                            }
+                            if self.view.connected && self.view.resume_candidates.contains(op)
+                                && ui.button("Review resumable upload").clicked() {
+                                action = Some(Action::ReviewResume(op.clone()));
                             }
                         });
                     }

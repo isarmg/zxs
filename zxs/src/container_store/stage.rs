@@ -112,7 +112,6 @@ impl<'a> FlatStage<'a> {
             .rename_child_if_absent(original, parent, name, authorize)
     }
 
-    #[cfg(test)]
     pub(super) fn held_receipt(&self) -> io::Result<OpaquePin> {
         self.require_named()?;
         let (_, file) = self

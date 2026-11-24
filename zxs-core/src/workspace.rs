@@ -23,7 +23,9 @@ use zeroize::Zeroizing;
 
 mod browse;
 mod checkout;
+mod uploads;
 pub use checkout::CheckoutChoice;
+pub use uploads::{UploadObservation, UploadSelection};
 
 const DB: &str = "workspace.sqlite";
 const DB_SIDECARS: [&str; 3] = [
@@ -61,6 +63,10 @@ struct Original {
     path: String,
     prior: Option<Basis>,
     sealed: Stamp,
+    // Absent on every legacy original. Older clients refuse an opted-in record
+    // instead of accidentally sending its full body down another lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    upload: Option<uploads::Checkpoint>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -421,6 +427,23 @@ impl Workspace {
     }
 
     pub fn review(&self, path: &Path, first_name: Option<DisplayName>) -> Result<Review> {
+        self.review_mode(path, first_name, false)
+    }
+
+    /// Check the selected inode's length before reading any of an oversized file.
+    ///
+    /// # Errors
+    /// Returns an error for an inadmissible file, changed binding, or size over 1 TiB.
+    pub fn review_resumable(&self, path: &Path, first_name: Option<DisplayName>) -> Result<Review> {
+        self.review_mode(path, first_name, true)
+    }
+
+    fn review_mode(
+        &self,
+        path: &Path,
+        first_name: Option<DisplayName>,
+        resumable: bool,
+    ) -> Result<Review> {
         let text = self.normal_path(path)?;
         let prior = self.basis(path)?;
         if prior.is_some() == first_name.is_some() {
@@ -436,6 +459,11 @@ impl Workspace {
             path.file_name()
                 .ok_or_else(|| invalid("file has no leaf"))?,
         ))?;
+        if resumable && !crate::session::upload::valid_offset(0, source.before.length) {
+            return Err(invalid(
+                "resumable upload exceeds 1 TiB; nothing read or frozen",
+            ));
+        }
         let body = source.scan(sink())?;
         Ok(Review {
             source,
@@ -447,6 +475,32 @@ impl Workspace {
     }
 
     pub fn prepare(&mut self, review: &Review, confirmed: bool) -> Result<Option<Intent>> {
+        self.prepare_mode(review, confirmed, false)
+    }
+
+    /// Seal for the chosen resumable lane in the same local transaction. No traffic.
+    ///
+    /// # Errors
+    /// Refuses an unconfirmed, oversized, or changed review, or an unverified freeze.
+    pub fn prepare_resumable(
+        &mut self,
+        review: &Review,
+        confirmed: bool,
+    ) -> Result<Option<Intent>> {
+        if !crate::session::upload::valid_offset(0, review.body.length) {
+            return Err(invalid(
+                "resumable upload exceeds 1 TiB; no original was created",
+            ));
+        }
+        self.prepare_mode(review, confirmed, true)
+    }
+
+    fn prepare_mode(
+        &mut self,
+        review: &Review,
+        confirmed: bool,
+        resumable: bool,
+    ) -> Result<Option<Intent>> {
         if !confirmed {
             return Err(invalid(
                 "confirm this exact full-file review before preparing",
@@ -494,7 +548,7 @@ impl Workspace {
             return Err(invalid("source changed after review"));
         }
         pending.set_permissions(Permissions::from_mode(0o400))?;
-        self.retain_prepared(review, intent, &pending, &lease)
+        self.retain_prepared(review, intent, &pending, &lease, resumable)
             .map(Some)
     }
 
@@ -504,6 +558,7 @@ impl Workspace {
         intent: Intent,
         pending: &File,
         lease: &Lease,
+        resumable: bool,
     ) -> Result<Intent> {
         let root = &self.root;
         let db_id = self.db_id;
@@ -520,6 +575,7 @@ impl Workspace {
             path: review.path.clone(),
             prior: review.prior.clone(),
             sealed,
+            upload: resumable.then(uploads::Checkpoint::unstarted),
         };
         let commit = (|| -> Result<()> {
             recheck()?;
@@ -685,6 +741,9 @@ impl Workspace {
             ));
         }
         original.intent.validate()?;
+        if let Some(pin) = &original.upload {
+            pin.validate(original.intent.body.length, &phase)?;
+        }
         let sequence = receipt.map(|s| s.parse::<u64>()).transpose()?;
         if (phase == "confirmed") != sequence.is_some()
             || sequence.is_some_and(|n| {
@@ -853,6 +912,11 @@ impl Workspace {
         if let Some(sequence) = prior {
             return self.settle(&original, Lookup::Confirmed { sequence }, &lease);
         }
+        if original.upload.is_some() {
+            return Err(invalid(
+                "this original uses resumable upload; do not send a full-file substitute",
+            ));
+        }
         if !can_arm_original(&phase) {
             return Err(invalid(
                 "this original has a saved conflict; check its receipt without submitting",
@@ -899,7 +963,8 @@ impl Workspace {
     fn arm_attempt(&self, original: &Original, source: &Source, lease: &Lease) -> Result<()> {
         source.check()?;
         let (retained, phase, _) = self.original(&original.intent.operation_id)?;
-        if retained != *original
+        if original.upload.is_some()
+            || retained != *original
             || !can_arm_original(&phase)
             || db_basis(&self.db, &original.path)? != original.prior
         {

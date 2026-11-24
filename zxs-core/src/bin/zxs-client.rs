@@ -31,7 +31,8 @@ fn run() -> zxs_core::Result<()> {
         "zxs-client /absolute/private-state open|prepare /file [first DISPLAY_NAME]|cancel-prepared OP|dirty /file|bundle-diff /dir|bundle-pack /dir /new.zip\n\
          zxs-client HTTPS_ORIGIN ACCOUNT /absolute/private-state init|reconcile|list [after]|detail ID|checkout ID BRANCH /new/file|status OP|send OP\n\
          zxs-client --receipt-session HTTPS_ORIGIN ACCOUNT /absolute/private-state reconcile|status OP\n\
-         zxs-client --payload-session HTTPS_ORIGIN ACCOUNT /absolute/private-state slice /mapped/file START LENGTH /new/output".into()
+         zxs-client --payload-session HTTPS_ORIGIN ACCOUNT /absolute/private-state slice /mapped/file START LENGTH /new/output\n\
+         zxs-client --upload-session HTTPS_ORIGIN ACCOUNT /absolute/private-state status|send OP".into()
     }
 
     fn ask(word: &str) -> Result<bool> {
@@ -49,6 +50,9 @@ fn run() -> zxs_core::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "--receipt-session") {
         return run_receipts(&args);
+    }
+    if args.first().is_some_and(|arg| arg == "--upload-session") {
+        return upload::run(&args);
     }
     if args.first().is_some_and(|arg| arg == "--payload-session") {
         return run_payload(&args);
@@ -220,6 +224,10 @@ fn run() -> zxs_core::Result<()> {
         Ok(())
     })
 }
+
+#[cfg(target_os = "linux")]
+#[path = "upload/cli.rs"]
+mod upload;
 
 #[cfg(target_os = "linux")]
 fn cancel_prepared_args(

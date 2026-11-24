@@ -71,11 +71,6 @@ impl DataVolume {
         &self.owner
     }
 
-    #[cfg(test)]
-    pub(super) fn upload_owner(&self) -> &File {
-        self.bound_owner()
-    }
-
     pub(super) fn staging(&self) -> &HeldDir {
         &self.staging
     }

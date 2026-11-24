@@ -13,7 +13,6 @@ mod recycle_material;
 mod recycle_receipt;
 mod routes;
 mod stage;
-#[cfg(test)]
 pub(crate) mod upload;
 mod volume;
 
@@ -270,7 +269,6 @@ pub(crate) struct Store {
     name_clock: Clock,
     archive: Option<recycle::Recycle>,
     system_owner: File,
-    #[cfg(test)]
     uploads: upload::Shared,
 }
 
@@ -340,7 +338,6 @@ impl Store {
             name_clock: Clock::default(),
             archive: None,
             system_owner: owner,
-            #[cfg(test)]
             uploads: upload::Shared::default(),
         }
     }

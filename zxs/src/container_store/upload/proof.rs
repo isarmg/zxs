@@ -36,7 +36,6 @@ pub(super) fn is_expiry(error: &io::Error) -> bool {
 }
 
 /// Only a positively classified token expiry may suspend and retain a proof.
-#[cfg(test)]
 pub(super) fn expired() -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, Expired)
 }

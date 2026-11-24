@@ -1,4 +1,4 @@
-//! Held resumable intake, disconnected from the listener until paired review.
+//! Explicit resumable intake on the original enrolled SYSTEM and DATA.
 mod adoption;
 mod journal;
 mod material;
@@ -108,6 +108,19 @@ pub(crate) struct Uploads<'a> {
     scope: Scope, // From the selected local account, not from HTTP fields.
 }
 
+impl Store {
+    /// No new filesystem path or startup dependency. Bind only for an
+    /// explicitly authorized request on the same selected deployment.
+    pub(crate) fn upload_lane(&self, scope: Scope) -> io::Result<Uploads<'_>> {
+        let system = self
+            .archive
+            .as_ref()
+            .and_then(|archive| archive.upload_system(scope.pool))
+            .ok_or_else(unavailable)?;
+        Uploads::bind(self, system, scope)
+    }
+}
+
 impl<'a> Uploads<'a> {
     pub(crate) fn bind(store: &'a Store, system: &'a HeldDir, scope: Scope) -> io::Result<Self> {
         if scope.pool == [0; 16] || scope.epoch == [0; 16] || scope.pool == scope.epoch {
@@ -123,7 +136,7 @@ impl<'a> Uploads<'a> {
     }
 
     fn require_authority(&self) -> io::Result<()> {
-        self.store.routes.require_upload_parent(self.system)?;
+        self.store.routes.require_bound_parent(self.system)?;
         native::require_owner(self.system, c"container-owner", &self.store.system_owner)
     }
 

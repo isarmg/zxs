@@ -2,11 +2,11 @@
 use std::{
     future::{Future, poll_fn},
     io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     pin::pin,
     sync::{
         Arc,
-        atomic::{AtomicU8, Ordering},
+        atomic::{AtomicU8, AtomicU64, Ordering},
     },
     task::Poll,
     time::{Duration, Instant},
@@ -19,7 +19,9 @@ use zxs_core::{
     Result,
     r3::{Body, Branch, Catalog, Container, Detail, DisplayName, Id, Intent, Lookup},
     session::{ExistingBasicLogin, ExistingBasicSession},
-    workspace::{Basis, CheckoutChoice, Resolution, Review, Workspace},
+    workspace::{
+        Basis, CheckoutChoice, Resolution, Review, UploadObservation, UploadSelection, Workspace,
+    },
 };
 
 const PROMPT_LIMIT: Duration = Duration::from_secs(90);
@@ -32,6 +34,7 @@ const ACCEPTED: u8 = 2;
 /// behind a TLS or filesystem await. Acceptance and revocation arbitrate once.
 struct Decision {
     phase: AtomicU8,
+    confirmed_bytes: AtomicU64,
     revoked: Notify,
 }
 
@@ -42,6 +45,7 @@ impl Claim {
     pub fn new() -> Self {
         Self(Arc::new(Decision {
             phase: AtomicU8::new(OPEN),
+            confirmed_bytes: AtomicU64::new(u64::MAX),
             revoked: Notify::new(),
         }))
     }
@@ -53,6 +57,10 @@ impl Claim {
     }
     pub fn live(&self) -> bool {
         self.0.phase.load(Ordering::Acquire) == OPEN
+    }
+    pub fn confirmed_bytes(&self) -> Option<u64> {
+        let n = self.0.confirmed_bytes.load(Ordering::Relaxed);
+        (n != u64::MAX).then_some(n)
     }
     pub fn accepted(&self) -> bool {
         self.0.phase.load(Ordering::Acquire) == ACCEPTED
@@ -133,7 +141,9 @@ pub enum Action {
     ReviewFirst {
         path: PathBuf,
         name: DisplayName,
+        resumable: bool,
     },
+    ReviewResume(Id),
     ReviewSend,
     Approve {
         choice: Claim,
@@ -159,11 +169,16 @@ pub enum Effect {
     Freeze,
     Send,
     FirstUpload,
+    FirstResumable,
+    Resume,
 }
 
 impl Effect {
     pub fn sends(self) -> bool {
-        matches!(self, Self::Send | Self::FirstUpload)
+        matches!(
+            self,
+            Self::Send | Self::FirstUpload | Self::FirstResumable | Self::Resume
+        )
     }
 }
 
@@ -198,6 +213,7 @@ pub struct Snapshot {
     pub working: Option<PathBuf>,
     pub card: Option<Card>,
     pub pending: Vec<Id>,
+    pub resume_candidates: Vec<Id>,
     pub pending_start: usize,
     pub pending_more: bool,
     pub fresh_send: bool,
@@ -212,7 +228,8 @@ struct PendingLogin {
 
 enum Choice {
     Checkout(CheckoutChoice),
-    FirstUpload(Review),
+    FirstUpload(Review, bool),
+    Resume(Box<UploadSelection>),
     Freeze(Review),
     Send(Intent),
 }
@@ -229,7 +246,10 @@ impl Choice {
             Self::Send(_) => {
                 "Submit not confirmed. Keep the original operation and check its receipt; do not resend here."
             }
-            Self::FirstUpload(_) => {
+            Self::Resume(_) | Self::FirstUpload(_, true) => {
+                "Upload not confirmed. Keep the same pending original and check its receipt before continuing."
+            }
+            Self::FirstUpload(_, false) => {
                 "No upload request was sent. The source changed or local staging was refused. Check Pending originals before reviewing again."
             }
         }
@@ -333,15 +353,22 @@ impl Owner {
     }
 
     fn refresh_pending(&mut self) -> Result<()> {
-        let all = self
+        let workspace = self
             .workspace
             .as_ref()
-            .ok_or_else(|| fail("no open workspace"))?
-            .pending()?;
+            .ok_or_else(|| fail("no open workspace"))?;
+        let all = workspace.pending()?;
         let page = pending_page(all.len(), self.view.pending_start);
         self.view.pending_start = page.start;
         self.view.pending_more = page.end < all.len();
         self.view.pending = all[page].to_vec();
+        self.view.resume_candidates = self
+            .view
+            .pending
+            .iter()
+            .filter(|op| workspace.choose_upload_for_send(op).is_ok())
+            .cloned()
+            .collect();
         self.view.fresh_send = self.fresh.is_some();
         Ok(())
     }
@@ -484,17 +511,48 @@ impl Owner {
         Ok("Review these full-file bytes. Freezing does not upload.")
     }
 
-    fn review_first(&mut self, path: PathBuf, name: DisplayName) -> Result<()> {
+    fn review_first(&mut self, path: &Path, name: DisplayName, resumable: bool) -> Result<()> {
         let (workspace, _) = self.online()?;
-        let review = workspace.review(&path, Some(name))?;
-        let card = first_card(
+        let review = if resumable {
+            workspace.review_resumable(path, Some(name))?
+        } else {
+            workspace.review(path, Some(name))?
+        };
+        let mut card = first_card(
             review.path(),
             review
                 .name()
                 .ok_or_else(|| fail("missing reviewed display name"))?,
             review.body(),
         );
-        self.set_choice(Choice::FirstUpload(review), card);
+        if resumable {
+            card.effect = Effect::FirstResumable;
+        }
+        self.set_choice(Choice::FirstUpload(review, resumable), card);
+        Ok(())
+    }
+
+    fn review_resume(&mut self, op: &Id) -> Result<()> {
+        if !self.view.pending.contains(op) {
+            return Err(fail("not a displayed pending original"));
+        }
+        let (workspace, _) = self.online()?;
+        let choice = workspace.choose_upload_for_send(op)?;
+        let intent = choice.intent();
+        let target = match (&intent.target, choice.basis()) {
+            (zxs_core::r3::Target::FirstMain { name }, None) => CardTarget::First(name.clone()),
+            (_, Some(basis)) => CardTarget::Mapped(basis.clone()),
+            _ => return Err(fail("missing the original target")),
+        };
+        let card = Card {
+            claim: Claim::new(),
+            effect: Effect::Resume,
+            path: choice.path().to_owned(),
+            target,
+            body: intent.body.clone(),
+            intent: Some(intent.clone()),
+        };
+        self.set_choice(Choice::Resume(Box::new(choice)), card);
         Ok(())
     }
 
@@ -519,7 +577,64 @@ impl Owner {
         Ok(())
     }
 
-    async fn execute(&mut self, choice: Choice) -> Result<&'static str> {
+    async fn submit_first(
+        &mut self,
+        review: &Review,
+        resumable: bool,
+        meter: &Claim,
+    ) -> Result<&'static str> {
+        let w = self
+            .workspace
+            .as_mut()
+            .ok_or_else(|| fail("no open workspace"))?;
+
+        let remote = self
+            .session
+            .as_ref()
+            .ok_or_else(|| fail("no authorized session"))?;
+        // This branch only runs after the original foreground approval.
+        // Prepare selects one new container/operation/body and durably
+        // retains it before the existing exact submit preflight can POST.
+        let prepared = if resumable {
+            w.prepare_resumable(review, true)
+        } else {
+            w.prepare(review, true)
+        };
+        let intent = match prepared {
+            Ok(Some(intent)) => intent,
+            Ok(None) => return Err(fail("no frozen first upload")),
+            Err(error) => {
+                let _ = self.refresh_pending();
+                return Err(error);
+            }
+        };
+        let result = if resumable {
+            match w.choose_upload_for_send(&intent.operation_id) {
+                Ok(selected) => resumable_submit(w, remote, &selected, meter).await,
+                Err(error) => Err(error),
+            }
+        } else {
+            w.submit_existing(remote, &intent.operation_id, true).await
+        }
+        .unwrap_or(Resolution {
+            operation: intent.operation_id,
+            status: Lookup::Unknown,
+            local_cleanup_pending: false,
+        });
+        let confirmed = matches!(result.status, Lookup::Confirmed { .. });
+        self.view.resolution = Some(result);
+        let _ = self.refresh_pending();
+        if confirmed {
+            self.view.working = Some(PathBuf::from(review.path()));
+            Ok("New remote file confirmed. Select Refresh catalog to see the current listing.")
+        } else {
+            Ok(
+                "Keep the original operation shown below and check its receipt. No automatic resend.",
+            )
+        }
+    }
+
+    async fn execute(&mut self, choice: Choice, meter: &Claim) -> Result<&'static str> {
         let w = self
             .workspace
             .as_mut()
@@ -535,43 +650,8 @@ impl Owner {
                 self.view.working = Some(path);
                 Ok("Verified node saved to the exact new ordinary file.")
             }
-            Choice::FirstUpload(review) => {
-                let remote = self
-                    .session
-                    .as_ref()
-                    .ok_or_else(|| fail("no authorized session"))?;
-                // This branch only runs after the original foreground approval.
-                // Prepare selects one new container/operation/body and durably
-                // retains it before the existing exact submit preflight can POST.
-                let intent = match w.prepare(&review, true) {
-                    Ok(Some(intent)) => intent,
-                    Ok(None) => return Err(fail("no frozen first upload")),
-                    Err(error) => {
-                        let _ = self.refresh_pending();
-                        return Err(error);
-                    }
-                };
-                let result = w
-                    .submit_existing(remote, &intent.operation_id, true)
-                    .await
-                    .unwrap_or(Resolution {
-                        operation: intent.operation_id,
-                        status: Lookup::Unknown,
-                        local_cleanup_pending: false,
-                    });
-                let confirmed = matches!(result.status, Lookup::Confirmed { .. });
-                self.view.resolution = Some(result);
-                let _ = self.refresh_pending();
-                if confirmed {
-                    self.view.working = Some(PathBuf::from(review.path()));
-                    Ok(
-                        "New remote file confirmed. Select Refresh catalog to see the current listing.",
-                    )
-                } else {
-                    Ok(
-                        "Keep the original operation shown below and check its receipt. No automatic resend.",
-                    )
-                }
+            Choice::FirstUpload(review, resumable) => {
+                self.submit_first(&review, resumable, meter).await
             }
             Choice::Freeze(review) => {
                 let basis = review
@@ -587,6 +667,32 @@ impl Owner {
                 } else {
                     Ok("Working bytes are unchanged. No operation was created.")
                 }
+            }
+            Choice::Resume(choice) => {
+                let remote = self
+                    .session
+                    .as_ref()
+                    .ok_or_else(|| fail("no authorized session"))?;
+                let op = choice.intent().operation_id.clone();
+                if self
+                    .fresh
+                    .as_ref()
+                    .is_some_and(|(i, _, _)| i.operation_id == op)
+                {
+                    self.fresh = None;
+                    self.view.fresh_send = false;
+                }
+                let result =
+                    resumable_submit(w, remote, &choice, meter)
+                        .await
+                        .unwrap_or(Resolution {
+                            operation: op,
+                            status: Lookup::Unknown,
+                            local_cleanup_pending: false,
+                        });
+                self.view.resolution = Some(result);
+                let _ = self.refresh_pending();
+                Ok("Check the original receipt below. No automatic retry or full-file fallback.")
             }
             Choice::Send(original) => {
                 let remote = self
@@ -631,7 +737,7 @@ impl Owner {
         };
         self.view.card = None;
         let otherwise = choice.unconfirmed_message();
-        self.execute(choice).await.unwrap_or(otherwise)
+        self.execute(choice, &approved).await.unwrap_or(otherwise)
     }
 
     async fn lookup(&mut self, op: Id) -> Result<()> {
@@ -772,11 +878,22 @@ impl Owner {
             Action::Review(path) => self.review(path).unwrap_or(
                 "Select a previously mapped ordinary file without another active local freeze.",
             ),
-            Action::ReviewFirst { path, name } => {
-                if self.review_first(path, name).is_ok() {
+            Action::ReviewFirst {
+                path,
+                name,
+                resumable,
+            } => {
+                if self.review_first(&path, name, resumable).is_ok() {
                     "Review this new remote file. Only your final Submit can send it."
                 } else {
                     "Choose an unmapped ordinary file and its exact remote name in this authorized workspace."
+                }
+            }
+            Action::ReviewResume(op) => {
+                if self.review_resume(&op).is_ok() {
+                    "Review this exact original. Only explicit approval may send remaining chunks and publish."
+                } else {
+                    "Only a never-sent freeze or its original resumable transfer is eligible. Check the original receipt."
                 }
             }
             Action::ReviewSend => {
@@ -809,6 +926,23 @@ impl Owner {
                 }
             }
         };
+    }
+}
+
+async fn resumable_submit(
+    workspace: &mut Workspace,
+    remote: &ExistingBasicSession,
+    selected: &UploadSelection,
+    meter: &Claim,
+) -> Result<Resolution> {
+    match workspace
+        .send_upload(remote, selected, true, |n, _| {
+            meter.0.confirmed_bytes.store(n, Ordering::Relaxed);
+        })
+        .await?
+    {
+        UploadObservation::Receipt(result) => Ok(result),
+        _ => Err(fail("upload progress is not a publication receipt")),
     }
 }
 

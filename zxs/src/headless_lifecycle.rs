@@ -58,6 +58,7 @@ pub(crate) fn serve_selected(
                             &stream,
                             stopping,
                             budget,
+                            |scope| bound.store().upload_lane(scope),
                             |request, body, live| dispatch(bound.store(), request, body, live),
                         );
                     }) {

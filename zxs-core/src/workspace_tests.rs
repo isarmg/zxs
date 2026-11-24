@@ -92,7 +92,7 @@ fn detached_lease_refuses_local_and_wire_custody() {
     next_b.check().unwrap();
     let second_leaf = payload(&second.operation_id);
     assert!(
-        ws.retain_prepared(&review_b, second, &anonymous, &old_b)
+        ws.retain_prepared(&review_b, second, &anonymous, &old_b, false)
             .is_err()
     );
     ws.root.absent(second_leaf.as_ref()).unwrap();
@@ -370,4 +370,43 @@ fn cancel_reopens_after_verified_unlink_and_refuses_substitution() {
         b"another ordinary inode, not the frozen original"
     );
     assert_eq!(fs::read(&file).unwrap(), b"synthetic a");
+}
+
+#[test]
+#[ignore = "requires newly allocated unprivileged ext4 fixture scratch"]
+fn resumable_limit_and_early_custody_never_strand_an_unreadable_pending_record() {
+    let (mut ws, state, oversized, normal) = scratch_workspace("resumable-custody");
+    let name = DisplayName::parse("first.bin").unwrap();
+    // Sparse size only: the candidate must refuse before hashing or copying gigabytes.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&oversized)
+        .unwrap()
+        .set_len((1u64 << 40) + 1)
+        .unwrap();
+    assert!(ws.review_resumable(&oversized, Some(name.clone())).is_err());
+    assert_eq!(ws.pending().unwrap(), [] as [Id; 0]);
+    let mut review = ws.review_resumable(&normal, Some(name)).unwrap();
+    let real = review.body.length;
+    review.body.length = (1u64 << 40) + 1;
+    assert!(ws.prepare_resumable(&review, true).is_err());
+    assert_eq!(ws.pending().unwrap(), [] as [Id; 0]);
+    review.body.length = real;
+    let intent = ws.prepare_resumable(&review, true).unwrap().unwrap();
+    drop(review);
+    drop(ws);
+    let ws = Workspace::open_local(&state).unwrap();
+    let op = &intent.operation_id;
+    assert_eq!(ws.pending().unwrap().as_slice(), std::slice::from_ref(op));
+    assert_eq!(ws.choose_upload_for_send(op).unwrap().intent(), &intent);
+    let (original, phase, _) = ws.original(op).unwrap();
+    assert_eq!(phase, "prepared");
+    let source = ws.root.source(Path::new(&payload(op))).unwrap();
+    let lease = ws.hold_container(&intent.container_id).unwrap();
+    assert!(ws.arm_attempt(&original, &source, &lease).is_err()); // no legacy full-file substitute
+    drop(lease);
+    let canceled = ws.review_prepared_cancellation(op).unwrap();
+    ws.cancel_prepared(canceled, true).unwrap();
+    assert_eq!(ws.pending().unwrap(), [] as [Id; 0]);
+    assert_eq!(fs::read(normal).unwrap(), b"synthetic b");
 }

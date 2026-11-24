@@ -178,13 +178,7 @@ impl BoundBearer {
         let basic = prompt_bound_basic(prompt, &still_bound, |password| {
             basic_header(account, password)
         })?;
-        let began = Instant::now();
-        let response = channel
-            .request(login_request()?, &basic, None, &still_bound)
-            .await?;
-        drop(basic);
-        let token = timeout(IDLE, accept_login(response, began)).await??;
-        token.require_live(Instant::now())?;
+        let token = issue_token(&channel, &basic, &still_bound).await?;
         still_bound()?;
         Ok(Self {
             channel,
@@ -319,14 +313,14 @@ fn check_login_header(status: StatusCode, headers: &HeaderMap) -> Result<()> {
     }
 }
 
-struct Bearer {
-    auth: HeaderValue,
-    deadline: Instant,
-    rejected: AtomicBool,
+pub(super) struct Bearer {
+    pub(super) auth: HeaderValue,
+    pub(super) deadline: Instant,
+    pub(super) rejected: AtomicBool,
 }
 
 impl Bearer {
-    fn require_live(&self, now: Instant) -> Result<()> {
+    pub(super) fn require_live(&self, now: Instant) -> Result<()> {
         if self.rejected.load(Ordering::Relaxed) || now >= self.deadline {
             return Err(invalid(
                 "the receipt session is no longer active; reconnect explicitly, with no fallback",
@@ -376,6 +370,21 @@ fn decode_token(body: &[u8], began: Instant) -> Result<Bearer> {
         deadline,
         rejected: AtomicBool::new(false),
     })
+}
+
+pub(super) async fn issue_token(
+    channel: &H2Channel,
+    basic: &HeaderValue,
+    guard: impl Fn() -> Result<()>,
+) -> Result<Bearer> {
+    let began = Instant::now();
+    let reply = channel
+        .request(login_request()?, basic, None, &guard)
+        .await?;
+    let token = timeout(IDLE, accept_login(reply, began)).await??;
+    token.require_live(Instant::now())?;
+    guard()?;
+    Ok(token)
 }
 
 async fn accept_login(reply: Response<RecvStream>, began: Instant) -> Result<Bearer> {

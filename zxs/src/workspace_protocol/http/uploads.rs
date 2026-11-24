@@ -2,10 +2,9 @@
 use super::{json::Parser, reply};
 use crate::{
     container_store::{
-        Body, Mutation, Store, Target,
+        Body, Mutation, Target,
         upload::{Authorize, CHUNK, Chunk, Failure, Intent, MAX_BODY, Scope, Uploads},
     },
-    fs::HeldDir,
     hash::Sha256,
     headless_http::{Outcome, Problem},
     workspace_protocol::{Branch, Id, Rejected, decimal, field, hex, required_header},
@@ -380,15 +379,15 @@ fn control(reader: &mut impl Read, length: u64) -> Result<String, Problem> {
     String::from_utf8(bytes).map_err(|_| Problem::Malformed)
 }
 
-pub(crate) fn exchange(
-    (store, system): (&Store, &HeldDir),
+pub(crate) fn exchange<'store>(
+    bind: impl FnOnce() -> io::Result<Uploads<'store>>,
     scope: Scope,
     frame: Frame,
     reader: &mut impl Read,
     authorize: Authorize<'_>,
 ) -> Result<Outcome, Problem> {
     authorize().map_err(io_failure)?;
-    let lane = || Uploads::bind(store, system, scope).map_err(io_failure);
+    let lane = || bind().map_err(io_failure);
     match frame {
         Frame::Begin { op, length } => {
             let raw = control(reader, length)?;
@@ -401,11 +400,19 @@ pub(crate) fn exchange(
             }
             reply::upload(lane()?.begin(&intent, authorize).map_err(failed)?)
         }
-        Frame::Status { mutation, upload } => reply::upload(
-            lane()?
+        Frame::Status { mutation, upload } => {
+            let progress = lane()?
                 .status(mutation, upload, authorize)
-                .map_err(failed)?,
-        ),
+                .map_err(|error| {
+                    // A generic route 404 (including an older server) proves nothing.
+                    // Only the authorized exact lookup can acknowledge absence.
+                    match error {
+                        Failure::Absent => Problem::UploadAbsent,
+                        other => failed(other),
+                    }
+                })?;
+            reply::upload(progress)
+        }
         Frame::Put(chunk) => reply::upload(lane()?.put(chunk, reader, authorize).map_err(failed)?),
         Frame::Commit { mutation, length } => {
             let raw = control(reader, length)?;
@@ -415,7 +422,7 @@ pub(crate) fn exchange(
                 .map_err(failed)?;
             // Auxiliary retirement cannot replace the original receipt or
             // add fields to its existing wire DTO.
-            reply::project(super::dispatch::Reply::Mutation(committed.receipt))
+            reply::project(super::dispatch::Reply::Mutation(committed.into_receipt()))
         }
     }
 }

@@ -5,9 +5,7 @@ use super::{
     record::{Birth, Intent, Phase, Record, valid_raw_extent},
 };
 use crate::{
-    container_store::{
-        Body, Conflict, Error, Receipt, Store, codec, hex, invalid, volume::DataVolume,
-    },
+    container_store::{Conflict, Error, Receipt, Store, codec, hex, invalid, volume::DataVolume},
     fs::{HeldDir, OPAQUE_STAMP_BYTES, OpaquePin, ReadAccess},
 };
 use std::{
@@ -31,14 +29,14 @@ fn on_volume(volume: &DataVolume, record: &Record) -> io::Result<()> {
 
 pub(super) fn custody(volume: &DataVolume) -> io::Result<()> {
     volume.require_named()?;
-    require_owner(volume.root(), c"owner", volume.upload_owner())
+    require_owner(volume.root(), c"owner", volume.bound_owner())
 }
 
 pub(super) fn available(volume: &DataVolume) -> io::Result<u64> {
     custody(volume)?;
     // A missing feature excludes just this candidate in the upload lane.
     birth(&volume.staging().file)?;
-    birth(volume.upload_owner())?;
+    birth(volume.bound_owner())?;
     volume.available_bytes()
 }
 
@@ -309,7 +307,7 @@ impl<'a> Stage<'a> {
     #[cfg(test)]
     pub(super) fn verify_whole(
         &self,
-        body: &Body,
+        body: &crate::container_store::Body,
         authorize: impl Fn() -> io::Result<()>,
     ) -> Result<(), Error> {
         authorize()?;

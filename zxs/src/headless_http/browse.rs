@@ -1,7 +1,7 @@
 //! The four explicit metadata GETs are a new Bearer permission, not a new
 //! route, body decoder, or way to dispatch a legacy write.
 use super::{Incoming, Outcome, Problem, Request};
-use crate::headless_auth::{Account, AuthError, BrowsePermit, Permit};
+use crate::headless_auth::{Account, AuthError, BearerPermit, Permit};
 use std::time::Instant;
 
 pub(super) enum AccessKind {
@@ -47,7 +47,7 @@ pub(super) fn bearer_problem(error: AuthError) -> Problem {
 
 pub(super) struct Reply<'account> {
     pub(super) outcome: Outcome,
-    evidence: Option<BrowsePermit<'account>>,
+    evidence: Option<BearerPermit<'account>>,
 }
 
 impl From<Outcome> for Reply<'_> {
@@ -59,7 +59,14 @@ impl From<Outcome> for Reply<'_> {
     }
 }
 
-impl Reply<'_> {
+impl<'account> Reply<'account> {
+    pub(super) fn guarded(outcome: Outcome, evidence: BearerPermit<'account>) -> Self {
+        Self {
+            outcome,
+            evidence: Some(evidence),
+        }
+    }
+
     pub(super) fn before_wire(
         &self,
         account: &Account,
@@ -81,7 +88,7 @@ pub(super) fn project<'account>(
     dispatch: &impl Fn(Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome,
 ) -> Reply<'account> {
     let checked = (|| {
-        let permit = permit.browse()?;
+        let permit = permit.bearer_evidence()?;
         let require = || permit.require(account, stopping, Instant::now());
         require()?;
         let result = dispatch(request, &mut Incoming::Empty, &|| require().is_ok());
@@ -91,10 +98,7 @@ pub(super) fn project<'account>(
             Outcome::Json(_) | Outcome::Failed(_) => result,
             _ => Outcome::Failed(Problem::Unavailable), // This profile cannot stream.
         };
-        Ok(Reply {
-            outcome,
-            evidence: Some(permit),
-        })
+        Ok(Reply::guarded(outcome, permit))
     })();
     checked.unwrap_or_else(|error| Outcome::Failed(bearer_problem(error)).into())
 }

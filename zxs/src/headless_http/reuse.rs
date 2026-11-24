@@ -2,7 +2,7 @@
 use super::{Head, Outcome, Problem};
 use crate::{
     headless_auth::{Account, LoginError, SESSION_TTL_SECONDS},
-    workspace_protocol::is_payload_target,
+    workspace_protocol::{http::uploads, is_payload_target},
 };
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
@@ -19,11 +19,17 @@ pub(super) enum BackendProfile {
     Legacy,
     Login,
     Bearer,
+    Upload,
 }
 
 pub(super) fn profile(head: &Head<'_>) -> BackendProfile {
     if head.target == LOGIN {
         return BackendProfile::Login;
+    }
+    // These new paths challenge only Bearer, even when no credential or a
+    // Basic credential was supplied. Legacy mutating paths are untouched.
+    if uploads::is_target(head.target) {
+        return BackendProfile::Upload;
     }
     if is_payload_target(head.target)
         || head.fields.iter().any(|(key, value)| {

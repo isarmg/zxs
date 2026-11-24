@@ -71,11 +71,6 @@ impl Routes {
         self.directory.require_named()
     }
 
-    #[cfg(test)]
-    pub(super) fn require_upload_parent(&self, system: &HeldDir) -> io::Result<()> {
-        self.require_bound_parent(system)
-    }
-
     pub(super) fn name_namespace(&self) -> &HeldDir {
         &self.directory
     }
@@ -153,17 +148,6 @@ impl Routes {
                 authorize: last,
             }),
         )
-    }
-
-    #[cfg(test)]
-    pub(super) fn reserve_upload(
-        &self,
-        id: Id,
-        token: [u8; 32],
-        prove: &impl Fn() -> io::Result<()>,
-        authorize: &impl Fn() -> io::Result<()>,
-    ) -> io::Result<()> {
-        self.reserve_using(id, token, Some(&BeforeRoute { prove, authorize }))
     }
 
     fn reserve_using(

@@ -1,7 +1,6 @@
 //! Bridge from an authenticated bounded request to the checked Store.
 mod json;
 mod reply;
-#[cfg(test)]
 pub(crate) mod uploads;
 
 use super::{

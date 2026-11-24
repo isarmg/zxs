@@ -16,6 +16,14 @@ fn local_exchange(
     dispatch: impl Fn(Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome + Send,
     inspect: impl FnOnce(&mut TcpStream, &mut BufReader<TcpStream>),
 ) {
+    exchange_with_store(None, dispatch, inspect);
+}
+
+fn exchange_with_store(
+    uploads: Option<&crate::container_store::Store>,
+    dispatch: impl Fn(Request, &mut Incoming<'_>, &dyn Fn() -> bool) -> Outcome + Send,
+    inspect: impl FnOnce(&mut TcpStream, &mut BufReader<TcpStream>),
+) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     thread::scope(|scope| {
@@ -29,6 +37,11 @@ fn local_exchange(
                 &stream,
                 &|| false,
                 &ReuseBudget::default(),
+                |scope| {
+                    uploads
+                        .expect("unexpected upload binding")
+                        .upload_lane(scope)
+                },
                 dispatch,
             )
             .unwrap();
@@ -318,7 +331,7 @@ fn seeded_browse_store(
             token: [0xad; 32],
         }],
         directory(archive, "archive"),
-        [7; 16],
+        [1; 16], // Same pool as fixture_account().
         [0xcb; 32],
     )
     .unwrap();
@@ -428,3 +441,6 @@ fn four_real_metadata_projections_match_basic_and_reauthorize_every_reused_head(
     );
     assert_eq!(count.load(Ordering::Relaxed), 4);
 }
+
+#[path = "upload_connection.rs"]
+mod upload_connection;

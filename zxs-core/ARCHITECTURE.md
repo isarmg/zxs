@@ -39,6 +39,7 @@ flowchart LR
 | [src/workspace.rs](src/workspace.rs) | 本机基线、去向、原号和冷恢复；只在明确确认后尝试写入。 |
 | [src/native.rs](src/native.rs) | Linux 文件/目录描述符、私有租约与原子不覆盖发布。 |
 | [src/session.rs](src/session.rs) · [src/r3.rs](src/r3.rs) | 同一验证过的 HTTPS/2 信道、完整正文流及准确 R3 语义。 |
+| [src/workspace/uploads.rs](src/workspace/uploads.rs) · [src/session/upload.rs](src/session/upload.rs) | 显式续传保持同一原号与封存件；区分已准发上界、远端确认偏移和原发布回执。 |
 | [src/bundle.rs](src/bundle.rs) | 本机扫描、忽略规则、清单比较和标准 ZIP32 写入。 |
 | [tests/linux_zip.rs](tests/linux_zip.rs) · [src/native_tests.rs](src/native_tests.rs) · [src/workspace_tests.rs](src/workspace_tests.rs) | 离线 CLI、独立 ZIP 读取和真实 ext4 文件、原操作保护边界。 |
 

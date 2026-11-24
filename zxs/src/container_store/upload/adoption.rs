@@ -26,6 +26,14 @@ pub(crate) struct Committed {
     pub(super) retired: io::Result<bool>,
 }
 
+impl Committed {
+    /// Retirement is auxiliary: an error cannot retract a selected receipt.
+    pub(crate) fn into_receipt(self) -> Receipt {
+        drop(self.retired);
+        self.receipt
+    }
+}
+
 struct Original<'a> {
     directory: Arc<HeldDir>,
     slot: journal::Slot,
@@ -283,7 +291,7 @@ impl<F: Fn() -> io::Result<()>> Publication for Adoption<'_, '_, F> {
             authorize()?;
             name_cut.map_or(Ok(()), |check| (check.last)())
         };
-        routes.reserve_upload(id, token, &prove, &last)
+        routes.reserve_name_checked(id, token, &prove, &last)
     }
 
     fn create_first(

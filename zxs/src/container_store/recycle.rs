@@ -306,6 +306,11 @@ impl Recycle {
         )
     }
 
+    /// The request account must belong to the same pool as the selected roles.
+    pub(super) fn upload_system(&self, pool: Id) -> Option<&HeldDir> {
+        (pool == self.role.pool).then_some(&self.system)
+    }
+
     pub(super) fn indexed_system(&self) -> &HeldDir {
         &self.system
     }
