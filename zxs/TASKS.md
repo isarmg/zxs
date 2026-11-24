@@ -8,6 +8,7 @@
 | --- | --- |
 | 代码检查与普通 Linux 夹具 | [CI通过] [`85a8988` ZXS 源码作业](https://github.com/isarmg/zxs/actions/runs/45331407209/job/138233242638)：严格 Clippy、格式检查、78 个单元及 2 个入口用例通过；7 个需另配环境的用例未运行。 |
 | 固定批量导入 | [CI通过] [`7f249da` ZXS](https://github.com/isarmg/zxs/actions/runs/45332479121/job/138236653813)与 [Helper](https://github.com/isarmg/zxs/actions/runs/45332479121/job/138236653527)的严格 Clippy、原生测试及格式检查。只证明各自的测试范围，未做跨进程故障恢复。 |
+| [正文 Range 读取](docs/specs/payload-range.md) | [CI通过] [`090e76d` ZXS 源码作业](https://github.com/isarmg/zxs/actions/runs/45337302724/job/138252297285)的 7 个用例覆盖 Range 解析、原 R3 路由隔离、鉴权和响应边界。未验安装后的真实 HTTPS/2 读回。 |
 | 独立构建 | [CI通过] [`7f249da` 的独立 ELF 构建和检查](https://github.com/isarmg/zxs/actions/runs/45332479104/job/138236653339)。这不证明已安装、发布或签名。 |
 | 旧提交的隔离客机 | [CI通过] [`7a88536` 的通过阶段](https://github.com/isarmg/zxs/actions/runs/45322511258/job/138204176887)：普通账号首设、全量写入、同号续查、双 DATA 和回收，以及实际 TLS/HTTP/2 全量写入读回。后续 FUSE 阶段失败；缺盘冷启动与重挂未执行。 |
 
@@ -21,7 +22,7 @@
 | [外部文件导入](../helper/docs/guides/offline-imports.md) | [仅静态] [固定批次](docs/specs/offline-import-batch.md)仍需跨进程验父进程失答、原回执无源重放和半批恢复。保留来源；不就地覆盖非空盘，不迁移旧池。 |
 | 运行时断电、掉盘与权限变化 | [仅静态] 验缺盘冷启动、原盘恢复、其他容器独立可用、离线盘相关全局结果拒绝、掉电后的确定回执以及撤权不误报未找到。 |
 | [会话与后端复用](docs/specs/sessions.md) | [仅静态] 待已验证的 HTTPS/H2 入口确认新旧模式、到期、重启与只读原回执找回。 |
-| Range 与分块续传 | [设计中] 当前仍为 R3 整文件传输；不得把同号重试当成按偏移续传。 |
+| [分块上传与续传](docs/specs/resumable-uploads.md) | [设计中] R3 写入仍传整份文件；Range 读取与同号查回执都不等于按偏移续传。 |
 
 ## 可复核的验收入口
 

@@ -10,7 +10,7 @@
 | 普通文件边界和无覆盖 | [实机已验] Dot Linux 临时 ext4、普通用户、有效能力为零。[3 个原生用例](src/native_tests.rs)与[工作区用例](src/workspace_tests.rs)覆盖租约竞争、拒绝不合格对象、晚占名和换件后不发布、不推进原操作。 |
 | 确定性离线 ZIP | [实机已验] 同一环境跑[实际编译出的 CLI 用例](tests/linux_zip.rs)。两棵源树的创建顺序、权限、mtime 和被忽略文件各异，产生逐字节相同的 625 B ZIP；独立 unzip/Python 读回、晚占名、旧核对拒绝及准确差异清单通过。 |
 | 独立 GitHub Actions（`9a74cd2`） | [CI通过] [Ubuntu 24.04 托管作业](https://github.com/isarmg/zxs/actions/runs/45335009882/job/138244922987)通过 Rust 1.100.0 锁定依赖、格式、全目标严格 Clippy、4 个纯内存及 5 个离线 ext4 用例；独立 ZIP 读回一致。未连接真实服务或安装产品。 |
-| 显式原回执会话 | [仅静态] 新的 Linux [回执专用模式](docs/guides/receipt-only-session.md)通过格式及严格 Clippy 检查；上面已通过的 CI 不覆盖这个新增模式。真实 HTTPS/2、代理转发及安装后的恢复待验。 |
+| 显式原回执会话 | [CI通过] [`40c92bc` Linux 作业](https://github.com/isarmg/zxs/actions/runs/45337095000/job/138251648247)通过了[回执专用模式](docs/guides/receipt-only-session.md)新增的 4 个纯内存会话用例与 1 个 CLI 选择用例。安装后的真实 HTTPS/2 和冷恢复未验。 |
 
 本次标准 ZIP SHA-256 为 `6f24562e993621528ce86967a40fa3ef4848d09332a37c7531818e4b4dcc9642`。证据和锁定命令见[复现实例](docs/guides/linux-ext4-qualification.md)。未验 XFS、安装包或真实服务器。
 
