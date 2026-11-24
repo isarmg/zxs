@@ -32,7 +32,10 @@ umask 077
 scratch=$(mktemp -d "$RUNNER_TEMP/workspace-emulator.XXXXXXXX")
 export ANDROID_HOME="$scratch/sdk" ANDROID_SDK_ROOT="$scratch/sdk"
 export ANDROID_USER_HOME="$scratch/user" ANDROID_AVD_HOME="$scratch/avd"
-export ANDROID_ADB_SERVER_PORT=5038 ADB_SERVER_SOCKET=tcp:127.0.0.1:5038
+export ANDROID_ADB_SERVER_ADDRESS=127.0.0.1 ANDROID_ADB_SERVER_PORT=5038
+export ADB_SERVER_SOCKET="tcp:$ANDROID_ADB_SERVER_ADDRESS:$ANDROID_ADB_SERVER_PORT"
+# Do not discover emulators at an inherited host or load outside ADB keys.
+unset ADBHOST ADB_VENDOR_KEYS
 export GRADLE_USER_HOME="$scratch/gradle" HOME="$scratch/home"
 mkdir -p "$ANDROID_HOME" "$ANDROID_USER_HOME" "$ANDROID_AVD_HOME" "$HOME"
 for component in platforms build-tools platform-tools; do
@@ -41,7 +44,7 @@ done
 adb="$ANDROID_HOME/platform-tools/adb"
 serial=emulator-5554
 emulator_pid=
-adb_started=
+adb_pid=
 cleanup() {
     status=$?
     trap - EXIT
@@ -49,8 +52,12 @@ cleanup() {
         if ((status)); then tail -100 "$scratch/emulator.log" || true; fi
         kill "$emulator_pid" 2>/dev/null || true
     fi
-    if [[ -n $adb_started ]]; then "$adb" kill-server || true; fi
+    if [[ -n $adb_pid ]]; then
+        if ((status)); then tail -100 "$scratch/adb.log" || true; fi
+        kill "$adb_pid" 2>/dev/null || true
+    fi
     if [[ -n $emulator_pid ]]; then wait "$emulator_pid" || true; fi
+    if [[ -n $adb_pid ]]; then wait "$adb_pid" || true; fi
     rm -rf -- "$scratch"
     exit "$status"
 }
@@ -121,8 +128,35 @@ if ! grep -Eq '^image[.]sysdir[.]1[[:space:]]*=[[:space:]]*system-images/android
     echo "::error::The AVD was not configured with the pinned API 35 x86_64 system image."
     exit 1
 fi
-"$adb" start-server
-adb_started=1
+# ADB's client regards a numeric TCP host as remote and cannot auto-start it.
+# Use the local listener syntax only for the foreground server we own.
+adb_listener() { ss -Hltnp "sport = :$ANDROID_ADB_SERVER_PORT"; }
+listener=$(adb_listener)
+if [[ -n $listener ]]; then
+    echo "::error::The private ADB port is already in use."
+    exit 1
+fi
+"$adb" version
+ADB_USB=0 ADB_MDNS=0 "$adb" -L "tcp:localhost:$ANDROID_ADB_SERVER_PORT" server nodaemon \
+    > "$scratch/adb.log" 2>&1 &
+adb_pid=$!
+for ((i=0; i<50; i++)); do
+    kill -0 "$adb_pid" || break
+    listener=$(adb_listener)
+    [[ -n $listener ]] && break
+    sleep 0.2
+done
+read -r state recvq sendq endpoint peer owner <<< "$listener"
+if [[ $listener == *$'\n'* || $state != LISTEN ||
+      $endpoint != "$ANDROID_ADB_SERVER_ADDRESS:$ANDROID_ADB_SERVER_PORT" || $owner != *"pid=$adb_pid,"* ]] ||
+   ! kill -0 "$adb_pid"; then
+    echo "::error::The private ADB child did not bind the sole IPv4 loopback listener."
+    exit 1
+fi
+if ! adb_devices=$(timeout 15 "$adb" devices) || [[ $adb_devices != "List of devices attached" ]]; then
+    echo "::error::The private ADB server did not answer with an empty device list before emulator launch."
+    exit 1
+fi
 "$ANDROID_HOME/emulator/emulator" @workspace-ci -port 5554 -wipe-data -no-snapshot \
     -no-window -noaudio -no-boot-anim -accel on -gpu swiftshader_indirect \
     > "$scratch/emulator.log" 2>&1 &
