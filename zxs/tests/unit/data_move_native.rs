@@ -413,3 +413,6 @@ mod ready_tests;
 
 #[path = "data_move_switch.rs"]
 mod switch_tests;
+
+#[path = "data_move_retire.rs"]
+mod retire_tests;

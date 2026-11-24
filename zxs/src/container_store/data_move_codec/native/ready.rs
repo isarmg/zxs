@@ -348,7 +348,10 @@ fn require_candidate(
 
 fn require_layout(directory: &HeldDir, layout: &[&CStr]) -> io::Result<()> {
     directory.require_named()?;
-    let mut observed = [false; HAS_READY.len()];
+    let mut observed = [false; 6]; // Largest known exact journal phase is DONE.
+    if layout.len() > observed.len() {
+        return Err(invalid("unknown DATA move journal layout"));
+    }
     directory.each_name(super::ReadAccess::NoAtime, |name| {
         let index = layout
             .iter()

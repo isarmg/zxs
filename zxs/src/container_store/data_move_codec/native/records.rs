@@ -114,6 +114,22 @@ impl BoundJournal {
         candidate: &Intent,
         source: &Source,
     ) -> io::Result<Self> {
+        let (journal, found_proof) =
+            Self::read_records((parent, directory), (record, sidecar), candidate)?;
+        Proof::decode(&found_proof, &Expect::source(&journal.original))?;
+        if found_proof != source.bytes {
+            return Err(invalid(
+                "the original source-proof differs from the native source",
+            ));
+        }
+        Ok(journal)
+    }
+
+    fn read_records(
+        (parent, directory): (HeldDir, HeldDir),
+        (record, sidecar): (OpaquePin, OpaquePin),
+        candidate: &Intent,
+    ) -> io::Result<(Self, Vec<u8>)> {
         let raw = candidate.encode()?;
         let found = read_raw(&record, INTENT_BYTES)?;
         let original = Intent::decode(&found)?;
@@ -124,12 +140,6 @@ impl BoundJournal {
         }
         let expected = Expect::source(&original);
         let found_proof = read_raw(&sidecar, expected.extent()?)?;
-        Proof::decode(&found_proof, &expected)?;
-        if found_proof != source.bytes {
-            return Err(invalid(
-                "the original source-proof differs from the native source",
-            ));
-        }
         let journal = Self {
             parent,
             directory,
@@ -139,7 +149,7 @@ impl BoundJournal {
             sidecar,
         };
         journal.require_original()?;
-        Ok(journal)
+        Ok((journal, found_proof))
     }
 
     fn settle(&self, selected: &Selected<'_>) -> io::Result<()> {

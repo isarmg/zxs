@@ -241,7 +241,7 @@ fn require_members(
     directory.require_named()
 }
 
-fn stamp(pin: &OpaquePin) -> io::Result<Stamp> {
+pub(super) fn stamp(pin: &OpaquePin) -> io::Result<Stamp> {
     let m = pin.file.metadata()?;
     Ok(Stamp {
         inode: m.ino(),

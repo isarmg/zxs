@@ -1,4 +1,6 @@
-//! The sole canonical CR1 cut and durable SWITCHED proof. No source retirement.
+//! The sole canonical CR1 cut and durable SWITCHED proof.
+#[path = "retire.rs"]
+pub(in super::super) mod retire;
 use super::super::super::super::{CUT_BYTES, INTENT_BYTES, Intent, Switched};
 use super::super::{Source, decode_route, intend_with_old};
 use super::{
@@ -93,9 +95,9 @@ impl<'held, 'scope> HeldReady<'held, 'scope> {
     }
 }
 
-struct Chosen<'held, 'scope> {
+struct Chosen<'held, 'scope, Origin = Source> {
     selected: &'held Selected<'scope>,
-    source: Source,
+    source: Origin,
     journal: BoundJournal,
     guard: HeldGuard,
     draft: Draft, // candidate is now held under canonical C.
@@ -168,7 +170,9 @@ impl<'held, 'scope> Chosen<'held, 'scope> {
             raw,
         })
     }
+}
 
+impl<Origin> Chosen<'_, '_, Origin> {
     fn require_route(&self) -> io::Result<()> {
         let selected = self.selected;
         require_pending_absence(selected, &self.journal.directory)?;
@@ -180,11 +184,11 @@ impl<'held, 'scope> Chosen<'held, 'scope> {
         )
     }
 
-    fn require_position(&self, marker: bool) -> io::Result<()> {
+    fn require_position_with(&self, files: &[&CStr]) -> io::Result<()> {
         let selected = self.selected;
         selected.require_local()?;
         self.journal.require_original()?;
-        require_layout(&self.journal.directory, layout(marker))?;
+        require_layout(&self.journal.directory, files)?;
         let i = self.journal.original.value();
         if birth(&selected.roots.state.file)? != i.state_parent
             || birth(&selected.routes.file)? != i.routes_parent
@@ -193,7 +197,6 @@ impl<'held, 'scope> Chosen<'held, 'scope> {
         {
             return Err(invalid("the original DATA move selection custody changed"));
         }
-        self.source.require_named()?;
         self.guard
             .require(selected.roots.state, &selected.names.active)?;
         absent(selected.roots.state, &selected.names.inactive)?;
@@ -210,6 +213,13 @@ impl<'held, 'scope> Chosen<'held, 'scope> {
         }
         self.ready.require(journal, R)?;
         self.require_route()
+    }
+}
+
+impl<'held, 'scope> Chosen<'held, 'scope> {
+    fn require_position(&self, marker: bool) -> io::Result<()> {
+        self.source.require_named()?;
+        self.require_position_with(layout(marker))
     }
 
     fn qualify(&self, marker: Option<&OpaquePin>, bytes: &[u8; CUT_BYTES]) -> io::Result<()> {
