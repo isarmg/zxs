@@ -326,20 +326,23 @@ impl Session {
         intent: &Intent,
         file: File,
         before_send: impl FnOnce() -> Result<()>,
-    ) -> Lookup {
-        match intent.save() {
-            Ok(request) => {
-                self.resolve(
-                    intent,
-                    request,
-                    Some((file, &intent.body)),
-                    false,
-                    before_send,
-                )
-                .await
-            }
-            Err(_) => Lookup::Unknown,
-        }
+    ) -> Result<Lookup> {
+        let Ok(request) = intent.save() else {
+            return Ok(Lookup::Unknown);
+        };
+        let mut refused = None;
+        let reply = self
+            .resolve(intent, request, Some((file, &intent.body)), false, || {
+                if let Err(error) = before_send() {
+                    refused = Some(error);
+                    return Err(invalid("local authorization refused before sending"));
+                }
+                Ok(())
+            })
+            .await;
+        // An observed local refusal sent no POST. Do not treat it as a wire
+        // uncertainty or write another local phase on the detached custody.
+        refused.map_or(Ok(reply), Err)
     }
 
     async fn resolve(

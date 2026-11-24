@@ -218,10 +218,10 @@ fn local_review(
     io::stdout().flush()?;
     let mut confirmation = String::new();
     io::stdin().read_line(&mut confirmation)?;
-    if confirmation.trim_end_matches(['\n', '\r']) == "prepare" {
-        if let Some(intent) = state.prepare(&review, true)? {
-            println!("已封存，不上传。原操作 {}", intent.operation_id);
-        }
+    if confirmation.trim_end_matches(['\n', '\r']) == "prepare"
+        && let Some(intent) = state.prepare(&review, true)?
+    {
+        println!("已封存，不上传。原操作 {}", intent.operation_id);
     }
     Ok(())
 }

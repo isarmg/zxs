@@ -4,6 +4,7 @@ use crate::{
     r3::{Body, Digest},
 };
 use rustix::fs::{self, AtFlags, CWD, Dir, Mode, OFlags, ResolveFlags};
+use rustix::io::Errno;
 use rustix::process::{getegid, geteuid, getgid, getuid};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -182,6 +183,35 @@ fn proc_fds() -> Result<File> {
     .into())
 }
 
+// Access the held inode, not its untrusted name. An O_PATH file descriptor is still
+// live throughout the procfs reopen; a rename cannot redirect it to a special file.
+fn reopen_regular(pin: &File, before: Stamp, access: OFlags) -> Result<File> {
+    if before.mode & 0o170000 != 0o100000 || stamp(&pin.metadata()?) != before {
+        return Err(invalid("the held regular inode changed before access"));
+    }
+    let proc = proc_fds()?;
+    let number = pin.as_raw_fd().to_string();
+    if fs::statat(&proc, number.as_str(), AtFlags::SYMLINK_NOFOLLOW)?.st_mode & 0o170000 != 0o120000
+    {
+        return Err(invalid(
+            "not the genuine procfs link for the held regular inode",
+        ));
+    }
+    let file: File = fs::openat(
+        &proc,
+        number.as_str(),
+        access | OFlags::CLOEXEC | OFlags::NONBLOCK,
+        Mode::empty(),
+    )?
+    .into();
+    if stamp(&file.metadata()?) != before {
+        return Err(invalid(
+            "access did not reopen the exact held regular inode",
+        ));
+    }
+    Ok(file)
+}
+
 fn local_volume(fd: &File) -> Result<()> {
     if !matches!(fs::fstatfs(fd)?.f_type, 0xef53 | 0x5846_5342) {
         return Err(invalid(
@@ -297,6 +327,16 @@ impl Folder {
         Ok(fs::openat2(&self.fd, path, OFlags::PATH | SAFE, Mode::empty(), INSIDE)?.into())
     }
 
+    fn retain(&self) -> Result<Self> {
+        Ok(Self {
+            path: self.path.clone(),
+            fd: self.fd.try_clone()?,
+            identity: self.identity,
+            uid: self.uid,
+            private: self.private,
+        })
+    }
+
     pub(crate) fn source(&self, path: &Path) -> Result<Source> {
         self.check()?;
         let pin = self.pin(path)?;
@@ -307,31 +347,9 @@ impl Folder {
             ));
         }
         let before = stamp(&m);
-        let proc = proc_fds()?;
-        let number = pin.as_raw_fd().to_string();
-        if fs::statat(&proc, number.as_str(), AtFlags::SYMLINK_NOFOLLOW)?.st_mode & 0o170000
-            != 0o120000
-        {
-            return Err(invalid(
-                "not the genuine procfs link for the held regular inode",
-            ));
-        }
-        let file: File = fs::openat(
-            &proc,
-            number.as_str(),
-            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NONBLOCK,
-            Mode::empty(),
-        )?
-        .into();
-        let folder = Self {
-            path: self.path.clone(),
-            fd: self.fd.try_clone()?,
-            identity: self.identity,
-            uid: self.uid,
-            private: self.private,
-        };
+        let file = reopen_regular(&pin, before, OFlags::RDONLY)?;
         let source = Source {
-            folder,
+            folder: self.retain()?,
             path: path.to_owned(),
             pin,
             file,
@@ -384,6 +402,16 @@ impl Folder {
     }
 
     pub(crate) fn publish(&self, name: &OsStr, file: &File, expected: &Body) -> Result<()> {
+        self.publish_guarded(name, file, expected, || Ok(()))
+    }
+
+    pub(crate) fn publish_guarded(
+        &self,
+        name: &OsStr,
+        file: &File,
+        expected: &Body,
+        before_link: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
         self.absent(name)?;
         file.sync_all()?;
         if &measure(file, std::io::sink())? != expected {
@@ -398,16 +426,7 @@ impl Folder {
         {
             return Err(invalid("output is not the original private unnamed inode"));
         }
-        let proc = proc_fds()?;
-        let number = file.as_raw_fd().to_string();
-        self.check()?;
-        fs::linkat(
-            &proc,
-            number.as_str(),
-            &self.fd,
-            name,
-            AtFlags::SYMLINK_FOLLOW,
-        )?;
+        self.link_unpublished(name, file, before_link)?;
         // The name may exist if any check from here onward errors. Do not retry with a replacement.
         let check = || -> Result<()> {
             self.sync()?;
@@ -428,11 +447,34 @@ impl Folder {
         check().map_err(|_| invalid("verified output may already have been published; check original name, never replace"))
     }
 
+    // The last name insertion must not rely on the earlier absence check.
+    fn link_unpublished(
+        &self,
+        name: &OsStr,
+        file: &File,
+        before_link: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        let proc = proc_fds()?;
+        let number = file.as_raw_fd().to_string();
+        self.check()?;
+        before_link()?;
+        self.check()?;
+        fs::linkat(
+            &proc,
+            number.as_str(),
+            &self.fd,
+            name,
+            AtFlags::SYMLINK_FOLLOW,
+        )?;
+        Ok(())
+    }
+
     pub(crate) fn remove_verified(
         &self,
         name: &str,
         expected: &Body,
         original: Stamp,
+        before_unlink: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
         let source = self.source(Path::new(name))?;
         if source.before.dev != original.dev
@@ -443,36 +485,89 @@ impl Folder {
             return Err(invalid("not the original completed transfer payload"));
         }
         source.check()?;
+        before_unlink()?;
+        source.check()?;
         fs::unlinkat(&self.fd, name, AtFlags::empty())?;
         self.sync()
     }
 
-    pub(crate) fn lock(&self, name: &str) -> Result<File> {
-        self.check()?;
-        plain_relative(Path::new(name))?;
-        let file: File = fs::openat2(
-            &self.fd,
-            name,
-            OFlags::RDWR | OFlags::CREATE | SAFE,
-            Mode::RUSR | Mode::WUSR,
-            INSIDE,
-        )?
-        .into();
-        let held = file.metadata()?;
-        if held.uid() != self.uid
-            || !held.is_file()
+    fn lease_stamp(&self, fd: &File) -> Result<Stamp> {
+        let held = fd.metadata()?;
+        if !held.is_file()
+            || held.dev() != self.identity.0
+            || held.uid() != self.uid
             || held.nlink() != 1
-            || held.mode() & 0o777 != 0o600
+            || held.mode() & 0o7777 != 0o600
         {
             return Err(invalid("workspace lock must be the private ordinary file"));
         }
-        fs::flock(&file, fs::FlockOperation::NonBlockingLockExclusive)?;
-        let named = self.pin(Path::new(name))?.metadata()?;
-        if stamp(&named) != stamp(&held) {
-            return Err(invalid("workspace lock was replaced"));
+        Ok(stamp(&held))
+    }
+
+    pub(crate) fn lock(&self, name: &str) -> Result<Lease> {
+        let path = Path::new(name);
+        if !self.private || path.file_name() != Some(OsStr::new(name)) {
+            return Err(invalid("workspace lock requires one private local name"));
         }
         self.check()?;
-        Ok(file)
+        let existing = |pin: File| -> Result<(File, Stamp)> {
+            let before = self.lease_stamp(&pin)?;
+            Ok((reopen_regular(&pin, before, OFlags::RDWR)?, before))
+        };
+        let (file, before) = match self.pin(path) {
+            Ok(pin) => existing(pin)?,
+            Err(e) if e.downcast_ref::<Errno>() == Some(&Errno::NOENT) => {
+                // An absent name is created only with O_EXCL; a competing new name is pinned first.
+                match self.new_private(name) {
+                    Ok(file) => {
+                        let before = self.lease_stamp(&file)?;
+                        (file, before)
+                    }
+                    Err(e) if e.downcast_ref::<Errno>() == Some(&Errno::EXIST) => {
+                        existing(self.pin(path)?)?
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            Err(e) => return Err(e),
+        };
+        fs::flock(&file, fs::FlockOperation::NonBlockingLockExclusive)?;
+        let lease = Lease {
+            folder: self.retain()?,
+            name: path.to_owned(),
+            file,
+            before,
+        };
+        lease.check()?;
+        Ok(lease)
+    }
+}
+
+// Retain the flock and its selected name for the full operation, not merely
+// until open returns. This is cooperative exclusion in the private root.
+pub(crate) struct Lease {
+    folder: Folder,
+    name: PathBuf,
+    file: File,
+    before: Stamp,
+}
+
+impl Lease {
+    pub(crate) fn check(&self) -> Result<()> {
+        self.folder.check()?;
+        if self.folder.lease_stamp(&self.file).ok() != Some(self.before)
+            || self
+                .folder
+                .pin(&self.name)
+                .and_then(|pin| self.folder.lease_stamp(&pin))
+                .ok()
+                != Some(self.before)
+        {
+            return Err(invalid(
+                "the original private workspace lease changed or was detached",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -503,3 +598,7 @@ impl Source {
         Ok(body)
     }
 }
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod tests;

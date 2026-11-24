@@ -9,6 +9,10 @@ mod native;
 #[cfg(target_os = "linux")]
 pub mod workspace;
 
+#[cfg(all(test, target_os = "linux"))]
+#[path = "../tests/support/mod.rs"]
+mod native_test_support;
+
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 pub(crate) fn invalid(message: &'static str) -> Box<dyn std::error::Error + Send + Sync> {

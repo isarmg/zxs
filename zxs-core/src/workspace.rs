@@ -1,14 +1,14 @@
 //! Local mappings, frozen unconfirmed payloads, and verified R3 receipt reconciliation.
 use crate::{
     Result, bundle, invalid,
-    native::{self, Folder, Source, Stamp},
+    native::{self, Folder, Lease, Source, Stamp},
     r3::{Body, Branch, DisplayName, Id, Intent, Lookup, Target},
     session::{Principal, Session},
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::Permissions,
+    fs::{File, Permissions},
     io::sink,
     os::unix::fs::{FileExt, MetadataExt, PermissionsExt},
     path::Path,
@@ -188,19 +188,12 @@ impl Workspace {
     }
 
     fn held_database(&self) -> Result<()> {
-        self.root.check()?;
-        let named = self.root.pin(Path::new(DB))?.metadata()?;
-        if !named.is_file()
-            || named.uid() != native::ordinary_uid()?
-            || named.mode() & 0o777 != 0o600
-            || named.nlink() != 1
-            || (named.dev(), named.ino()) != self.db_id
-        {
-            return Err(invalid(
-                "the original private SQLite identity no longer matches",
-            ));
-        }
-        Ok(())
+        held_database_at(&self.root, self.db_id)
+    }
+
+    fn hold_container(&self, container: &Id) -> Result<Lease> {
+        self.held_database()?;
+        self.root.lock(&format!("lease-{container}"))
     }
 
     fn validate(&self) -> Result<()> {
@@ -306,11 +299,8 @@ impl Workspace {
             body: review.body.clone(),
         };
         intent.validate()?;
-        let _lease = self.root.lock(&format!("lease-{}", intent.container_id))?;
-        let active: bool = self.db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM original WHERE (container=?1 OR path=?2) AND phase!='confirmed')",
-            params![intent.container_id.as_str(), &review.path], |r| r.get(0))?;
-        if active {
+        let lease = self.hold_container(&intent.container_id)?;
+        if unresolved_selection(&self.db, &intent.container_id, &review.path)? {
             return Err(invalid(
                 "an unresolved original already owns this file or container",
             ));
@@ -320,8 +310,23 @@ impl Workspace {
             return Err(invalid("source changed after review"));
         }
         pending.set_permissions(Permissions::from_mode(0o400))?;
+        self.retain_prepared(review, intent, &pending, &lease)
+            .map(Some)
+    }
+
+    fn retain_prepared(
+        &mut self,
+        review: &Review,
+        intent: Intent,
+        pending: &File,
+        lease: &Lease,
+    ) -> Result<Intent> {
+        let root = &self.root;
+        let db_id = self.db_id;
+        let recheck = || held_lease_at(root, db_id, lease);
+        recheck()?;
         let name = payload(&intent.operation_id);
-        if let Err(error) = self.root.publish(name.as_ref(), &pending, &intent.body) {
+        if let Err(error) = root.publish_guarded(name.as_ref(), pending, &intent.body, recheck) {
             return Err(format!("original {} may have local staged bytes; no network sent, retain its evidence: {error}",
                                intent.operation_id).into());
         }
@@ -332,25 +337,32 @@ impl Workspace {
             prior: review.prior.clone(),
             sealed,
         };
-        self.held_database()?;
         let commit = (|| -> Result<()> {
+            recheck()?;
             let tx = self
                 .db
                 .transaction_with_behavior(TransactionBehavior::Immediate)?;
-            if db_basis(&tx, &review.path)? != review.prior {
-                return Err(invalid("the original mapping changed"));
+            if db_basis(&tx, &review.path)? != review.prior
+                || unresolved_selection(&tx, &intent.container_id, &review.path)?
+            {
+                return Err(invalid(
+                    "the original local mapping or pending slot changed",
+                ));
             }
+            recheck()?;
             tx.execute("INSERT INTO original(op,container,path,record,phase) VALUES(?1,?2,?3,?4,'prepared')",
                        params![intent.operation_id.as_str(), intent.container_id.as_str(), &review.path,
                                serde_json::to_string(&retained)?])?;
+            recheck()?;
             tx.commit()?;
-            Ok(())
+            root.sync()?;
+            recheck()
         })();
-        if commit.is_err() || self.root.sync().is_err() || self.held_database().is_err() {
-            return Err(format!("local intent {} may be registered; no network sent; reopen and reconcile same original",
+        if let Err(error) = commit {
+            return Err(format!("local intent {} may have registered staging; no network sent; retain and reopen same original: {error}",
                                intent.operation_id).into());
         }
-        Ok(Some(intent))
+        Ok(intent)
     }
 
     pub async fn checkout(
@@ -387,6 +399,11 @@ impl Workspace {
             seen_sequence: detail.sequence,
             body: node.body(),
         };
+        // Checkout has no network mutation or pending operation. Its local write
+        // is guarded by the held DB/path ownership transaction and held destination.
+        let root = &self.root;
+        let db_id = self.db_id;
+        let recheck = || held_database_at(root, db_id);
         let tx = self
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -395,12 +412,16 @@ impl Workspace {
                 "a binding or unresolved original acquired the destination during download",
             ));
         }
-        parent.publish(leaf, &staged, &basis.body)?;
+        parent.publish_guarded(leaf, &staged, &basis.body, recheck)?;
         let saved = (|| -> Result<()> {
+            recheck()?;
+            parent.check()?;
             tx.execute(
                 "INSERT INTO basis VALUES(?1,?2)",
                 params![path, serde_json::to_string(&basis)?],
             )?;
+            recheck()?;
+            parent.check()?;
             tx.commit()?;
             Ok(())
         })();
@@ -478,7 +499,8 @@ impl Workspace {
             let operation = Id::parse(&op)?;
             let (original, _, receipt) = self.original(&operation)?;
             let Some(sequence) = receipt else { continue };
-            let local_cleanup_pending = !self.cleanup(&original)?;
+            let lease = self.hold_container(&original.intent.container_id)?;
+            let local_cleanup_pending = !self.cleanup(&original, &lease)?;
             outcomes.push(Resolution {
                 operation,
                 status: Lookup::Confirmed { sequence },
@@ -500,13 +522,18 @@ impl Workspace {
 
     pub async fn lookup(&mut self, session: &Session, op: &Id) -> Result<Resolution> {
         self.same_principal(session)?;
+        let (selected, _, _) = self.original(op)?;
+        let lease = self.hold_container(&selected.intent.container_id)?;
         let (original, _, prior_result) = self.original(op)?;
-        if let Some(sequence) = prior_result {
-            return self.settle(&original, Lookup::Confirmed { sequence });
+        if original != selected {
+            return Err(invalid("the selected original record changed"));
         }
         // Readback is independent of body availability. No POST can follow from this method.
-        let reply = session.lookup(&original.intent).await;
-        self.settle(&original, reply)
+        let reply = match prior_result {
+            Some(sequence) => Lookup::Confirmed { sequence },
+            None => session.lookup(&original.intent).await,
+        };
+        self.settle(&original, reply, &lease)
     }
 
     pub async fn submit(
@@ -520,20 +547,19 @@ impl Workspace {
         }
         self.same_principal(session)?;
         let (initial, _, _) = self.original(op)?;
-        let _lease = self
-            .root
-            .lock(&format!("lease-{}", initial.intent.container_id))?;
+        let lease = self.hold_container(&initial.intent.container_id)?;
         let (original, _, prior) = self.original(op)?;
         if original != initial {
             return Err(invalid("the selected original record changed"));
         }
         if let Some(sequence) = prior {
-            return self.settle(&original, Lookup::Confirmed { sequence });
+            return self.settle(&original, Lookup::Confirmed { sequence }, &lease);
         }
         let receipt = session.lookup(&original.intent).await;
         if receipt != Lookup::Absent {
-            return self.settle(&original, receipt); // Conflict/unknown is not permission to send.
+            return self.settle(&original, receipt, &lease); // Not permission to send.
         }
+        held_lease_at(&self.root, self.db_id, &lease)?;
         if db_basis(&self.db, &original.path)? != original.prior {
             return Err(invalid(
                 "original mapping no longer agrees; only look up the prior operation",
@@ -546,36 +572,61 @@ impl Workspace {
             ));
         }
         let file = source.file.try_clone()?;
-        self.held_database()?;
+        self.arm_attempt(&original, &source, &lease)?;
+        let reply = session
+            .save_exact(&original.intent, file, || {
+                // H2 readiness may suspend; recheck all custody at the actual wire boundary.
+                self.same_principal(session)?;
+                self.check_attempt(&original, &source, &lease)
+            })
+            .await?;
+        self.settle(&original, reply, &lease)
+    }
+
+    fn arm_attempt(&self, original: &Original, source: &Source, lease: &Lease) -> Result<()> {
+        source.check()?;
+        let (retained, _, _) = self.original(&original.intent.operation_id)?;
+        if retained != *original || db_basis(&self.db, &original.path)? != original.prior {
+            return Err(invalid(
+                "authorization or original basis changed before arming",
+            ));
+        }
+        held_lease_at(&self.root, self.db_id, lease)?;
         if self.db.execute(
-            "UPDATE original SET phase='attempted' WHERE op=?1 AND phase!='confirmed'",
-            [op.as_str()],
+            "UPDATE original SET phase='attempted' WHERE op=?1 AND record=?2 AND phase!='confirmed'",
+            params![original.intent.operation_id.as_str(), serde_json::to_string(original)?],
         )? != 1
         {
             return Err(invalid("the exact original no longer permits sending"));
         }
         self.root.sync()?;
-        let reply = session
-            .save_exact(&original.intent, file, || {
-                // H2 stream readiness may suspend; use only the still-held original at the final wire boundary.
-                source.check()?;
-                self.same_principal(session)?;
-                let (again, phase, _) = self.original(op)?;
-                if again != original
-                    || phase != "attempted"
-                    || db_basis(&self.db, &original.path)? != original.prior
-                {
-                    return Err(invalid(
-                        "authorization or original basis changed before POST",
-                    ));
-                }
-                Ok(())
-            })
-            .await;
-        self.settle(&original, reply)
+        held_lease_at(&self.root, self.db_id, lease)
     }
 
-    fn settle(&mut self, original: &Original, mut status: Lookup) -> Result<Resolution> {
+    fn check_attempt(&self, original: &Original, source: &Source, lease: &Lease) -> Result<()> {
+        source.check()?;
+        let (again, phase, _) = self.original(&original.intent.operation_id)?;
+        if again != *original
+            || phase != "attempted"
+            || db_basis(&self.db, &original.path)? != original.prior
+        {
+            return Err(invalid(
+                "authorization or original basis changed before POST",
+            ));
+        }
+        held_lease_at(&self.root, self.db_id, lease)
+    }
+
+    fn settle(
+        &mut self,
+        original: &Original,
+        mut status: Lookup,
+        lease: &Lease,
+    ) -> Result<Resolution> {
+        let root = &self.root;
+        let db_id = self.db_id;
+        let recheck = || held_lease_at(root, db_id, lease);
+        recheck()?;
         let op = &original.intent.operation_id;
         let (selected, _, prior) = self.original(op)?;
         if &selected != original {
@@ -614,17 +665,20 @@ impl Workspace {
                         seen_sequence: sequence,
                         body: original.intent.body.clone(),
                     };
+                    recheck()?;
                     tx.execute("INSERT INTO basis VALUES(?1,?2) ON CONFLICT(path) DO UPDATE SET record=excluded.record",
                                params![&original.path, serde_json::to_string(&basis)?])?;
+                    recheck()?;
                     tx.execute(
                         "UPDATE original SET phase='confirmed',receipt=?2 WHERE op=?1",
                         params![op.as_str(), sequence.to_string()],
                     )?;
                 }
+                recheck()?;
                 tx.commit()?;
-                self.root.sync()?;
+                root.sync()?;
             }
-            let cleaned = self.cleanup(original)?;
+            let cleaned = self.cleanup(original, lease)?;
             return Ok(Resolution {
                 operation: op.clone(),
                 status,
@@ -636,11 +690,17 @@ impl Workspace {
             Lookup::Conflict => "conflict",
             _ => "unknown",
         };
-        self.db.execute(
-            "UPDATE original SET phase=?2 WHERE op=?1 AND phase!='confirmed'",
-            params![op.as_str(), phase],
-        )?;
-        self.held_database()?;
+        recheck()?;
+        if self.db.execute(
+            "UPDATE original SET phase=?2 WHERE op=?1 AND record=?3 AND phase!='confirmed'",
+            params![op.as_str(), phase, serde_json::to_string(original)?],
+        )? != 1
+        {
+            return Err(invalid(
+                "the exact pending original changed before settlement",
+            ));
+        }
+        recheck()?;
         Ok(Resolution {
             operation: op.clone(),
             status,
@@ -648,7 +708,9 @@ impl Workspace {
         })
     }
 
-    fn cleanup(&self, original: &Original) -> Result<bool> {
+    fn cleanup(&self, original: &Original, lease: &Lease) -> Result<bool> {
+        let recheck = || held_lease_at(&self.root, self.db_id, lease);
+        recheck()?;
         let op = original.intent.operation_id.as_str();
         let cleaned: bool =
             self.db
@@ -662,12 +724,14 @@ impl Workspace {
         if self.root.absent(file.as_ref()).is_err()
             && self
                 .root
-                .remove_verified(&file, &original.intent.body, original.sealed)
+                .remove_verified(&file, &original.intent.body, original.sealed, recheck)
                 .is_err()
         {
+            recheck()?;
             return Ok(false); // A local cleanup problem never resurrects network authorization.
         }
         self.root.sync()?;
+        recheck()?;
         self.db.execute(
             "UPDATE original SET cleaned=1 WHERE op=?1 AND phase='confirmed'",
             [op],
@@ -721,11 +785,38 @@ impl Workspace {
     }
 }
 
+fn held_database_at(root: &Folder, db_id: (u64, u64)) -> Result<()> {
+    root.check()?;
+    let named = root.pin(Path::new(DB))?.metadata()?;
+    if !named.is_file()
+        || named.uid() != native::ordinary_uid()?
+        || named.mode() & 0o777 != 0o600
+        || named.nlink() != 1
+        || (named.dev(), named.ino()) != db_id
+    {
+        return Err(invalid(
+            "the original private SQLite identity no longer matches",
+        ));
+    }
+    Ok(())
+}
+
+fn held_lease_at(root: &Folder, db_id: (u64, u64), lease: &Lease) -> Result<()> {
+    held_database_at(root, db_id)?;
+    lease.check()
+}
+
 fn schema_version(db: &Connection) -> Result<(i64, i64)> {
     Ok((
         db.pragma_query_value(None, "application_id", |r| r.get(0))?,
         db.pragma_query_value(None, "user_version", |r| r.get(0))?,
     ))
+}
+
+fn unresolved_selection(db: &Connection, container: &Id, path: &str) -> Result<bool> {
+    Ok(db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM original WHERE (container=?1 OR path=?2) AND phase!='confirmed')",
+        params![container.as_str(), path], |r| r.get(0))?)
 }
 
 fn unresolved_path(db: &Connection, path: &str) -> Result<bool> {
@@ -749,3 +840,7 @@ fn db_basis(db: &Connection, path: &str) -> Result<Option<Basis>> {
 fn payload(op: &Id) -> String {
     format!("pending-{op}.body")
 }
+
+#[cfg(test)]
+#[path = "workspace_tests.rs"]
+mod tests;
