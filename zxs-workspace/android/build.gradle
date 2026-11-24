@@ -25,12 +25,25 @@ android {
         versionName '0.1'
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
+    packaging {
+        resources {
+            merges += ['META-INF/LICENSE', 'META-INF/LICENSE.txt', 'META-INF/NOTICE', 'META-INF/NOTICE.txt']
+        }
+    }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
 }
 dependencies {
+    implementation('org.apache.httpcomponents.core5:httpcore5-h2') {
+        version { strictly '5.4.4' }
+    }
+    constraints {
+        implementation('org.apache.httpcomponents.core5:httpcore5') {
+            version { strictly '5.4.4' }
+        }
+    }
     androidTestImplementation 'androidx.test:runner:1.6.2'
     androidTestImplementation 'junit:junit:4.13.2'
 }

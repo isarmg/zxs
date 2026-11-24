@@ -1,10 +1,10 @@
 # Android 版本化 APK 候选
 
-这是现有只读查看器的**本地工件交接**，不是下载链接、签名服务或应用商店发布。应用 ID 为 `org.zipworkspace.preview`；当前 `versionName=0.1`、`versionCode=1`。版本只在本目录的 `build.gradle` 维护；对外升级时保持正确应用 ID 和签名身份，按 [Android 版本规则](https://developer.android.com/studio/publish/versioning) 提高版本码。
+这是现有 Android 工作区的**本地工件交接**，不是下载链接、签名服务或应用商店发布。应用 ID 为 `org.zipworkspace.preview`；当前 `versionName=0.1`、`versionCode=1`。版本只在本目录的 `build.gradle` 维护；对外升级时保持正确应用 ID 和签名身份，按 [Android 版本规则](https://developer.android.com/studio/publish/versioning) 提高版本码。
 
 ## 从独立源码准备工件
 
-以下命令供有授权的所有者在干净环境中**以后**操作。本目录本身就是 Gradle 根，无需其他项目，无 Gradle Wrapper 或额外打包插件。先备好并核实 JDK 17、[Gradle 8.13](https://gradle.org/release-checksums/)、[AGP 8.13.2 / SDK Platform 36 / Build Tools 35.0.0](https://developer.android.com/build/releases/agp-8-13-0-release-notes#compatibility)。平台 API 36 与 Build Tools 35.0.0 是不同组件。使用普通账户、干净且尚无 `build/` 输出、不会被并发改写的可信工作副本，预置经过核对的官方 SDK 和专用 Gradle 离线缓存；无自定义 init 脚本、IDE 注入参数或签名材料。缺 SDK 或依赖就停，不在线补装或自动接受协议。严格隔离网络时请另用断网的构建环境；`--offline` 不是第三方代码的网络沙箱。
+以下命令供有授权的所有者在干净环境中**以后**操作。本目录本身就是 Gradle 根，无需其他项目，无 Gradle Wrapper 或额外打包插件。先备好并核实 JDK 17、[Gradle 8.13](https://gradle.org/release-checksums/)、[AGP 8.13.2 / SDK Platform 36 / Build Tools 35.0.0](https://developer.android.com/build/releases/agp-8-13-0-release-notes#compatibility)。平台 API 36 与 Build Tools 35.0.0 是不同组件。使用普通账户、干净且尚无 `build/` 输出、不会被并发改写的可信工作副本，预置经过核对的官方 SDK 和专用 Gradle 离线缓存；无自定义 init 脚本、IDE 注入参数或签名材料。缺 SDK 或依赖就停，不在线补装或自动接受协议。当前的远程协议适配器固定使用 Maven Central 的 `httpcore5-h2` 和 `httpcore5` 5.4.4（Apache-2.0）。离线缓存须纳入并核对两份包及其许可和 NOTICE，不能把可选的 OpenJDK Conscrypt 包作为 Android 的 TLS 实现；Android 使用系统 TLS。严格隔离网络时请另用断网的构建环境；`--offline` 不是第三方代码的网络沙箱。
 
 在 `android/` 下运行，指定一个**尚不存在**的完整目录；它的父目录须事先存在、由操作者独占、不被同步或移动，且在工程之外：
 
