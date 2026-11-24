@@ -1,8 +1,11 @@
 # helper 独立交付核对表
 
-[仅静态] 本次删除镜像工具和本机网页未运行构建、测试或安装；没有当前版发行制品。
+| 证据 | 范围 |
+| --- | --- |
+| `85a8988` [CI通过] [Helper 默认 Rust 作业](https://github.com/isarmg/zxs/actions/runs/45331407209/job/138233242901) | 严格 Clippy、原生测试、第一方 Rust 格式检查。 |
+| `85a8988` [CI通过] [独立 Linux 构建](https://github.com/isarmg/zxs/actions/runs/45331407180/job/138233242360) | 构建并检查默认 Helper ELF；不等于发布或安装。 |
 
-历史提交 `7d86855` [CI通过]：[默认 Linux 构建](https://github.com/isarmg/zxs/actions/runs/45223533959)记录 ELF 摘要，未上传下载制品，不能归给当前源码。内嵌版和实机仍待验。
+这两条证据只归该提交，不覆盖后续改动、内嵌版、运行中的实际服务或真实盘上的离线维护。
 [清单](Cargo.toml)的 `1.0.0` 是源码包版本，不是发行记录。包名为 `local-ops-helper`，不向 crates.io 发布。
 
 当前交付不带外部镜像检查器或旧本机网页。原工具发行、版权和对应源码入口见[历史索引](docs/archive/retired-volume-tools.md)。

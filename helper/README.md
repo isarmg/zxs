@@ -26,4 +26,5 @@ helper setup-headless new SYSTEM RECYCLE DATA [DATA ...] LOGIN
 
 ## 开发与交付
 
-Helper 有独立 Cargo 工程、锁文件和工具链。见[架构](ARCHITECTURE.md)、[任务](TASKS.md)、[依赖](DEPENDENCIES.md)和[交付核对表](RELEASE.md)。静态审查不表示现场验收；获准的正向测试只能用独立临时数据，不能操作实际磁盘。
+Helper 有独立 Cargo 工程、锁文件和工具链。见[架构](ARCHITECTURE.md)、[任务](TASKS.md)、[依赖](DEPENDENCIES.md)和[交付证据](RELEASE.md)。
+维护者可继续查看[角色、锁和原件](docs/invariants/offline-authority.md)。源码检查不等于实机验收。
