@@ -4,15 +4,17 @@ import XCTest
 
 private actor ScriptedSaveExchange: RemoteSaveExchange {
     nonisolated let destination: String
+    nonisolated let acceptsFrozenFiles: Bool
     private var scripted: [RemoteSavePacket?]
     private let checkPOST: @Sendable () throws -> Void
     private(set) var methods: [String] = []
     private(set) var requests: [RemoteSave.Request] = []
 
-    init(destination: String, scripted: [RemoteSavePacket?],
+    init(destination: String, scripted: [RemoteSavePacket?], acceptsFrozenFiles: Bool = false,
          checkPOST: @escaping @Sendable () throws -> Void = {}) {
         self.destination = destination
         self.scripted = scripted
+        self.acceptsFrozenFiles = acceptsFrozenFiles
         self.checkPOST = checkPOST
     }
 
@@ -227,5 +229,58 @@ final class RemoteSaveCoordinatorTests: XCTestCase {
         XCTAssertThrowsError(try MobileSaveCredential(username: "alice:1", password: "a:b"))
         XCTAssertThrowsError(try MobileSaveCredential(username: "Alice", password: "a:b"))
         XCTAssertThrowsError(try MobileSaveCredential(username: "1", password: "a\nb"))
+    }
+
+    func testDiskBackedRecordNeverCarriesInlineBodyAndCanQueryWithMissingBody() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let stage = WholeFileStage(directory: directory.appendingPathComponent("files"))
+        let store = RemoteSaveStore(directory: directory.appendingPathComponent("operations"))
+        let id = UUID()
+        let staged = try stage.freeze(id: id, length: 3, check: {}, fill: { _, buffer in
+            _ = Data("abc".utf8).copyBytes(to: buffer)
+        }, validate: {})
+        let save = try RemoteSave(destination: destination, container: container, operation: operation,
+            node: node, base: 0, target: .firstMain(name: "draft.txt"), wholeFile: staged)
+        try store.retain(save)
+        XCTAssertEqual(try store.reopen(operation: operation).diskBody, staged)
+        XCTAssertLessThan(try save.encode().count, 2_048)
+        XCTAssertThrowsError(try save.upload(for: destination))
+        let coordinator = RemoteSaveCoordinator(store: store, wholeFiles: stage)
+        let unsupported = ScriptedSaveExchange(destination: destination, scripted: [absent])
+        do {
+            _ = try await coordinator.run(consent: save.confirmation(), choice: .submitFirst, over: unsupported)
+            XCTFail("must not fall back to inline transport")
+        } catch RemoteSave.Failure.invalidIntent {}
+        let unsupportedMethods = await unsupported.methods
+        XCTAssertEqual(unsupportedMethods, ["GET"])
+        XCTAssertFalse(try store.attempted(save))
+
+        let loss = ScriptedSaveExchange(destination: destination, scripted: [absent, nil], acceptsFrozenFiles: true)
+        do {
+            _ = try await coordinator.run(consent: save.confirmation(), choice: .submitFirst, over: loss)
+            XCTFail("expected interrupted upload")
+        } catch ScriptedSaveExchange.TestFailure.interrupted {}
+        let request = await loss.requests.last
+        XCTAssertNil(request?.body)
+        XCTAssertEqual(request?.headers["Content-Length"], "3")
+        XCTAssertEqual(try request?.frozenFile?.readChunk(maximum: 65_536), Data("abc".utf8))
+        XCTAssertTrue(try store.attempted(save))
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("files").appendingPathComponent(id.uuidString))
+
+        let cold = RemoteSaveCoordinator(store: store, wholeFiles: stage)
+        let noBody = ScriptedSaveExchange(destination: destination, scripted: [absent], acceptsFrozenFiles: true)
+        do {
+            _ = try await cold.run(consent: save.confirmation(), choice: .retrySameOperation, over: noBody)
+            XCTFail("missing protected body must suppress POST")
+        } catch WholeFileStage.Failure.invalidFile {}
+        let missingMethods = await noBody.methods
+        XCTAssertEqual(missingMethods, ["GET"])
+        try FileManager.default.removeItem(at: directory.appendingPathComponent("operations").appendingPathComponent(operation + ".json"))
+        let found = ScriptedSaveExchange(destination: destination, scripted: [recorded])
+        let result = try await cold.run(consent: save.confirmation(), choice: .lookup, over: found)
+        let foundMethods = await found.methods
+        XCTAssertEqual(result, .committed(1))
+        XCTAssertEqual(foundMethods, ["GET"])
     }
 }

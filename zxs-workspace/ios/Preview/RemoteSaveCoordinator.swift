@@ -4,7 +4,12 @@ import Foundation
 /// and selected account. It may not retry or follow a redirect for this call.
 protocol RemoteSaveExchange: Sendable {
     var destination: String { get }
+    var acceptsFrozenFiles: Bool { get }
     func once(_ request: RemoteSave.Request) async throws -> RemoteSavePacket
+}
+
+extension RemoteSaveExchange {
+    var acceptsFrozenFiles: Bool { false }
 }
 
 struct RemoteSavePacket: Sendable {
@@ -22,9 +27,12 @@ actor RemoteSaveCoordinator {
     enum Failure: Error { case busy, selectionChanged }
 
     private let store: RemoteSaveStore
+    private let wholeFiles: WholeFileStage?
     private var running = Set<String>()
 
-    init(store: RemoteSaveStore) { self.store = store }
+    init(store: RemoteSaveStore, wholeFiles: WholeFileStage? = nil) {
+        self.store = store; self.wholeFiles = wholeFiles
+    }
 
     func run(consent: RemoteSaveConsent, choice: Choice, over exchange: any RemoteSaveExchange) async throws -> Result {
         let operation = consent.operation
@@ -66,7 +74,14 @@ actor RemoteSaveCoordinator {
 
         try Task.checkCancellation()
         guard destination.utf8.elementsEqual(exchange.destination.utf8) else { return .unknown }
-        let upload = try store.admitAttempt(save, after: wasAttempted, authenticatedDestination: destination)
+        var held: WholeFileStage.Opened? = nil
+        if let diskBody = save.diskBody {
+            guard exchange.acceptsFrozenFiles, let wholeFiles else { throw RemoteSave.Failure.invalidIntent }
+            held = try await wholeFiles.openForUpload(diskBody)
+            try Task.checkCancellation()
+            guard destination.utf8.elementsEqual(exchange.destination.utf8) else { return .unknown }
+        }
+        let upload = try store.admitAttempt(save, after: wasAttempted, authenticatedDestination: destination, file: held)
         try Task.checkCancellation()
         let sent = try await exchange.once(upload)
         guard destination.utf8.elementsEqual(exchange.destination.utf8) else { return .unknown }

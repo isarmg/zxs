@@ -53,6 +53,13 @@ struct RemoteSave: Sendable {
         let path: String
         let headers: [String: String]
         let body: Data?
+        let frozenFile: WholeFileStage.Opened?
+
+        init(method: String, path: String, headers: [String: String], body: Data?,
+             frozenFile: WholeFileStage.Opened? = nil) {
+            self.method = method; self.path = path; self.headers = headers
+            self.body = body; self.frozenFile = frozenFile
+        }
     }
 
     private struct Record: Codable, Sendable {
@@ -63,7 +70,8 @@ struct RemoteSave: Sendable {
         let node: String
         let base: UInt64
         let target: Target
-        let payload: Data
+        let payload: Data?
+        let file: WholeFileStage.Identity?
         let digest: String
     }
 
@@ -80,6 +88,8 @@ struct RemoteSave: Sendable {
     private let record: Record
     var destination: String { record.destination }
     var operation: String { record.operation }
+    var diskBody: WholeFileStage.Identity? { record.file }
+    private var bodyLength: Int { record.payload?.count ?? record.file?.length ?? 0 }
 
     var summary: String {
         let title: String
@@ -88,24 +98,40 @@ struct RemoteSave: Sendable {
         case let .append(branch, head): title = "追加到 " + branch + " / " + head
         case let .forkMain(branch, from): title = "从 main 的 " + from + " 分叉到 " + branch
         }
-        return title + "\n" + String(record.payload.count) + " B · SHA-256 " + record.digest
+        return title + "\n" + String(bodyLength) + " B · SHA-256 " + record.digest
             + "\n操作号 " + record.operation
     }
 
     init(destination: String, container: String, operation: String, node: String, base: UInt64,
          target: Target, draft: LocalDraft.Revision) throws {
+        guard draft.bytes.count <= LocalDraft.byteLimit, String(data: draft.bytes, encoding: .utf8) != nil
+        else { throw Failure.invalidIntent }
+        try self.init(destination: destination, container: container, operation: operation, node: node,
+                      base: base, target: target, payload: draft.bytes, file: nil,
+                      digest: Self.hex(SHA256.hash(data: draft.bytes)))
+    }
+
+    init(destination: String, container: String, operation: String, node: String, base: UInt64,
+         target: Target, wholeFile: WholeFileStage.Identity) throws {
+        guard wholeFile.length >= 0, wholeFile.sha256.utf8.count == 64, wholeFile.sha256.utf8.allSatisfy({
+            (48...57).contains($0) || (97...102).contains($0)
+        }) else { throw Failure.invalidIntent }
+        try self.init(destination: destination, container: container, operation: operation, node: node,
+                      base: base, target: target, payload: nil, file: wholeFile, digest: wholeFile.sha256)
+    }
+
+    private init(destination: String, container: String, operation: String, node: String, base: UInt64,
+                 target: Target, payload: Data?, file: WholeFileStage.Identity?, digest: String) throws {
         guard !destination.isEmpty, destination.utf8.count <= 512,
               Self.validID(container), Self.validID(operation), Self.validID(node),
-              base < UInt64.max - 1, target.valid, draft.bytes.count <= LocalDraft.byteLimit,
-              String(data: draft.bytes, encoding: .utf8) != nil else { throw Failure.invalidIntent }
+              base < UInt64.max - 1, target.valid else { throw Failure.invalidIntent }
         switch target {
         case .firstMain: guard base == 0 else { throw Failure.invalidIntent }
         case let .append(_, head), let .forkMain(_, head):
             guard base > 0, node != head else { throw Failure.invalidIntent }
         }
         record = Record(version: 1, destination: destination, container: container, operation: operation,
-                        node: node, base: base, target: target, payload: draft.bytes,
-                        digest: Self.hex(SHA256.hash(data: draft.bytes)))
+                        node: node, base: base, target: target, payload: payload, file: file, digest: digest)
     }
 
     init(reopening bytes: Data) throws {
@@ -116,9 +142,17 @@ struct RemoteSave: Sendable {
               try Self.encodeCanonical(envelope) == bytes else { throw Failure.invalidStoredRecord }
         let stored = try decoder.decode(Record.self, from: envelope.record)
         guard try Self.encodeCanonical(stored) == envelope.record else { throw Failure.invalidStoredRecord }
-        try self.init(destination: stored.destination, container: stored.container,
-                      operation: stored.operation, node: stored.node, base: stored.base, target: stored.target,
-                      draft: LocalDraft.Revision(bytes: stored.payload))
+        switch (stored.payload, stored.file) {
+        case let (payload?, nil):
+            try self.init(destination: stored.destination, container: stored.container,
+                          operation: stored.operation, node: stored.node, base: stored.base, target: stored.target,
+                          draft: LocalDraft.Revision(bytes: payload))
+        case let (nil, file?):
+            try self.init(destination: stored.destination, container: stored.container,
+                          operation: stored.operation, node: stored.node, base: stored.base, target: stored.target,
+                          wholeFile: file)
+        default: throw Failure.invalidStoredRecord
+        }
         guard stored.version == 1, stored.digest == record.digest else { throw Failure.invalidStoredRecord }
     }
 
@@ -165,9 +199,10 @@ struct RemoteSave: Sendable {
         return Request(method: "GET", path: containerPath + "/operations/" + record.operation, headers: [:], body: nil)
     }
 
-    func upload(for authenticatedDestination: String) throws -> Request {
+    func upload(for authenticatedDestination: String, file: WholeFileStage.Opened? = nil) throws -> Request {
         try checkDestination(authenticatedDestination)
-        var headers = ["Content-Type": "application/octet-stream", "Content-Length": String(record.payload.count),
+        guard diskBody == file?.identity else { throw Failure.invalidStoredRecord }
+        var headers = ["Content-Type": "application/octet-stream", "Content-Length": String(bodyLength),
                        "Zxs-Operation": record.operation, "Zxs-Node": record.node, "Zxs-Sha256": record.digest]
         switch record.target {
         case let .firstMain(name):
@@ -177,7 +212,7 @@ struct RemoteSave: Sendable {
         case let .forkMain(_, from): headers["Zxs-Fork-From-Main"] = from
         }
         return Request(method: "POST", path: containerPath + "/branches/" + record.target.branch + "/nodes",
-                       headers: headers, body: record.payload)
+                       headers: headers, body: record.payload, frozenFile: file)
     }
 
     private func checkDestination(_ authenticatedDestination: String) throws {
@@ -197,7 +232,7 @@ struct RemoteSave: Sendable {
         }
         guard status == 200, bytes.count <= 2048 else { return .unknown }
         let prefix = Data(#"{"container_id":"\#(record.container)","operation_id":"\#(record.operation)","sequence":"#.utf8)
-        let suffix = Data(#","kind":"save_node","node_id":"\#(record.node)","length":\#(record.payload.count),"sha256":"\#(record.digest)","target":\#(record.target.receiptJSON)}"#.utf8)
+        let suffix = Data(#","kind":"save_node","node_id":"\#(record.node)","length":\#(bodyLength),"sha256":"\#(record.digest)","target":\#(record.target.receiptJSON)}"#.utf8)
         guard bytes.count > prefix.count + suffix.count,
               bytes.prefix(prefix.count).elementsEqual(prefix), bytes.suffix(suffix.count).elementsEqual(suffix) else {
             return .unknown
@@ -267,11 +302,13 @@ struct RemoteSaveStore {
     }
 
     func admitAttempt(_ save: RemoteSave, after attempted: Bool,
-                      authenticatedDestination: String) throws -> RemoteSave.Request {
+                      authenticatedDestination: String,
+                      file: WholeFileStage.Opened? = nil) throws -> RemoteSave.Request {
         // Caller already made one same-operation authority lookup. Re-sync
         // discovery after a crash, then persist the matching marker before
         // the caller can construct its body-bearing request.
-        guard try self.attempted(save) == attempted else { throw RemoteSave.Failure.invalidStoredRecord }
+        guard save.diskBody == file?.identity, try self.attempted(save) == attempted
+        else { throw RemoteSave.Failure.invalidStoredRecord }
         let original = try location(save.operation)
         let expected = try save.encode()
         guard try load(original) == expected else { throw RemoteSave.Failure.invalidStoredRecord }
@@ -283,7 +320,7 @@ struct RemoteSaveStore {
         guard try load(original) == expected else { throw RemoteSave.Failure.invalidStoredRecord }
         try publish(expected, at: location(save.operation, ending: ".attempt"))
         guard try load(original) == expected else { throw RemoteSave.Failure.invalidStoredRecord }
-        return try save.upload(for: authenticatedDestination)
+        return try save.upload(for: authenticatedDestination, file: file)
     }
 
     func cachedReceipt(_ save: RemoteSave) throws -> Data? {

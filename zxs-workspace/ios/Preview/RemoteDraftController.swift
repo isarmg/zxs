@@ -39,6 +39,7 @@ struct MobileSaveExchange: RemoteSaveExchange {
     }
 
     func once(_ request: RemoteSave.Request) async throws -> RemoteSavePacket {
+        guard request.frozenFile == nil else { throw RemoteSave.Failure.invalidIntent }
         let message = R3Request(method: request.method, path: request.path, headers: request.headers, body: request.body)
         let response = try await read(message)
         return RemoteSavePacket(status: response.status, bytes: response.bytes)

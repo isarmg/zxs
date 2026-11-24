@@ -2,7 +2,7 @@ import CryptoKit
 import Darwin
 import Foundation
 
-struct WholeFileStage {
+struct WholeFileStage: Sendable {
     enum Failure: Error { case invalidFile, changed, sync(Int32), retained(Identity) }
 
     struct Identity: Codable, Equatable, Sendable {
@@ -27,6 +27,50 @@ struct WholeFileStage {
             try? handle.close()
             if temporaryExists { try? FileManager.default.removeItem(at: temporary) }
         }
+    }
+
+    final class Opened: @unchecked Sendable {
+        let identity: Identity
+        private let handle: FileHandle
+        private let lock = NSLock()
+
+        fileprivate init(identity: Identity, handle: FileHandle) {
+            self.identity = identity
+            self.handle = handle
+        }
+
+        func readChunk(maximum: Int) throws -> Data? {
+            guard (1...65_536).contains(maximum) else { throw Failure.invalidFile }
+            lock.lock(); defer { lock.unlock() }
+            return try handle.read(upToCount: maximum)
+        }
+    }
+
+    private final class VerificationStop: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stopped = false
+
+        func cancel() { lock.lock(); stopped = true; lock.unlock() }
+        func check() throws {
+            lock.lock(); defer { lock.unlock() }
+            if stopped { throw CancellationError() }
+        }
+    }
+
+    func openForUpload(_ expected: Identity) async throws -> Opened {
+        let stop = VerificationStop()
+        return try await withTaskCancellationHandler(operation: {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    continuation.resume(with: Result {
+                        let held = try reopen(expected, check: stop.check)
+                        try stop.check()
+                        return Opened(identity: expected, handle: held)
+                    })
+                }
+            }
+        }, onCancel: { stop.cancel() })
     }
 
     private let directory: URL
