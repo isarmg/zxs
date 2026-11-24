@@ -3,6 +3,7 @@ package org.zipworkspace.preview;
 import org.apache.hc.core5.http.message.BasicHttpResponse;
 import org.junit.Test;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.util.HashMap;
@@ -47,6 +48,10 @@ public final class RemoteH2ExchangeTest {
                 BigInteger.ZERO, new RemoteSaveContract.FirstMain("a"), 0, EMPTY_SHA);
         var headers = new HashMap<>(save.submitHeaders());
         assertEquals(0, RemoteH2Exchange.validatePost(headers));
+        headers.put("Content-Length", "4294967296");
+        assertEquals(4_294_967_296L, RemoteH2Exchange.validatePost(headers));
+        headers.put("Content-Length", "9223372036854775808");
+        assertThrows(IOException.class, () -> RemoteH2Exchange.validatePost(headers));
         headers.put("Content-Length", "00");
         assertThrows(IOException.class, () -> RemoteH2Exchange.validatePost(headers));
         headers.put("Content-Length", "0");
@@ -55,6 +60,16 @@ public final class RemoteH2ExchangeTest {
         headers.remove("Authorization");
         headers.put("Zxs-Fork-From-Main", "44".repeat(16));
         assertThrows(IOException.class, () -> RemoteH2Exchange.validatePost(headers));
+    }
+
+    @Test
+    public void earlySuccessHeadersCannotBeUploadProof() throws Exception {
+        var producer = new FullBodyProducer(new ByteArrayInputStream(new byte[] { 1 }), 1, EMPTY_SHA);
+        assertThrows(IOException.class, () -> RemoteH2Exchange.requireUploadProof(200, producer));
+        RemoteH2Exchange.requireUploadProof(409, producer);
+        RemoteH2Exchange.requireUploadProof(200, null);
+        var empty = new FullBodyProducer(new ByteArrayInputStream(new byte[0]), 0, EMPTY_SHA);
+        RemoteH2Exchange.requireUploadProof(200, empty);
     }
 
     @Test

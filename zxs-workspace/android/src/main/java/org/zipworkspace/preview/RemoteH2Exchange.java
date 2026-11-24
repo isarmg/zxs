@@ -3,7 +3,11 @@ package org.zipworkspace.preview;
 import android.util.Base64;
 
 import org.apache.hc.core5.concurrent.FutureCallback;
+import org.apache.hc.core5.concurrent.FutureCallback;
 import org.apache.hc.core5.http.ContentType;
+import org.apache.hc.core5.http.EntityDetails;
+import org.apache.hc.core5.http.Message;
+import org.apache.hc.core5.http.protocol.HttpContext;
 import org.apache.hc.core5.http.Header;
 import org.apache.hc.core5.http.HttpException;
 import org.apache.hc.core5.http.HttpHost;
@@ -12,7 +16,6 @@ import org.apache.hc.core5.http.HttpVersion;
 import org.apache.hc.core5.http.HttpResponse;
 import org.apache.hc.core5.http.message.BasicHttpRequest;
 import org.apache.hc.core5.http.nio.entity.AbstractBinAsyncEntityConsumer;
-import org.apache.hc.core5.http.nio.entity.BasicAsyncEntityProducer;
 import org.apache.hc.core5.http.nio.ssl.TlsStrategy;
 import org.apache.hc.core5.http.nio.support.BasicRequestProducer;
 import org.apache.hc.core5.http.nio.support.BasicResponseConsumer;
@@ -72,6 +75,7 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
     private static final Pattern SEQUENCE = Pattern.compile("[1-9][0-9]{0,19}");
     private static final Pattern LOGIN = Pattern.compile("[a-z0-9][a-z0-9._-]{0,63}");
     private static final Pattern DNS = Pattern.compile("[a-z0-9.-]{1,253}");
+    private static final Pattern POST_LENGTH = Pattern.compile("0|[1-9][0-9]{0,18}");
     private static final Pattern NUM = Pattern.compile("0|[1-9][0-9]{0,8}");
     private static final Pattern HEX_NAME = Pattern.compile("(?:[0-9a-f]{2}){1,255}");
     private static final Pattern SHA = Pattern.compile("[0-9a-f]{64}");
@@ -149,16 +153,9 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
     public RemoteSaveSubmit.Response post(String exactOriginPath, Map<String, String> headers, InputStream completeBody)
             throws IOException {
         require(exactOriginPath != null && POST.matcher(exactOriginPath).matches());
-        int length = validatePost(headers);
-        require(completeBody != null);
-        byte[] payload = new byte[length];
-        try {
-            require(completeBody.readNBytes(payload, 0, length) == length && completeBody.read() == -1);
-            require(headers.get("Zxs-Sha256").equals(HexFormat.of().formatHex(sha256(payload))));
-            return exchange("POST", exactOriginPath, headers, payload, CONTROL);
-        } finally {
-            Arrays.fill(payload, (byte) 0);
-        }
+        long length = validatePost(headers);
+        var body = new FullBodyProducer(completeBody, length, headers.get("Zxs-Sha256"));
+        return exchange("POST", exactOriginPath, headers, body, CONTROL);
     }
 
     private record ReplyShape(String media, int limit, boolean control, int bodyLength, String digest) {}
@@ -200,15 +197,19 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
         return data;
     }
 
-    static int validatePost(Map<String, String> headers) throws IOException {
+    static long validatePost(Map<String, String> headers) throws IOException {
         require(headers != null && headers.keySet().containsAll(BODY_FIELDS)
                 && "application/octet-stream".equals(headers.get("Content-Type"))
-                && matches(headers.get("Content-Length"), NUM)
+                && matches(headers.get("Content-Length"), POST_LENGTH)
                 && matches(headers.get("Zxs-Operation"), WIRE_ID)
                 && matches(headers.get("Zxs-Node"), WIRE_ID)
                 && matches(headers.get("Zxs-Sha256"), SHA));
-        int length = Integer.parseInt(headers.get("Content-Length"));
-        require(length <= PlainText.LIMIT);
+        long length;
+        try {
+            length = Long.parseLong(headers.get("Content-Length"));
+        } catch (NumberFormatException invalid) {
+            throw new IOException("Invalid complete file length");
+        }
         boolean base = headers.containsKey("Zxs-Base-Node");
         boolean initial = headers.containsKey("Zxs-Initial-Name");
         boolean historical = headers.containsKey("Zxs-Fork-From-Main");
@@ -221,7 +222,7 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
     }
 
     private RemoteSaveSubmit.Response exchange(String method, String path, Map<String, String> headers,
-                                               byte[] body, ReplyShape shape) throws IOException {
+                                               FullBodyProducer body, ReplyShape shape) throws IOException {
         final SSLContext tls;
         try {
             tls = SSLContext.getInstance("TLS");
@@ -256,18 +257,26 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
                         request.setHeader(header.getKey(), header.getValue());
                     }
                 }
-                var producer = new BasicRequestProducer(request,
-                        body == null ? null : new BasicAsyncEntityProducer(body, ContentType.APPLICATION_OCTET_STREAM));
+                var producer = new BasicRequestProducer(request, body);
                 var bounded = new BasicResponseConsumer<>(new BoundedBody(shape.limit())) {
+                    @Override public void consumeResponse(HttpResponse head, EntityDetails entity,
+                            HttpContext context, FutureCallback<Message<HttpResponse, byte[]>> result)
+                            throws HttpException, IOException {
+                        requireUploadProof(head.getCode(), body);
+                        super.consumeResponse(head, entity, context, result);
+                    }
+
                     @Override public void streamEnd(List<? extends Header> trailers)
                             throws HttpException, IOException {
                         require(trailers == null || trailers.isEmpty());
                         super.streamEnd(trailers);
                     }
                 };
-                var response = waitFor(endpoint.execute(producer, bounded, null));
+                var future = endpoint.execute(producer, bounded, null);
+                var response = body == null ? waitFor(future) : waitForUpload(future, body);
                 byte[] data = response.getBody();
                 HttpResponse head = response.getHead();
+                requireUploadProof(head.getCode(), body);
                 int length = responseLength(head, shape);
                 require(data != null ? data.length == length : length == 0);
                 ensureLive();
@@ -278,6 +287,11 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
         } catch (IllegalStateException | UnsupportedOperationException unavailable) {
             throw new IOException("verified HTTP/2 exchange unavailable");
         }
+    }
+
+    static void requireUploadProof(int status, FullBodyProducer body) throws IOException {
+        // A successful response may not arrive before the original full body ends.
+        require(status != 200 || body == null || body.bodyComplete());
     }
 
     static int responseLength(HttpResponse head) throws IOException {
@@ -401,6 +415,35 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
         } catch (ExecutionException | TimeoutException | CancellationException notComplete) {
             pending.cancel(true);
             throw new IOException("verified HTTP/2 exchange did not complete");
+        }
+    }
+
+    private static <T> T waitForUpload(Future<T> pending, FullBodyProducer body) throws IOException {
+        long bytes = body.handedOff();
+        long lastProgress = System.nanoTime();
+        try {
+            while (true) {
+                try {
+                    return pending.get(1, TimeUnit.SECONDS);
+                } catch (TimeoutException stillRunning) {
+                    long latest = body.handedOff();
+                    long now = System.nanoTime();
+                    if (latest > bytes) {
+                        bytes = latest;
+                        lastProgress = now;
+                    } else if (now - lastProgress >= TimeUnit.MILLISECONDS.toNanos(TIMEOUT.toMilliseconds())) {
+                        pending.cancel(true);
+                        throw new IOException("Verified HTTP/2 upload stalled");
+                    }
+                }
+            }
+        } catch (InterruptedException interrupted) {
+            pending.cancel(true);
+            Thread.currentThread().interrupt();
+            throw new IOException("HTTPS exchange interrupted");
+        } catch (ExecutionException | CancellationException notComplete) {
+            pending.cancel(true);
+            throw new IOException("Verified HTTP/2 upload did not complete");
         }
     }
 

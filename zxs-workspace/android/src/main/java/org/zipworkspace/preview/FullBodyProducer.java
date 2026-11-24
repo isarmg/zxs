@@ -22,10 +22,11 @@ final class FullBodyProducer implements AsyncEntityProducer {
     private final MessageDigest digest;
     private final ByteBuffer pending = ByteBuffer.allocate(CHUNK);
     private long unread;
-    private boolean sourceVerified;
-    private boolean completed;
+    private volatile boolean sourceVerified;
+    private volatile boolean completed;
     private boolean released;
-    private boolean failed;
+    private volatile boolean failed;
+    private volatile long handedOff;
 
     FullBodyProducer(InputStream source, long length, String sha256) throws IOException {
         if (source == null || length < 0 || sha256 == null || !sha256.matches("[0-9a-f]{64}")) {
@@ -64,6 +65,7 @@ final class FullBodyProducer implements AsyncEntityProducer {
                 if (written < 0 || written != before - pending.remaining()) {
                     throw new IOException("HTTP/2 channel did not consume the written bytes");
                 }
+                handedOff += written;
                 if (pending.hasRemaining() || unread != 0) return;
             }
             if (!sourceVerified) verifyEnd();
@@ -93,7 +95,9 @@ final class FullBodyProducer implements AsyncEntityProducer {
         sourceVerified = true;
     }
 
-    synchronized boolean bodyComplete() {
+    long handedOff() { return handedOff; }
+
+    boolean bodyComplete() {
         return !failed && sourceVerified && (completed || length == 0);
     }
 
