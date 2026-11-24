@@ -13,7 +13,7 @@ from threading import local
 from ..container_http import ConfirmedAction
 from ..container_plan import Action, Plan, ReceiptFence
 from ..container_spool import reopen_submit, seal_metadata_submit
-from ..model import Rejected, canonical, new_id
+from ..model import Rejected, canonical, member_name, new_id
 from ..private_candidates import held_candidates
 from ..private_freeze import local_mount, mount_id
 from ..publish import rename_new_at
@@ -108,10 +108,19 @@ def _metadata_plan(change, operation):
     if type(change) is CreateBranch:
         return Plan((Action(operation, key, "create_branch", change.target.revision, None,
                             branch=change.branch, head=change.source_node),), ())
+    placements = ()
+    if type(change) in (Rename, Tags):
+        # Keep the old placeholder when it was admissible, including when
+        # resuming a pre-existing unarmed plan by its exact encoded digest.
+        # A name accepted only by the server is never a portable local placement.
+        try:
+            if len(member_name(change.target.name)) == 1:
+                placements = ((key, change.target.name),)
+        except Rejected:
+            pass
     return Plan((Action(operation, key, _CHANGE[type(change)], change.target.revision, None,
                         name=change.name if type(change) is Rename else None,
-                        tags=tuple(sorted(change.values)) if type(change) is Tags else None),),
-                () if type(change) is Recycle else ((key, change.target.name),))
+                        tags=tuple(sorted(change.values)) if type(change) is Tags else None),), placements)
 
 
 def _digest(plan):

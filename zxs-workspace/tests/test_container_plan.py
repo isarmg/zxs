@@ -1,8 +1,9 @@
+from dataclasses import replace
 from itertools import count
 import unittest
 
-from zipworkspace.container_plan import (Baseline, BranchIntent, DeleteIntent, FullBody, LocalFile, Plan, ReceiptFence,
-                                         from_atomic_editor_replace, plan_submit)
+from zipworkspace.container_plan import (Action, Baseline, BranchIntent, DeleteIntent, FullBody, LocalFile, Plan,
+                                         ReceiptFence, from_atomic_editor_replace, plan_submit)
 from zipworkspace.model import Rejected
 
 
@@ -63,6 +64,37 @@ class ContainerPlanTest(unittest.TestCase):
         save, = plan.actions
         self.assertEqual(("save_node", B, 0, "main", None, "manual.txt", CHANGED),
                          (save.kind, save.container_id, save.base_revision, save.branch, save.head, save.name, save.body))
+
+    def test_server_names_are_exact_but_cannot_be_used_as_local_placements(self):
+        for name in ("CON.txt", "Cafe\u0301.zxs", "钢" * 85, "x" * 255):
+            with self.subTest(name=name):
+                baseline = replace(self.base, name=name)
+                self.assertEqual(baseline.name, name)
+                first = Action(OLD, B, "save_node", 0, None, body=CHANGED, name=name,
+                               branch="main", node_id=NEW_NODE)
+                rename = Action(HEAD, A, "rename", 8, None, name=name)
+                plan = Plan((first, rename), ((B, "capture.bin"),))
+                encoded = plan.encode()
+                self.assertIn(name.encode("utf-8"), encoded)
+                self.assertEqual(Plan.decode(encoded), plan)
+                with self.assertRaises(Rejected):
+                    LocalFile(A, name, ORIGINAL)
+                with self.assertRaises(Rejected):
+                    Plan((first,), ((B, name),))
+                with self.assertRaises(Rejected):
+                    Plan((first,), ())  # Actual body captures still require a placement.
+
+    def test_invalid_server_name_uses_server_byte_and_scalar_limits(self):
+        forbidden = tuple("a" + c + "b" for c in '<>:"/\\|?*')
+        for name in ("", ".", "..", "dot.", "space ", "x" * 256, "钢" * 85 + "x",
+                     "a\x00b", "a\nb", "a\x7fb", "a\x85b", "a\ud800b", *forbidden):
+            with self.subTest(name=name):
+                with self.assertRaises(Rejected):
+                    replace(self.base, name=name)
+                with self.assertRaises(Rejected):
+                    Action(OLD, B, "save_node", 0, None, body=CHANGED, name=name, branch="main", node_id=NEW_NODE)
+                with self.assertRaises(Rejected):
+                    Action(HEAD, A, "rename", 8, None, name=name)
 
     def test_historical_main_edit_has_one_atomic_fork_and_whole_file_save(self):
         self.base = Baseline(A, "report.txt", 8, ORIGINAL, selected_node=OLD, head=HEAD)

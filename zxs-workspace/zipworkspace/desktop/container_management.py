@@ -7,6 +7,8 @@ import json
 import re
 from typing import Protocol
 
+from ..container_plan import display_name_ok
+
 _HEX_ID = re.compile(r"[0-9a-f]{32}")
 _SHA = re.compile(r"[0-9a-f]{64}")
 _MAX = (1 << 64) - 1
@@ -195,7 +197,7 @@ def _digest(value):
 
 
 def _container(value):
-    return (type(value) is Container and id_ok(value.id) and text_ok(value.name)
+    return (type(value) is Container and id_ok(value.id) and display_name_ok(value.name)
             and number(value.revision))
 
 
@@ -233,7 +235,7 @@ def valid_change(value):
     if type(value) not in _KINDS or not _container(value.target):
         return False
     if type(value) is Rename:
-        return value.target.revision != 0 and text_ok(value.name)
+        return value.target.revision != 0 and display_name_ok(value.name)
     if type(value) is Tags:
         return (value.target.revision != 0 and tags_ok(value.values)
                 and len(set(value.values)) == len(value.values))

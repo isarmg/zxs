@@ -1,12 +1,12 @@
 import unittest
 from dataclasses import replace
 
-from zipworkspace.container_http import ConfirmedAction
-from zipworkspace.container_plan import ReceiptFence
+from zipworkspace.container_http import ConfirmedAction, mutation_message
+from zipworkspace.container_plan import Action, FullBody, Plan, ReceiptFence
 from zipworkspace.desktop.container_client import Original, _matches, _receipt
 from zipworkspace.desktop.container_management import (
-    Body, Branch, Container, CreateBranch, Detail, Kind, Node, Outcome, Phase, Receipt, Recycle,
-    Ticket, branch_choice, lookup, open_checked, page, perform, save_choice, save_mode,
+    Body, Branch, Container, CreateBranch, Detail, Kind, Node, Outcome, Phase, Receipt, Recycle, Rename, Tags,
+    Ticket, branch_choice, lookup, open_checked, page, perform, save_choice, save_mode, valid_change,
 )
 from zipworkspace.desktop.container_outbox import _change, _change_bytes, _metadata_plan
 from zipworkspace.model import Rejected
@@ -117,6 +117,45 @@ class ContainerManagement(unittest.TestCase):
                                                Receipt(ticket, 11, branch=FORK_ID, node=HEAD.id))
         self.assertEqual(lookup(fixture, result.ticket).phase, Phase.UNKNOWN)
         self.assertEqual(MAIN.head, HEAD.id)
+
+    def test_new_and_existing_remote_only_names_remain_exact_without_a_local_path(self):
+        target = replace(C, name="CON.txt")
+        new_name = "Cafe\u0301.zxs"
+        for change in (Rename(target, new_name), Tags(target, ("保留",)), Rename(C, new_name)):
+            with self.subTest(change=change):
+                self.assertTrue(valid_change(change))
+                self.assertEqual(_change(_change_bytes(change)), change)
+                plan = _metadata_plan(change, OP)
+                expected = ((C.id, C.name),) if change.target == C else ()
+                self.assertEqual(plan.placements, expected)
+                self.assertEqual(Plan.decode(plan.encode()), plan)
+                action, base = plan.next_for(C.id)
+                self.assertTrue(_matches(action, base, Original(SPOOL, OP), change))
+                if type(change) is Rename:
+                    self.assertEqual(mutation_message(action, base).body, b'{"name":"' + new_name.encode() + b'"}')
+                self.assertIsNone(action.body)
+
+        first = Action(OP, C.id, "save_node", 0, None, body=FullBody(0, "d" * 64),
+                       name=new_name, branch="main", node_id=NEW_NODE)
+        message = mutation_message(first, 0, payload=())
+        self.assertEqual(dict(message.headers)["Zxs-Initial-Name"], new_name.encode().hex())
+
+    def test_invalid_logical_rename_never_prepares_a_ticket(self):
+        fixture = NativeFixture()
+        for change in (Rename(C, "remote/path"), Rename(C, "a\x85b"), Rename(replace(C, name="a "), "ok")):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                perform(fixture, change)
+        self.assertEqual(fixture.calls, [])
+
+    def test_preexisting_metadata_plan_bytes_are_unchanged_for_unarmed_recovery(self):
+        original = ('{"actions":[{"after":null,"base_revision":7,"body":null,"branch":null,'
+                    f'"container_id":"{C.id}","fork_from_main":null,"head":null,'
+                    f'"kind":"rename","name":"after.zxs","node_id":null,"operation_id":"{OP}",'
+                    '"tags":null}],"placements":[['
+                    f'"{C.id}","容器工艺"'
+                    ']],"version":1}').encode("utf-8")
+        self.assertEqual(_metadata_plan(Rename(C, "after.zxs"), OP).encode(), original)
+        self.assertEqual(Plan.decode(original).encode(), original)
 
     def test_unsupported_nonmain_history_keeps_readable_metadata(self):
         fixture = NativeFixture()

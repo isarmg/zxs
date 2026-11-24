@@ -8,6 +8,7 @@ from threading import Lock
 from typing import Callable
 
 from ..container_https import HttpsExchange
+from ..container_plan import display_name_ok as _catalog_name
 from ..model import Rejected
 from ..private_candidates import CandidateDirectory, held_candidates
 from ..private_freeze import local_mount
@@ -197,12 +198,6 @@ def _detail_page(raw, container, after=None):
     if raw["next_after"] != required:
         raise Rejected("invalid R3 detail continuation")
     return owner, tuple(raw["tags"]), tuple(heads), required
-
-
-def _catalog_name(name):
-    return (text_ok(name) and len(name.encode("utf-8")) <= 255 and name not in (".", "..")
-            and not name.endswith((".", " "))
-            and not any(ord(ch) < 32 or 127 <= ord(ch) <= 159 or ch in '<>:"/\\|?*' for ch in name))
 
 
 def _catalog_page(raw, after):

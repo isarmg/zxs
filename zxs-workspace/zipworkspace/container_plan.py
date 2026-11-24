@@ -6,6 +6,24 @@ import re
 from .model import Rejected, canonical, check_id, member_name, new_id
 
 
+_MAX_DISPLAY_NAME_BYTES = 255
+
+
+def display_name_ok(value):
+    """ZXS logical display component (zxs/src/display.rs), not a local path."""
+    if (type(value) is not str or not 0 < len(value) <= _MAX_DISPLAY_NAME_BYTES
+            or value in (".", "..") or value.endswith((".", " "))):
+        return False
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    # For strict UTF-8, the byte count also bounds the UTF-16 unit count.
+    return (len(encoded) <= _MAX_DISPLAY_NAME_BYTES and not any(
+        ord(c) < 32 or 127 <= ord(c) <= 159 or c in '<>:"/\\|?*' for c in value
+    ))
+
+
 class IgnoredOriginalNameConflict(Rejected):
     """A new file wants a name reserved for the ignored original."""
 
@@ -85,7 +103,7 @@ class Baseline:
         _branch(self.branch)
         _id(self.selected_node)
         _id(self.head)
-        if len(member_name(self.name)) != 1 or _revision(self.revision) == 0:
+        if not display_name_ok(self.name) or _revision(self.revision) == 0:
             raise Rejected("baseline needs one server display name and an existing revision")
         if type(self.body) is not FullBody:
             raise Rejected("body must identify the exact selected baseline node")
@@ -162,8 +180,8 @@ class Action:
             raise Rejected("action includes fields belonging to another operation")
         if self.body is not None and type(self.body) is not FullBody:
             raise Rejected("content action must describe the full individual file")
-        if self.name is not None and len(member_name(self.name)) != 1:
-            raise Rejected("server rename only accepts a container display name, not a workspace path")
+        if self.name is not None and not display_name_ok(self.name):
+            raise Rejected("invalid exact server display name")
         if self.tags is not None:
             _tags(self.tags)
         if self.branch is not None:
@@ -223,8 +241,8 @@ class Plan:
             key = (op.container_id, op.kind)
             if (op.operation_id in operations or key in mutations or op.after != prev
                     or (op.kind == "delete" and op.container_id in seen)
-                    # Explicit CreateBranch may be a no-body metadata command with no local file.
-                    or (op.kind not in ("delete", "create_branch") and op.container_id not in seen)
+                    # Metadata-only actions need no local file; a SaveNode still has one.
+                    or (op.kind not in ("delete", "create_branch", "rename", "set_tags") and op.container_id not in seen)
                     or (prev is not None and op.kind == "delete")):
                 raise Rejected("ambiguous operation set or missing exact predecessor")
             operations.add(op.operation_id)
