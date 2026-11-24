@@ -2,6 +2,9 @@
 use crate::path_rules::Kind;
 use sha2::{Digest, Sha256};
 
+#[path = "disk_move_admission.rs"]
+mod admission;
+
 const ROLE_DOMAIN: &[u8] = b"ZXS disk move live roles v1\0";
 const OPERAND_DOMAIN: &[u8] = b"ZXS disk move operand v1\0";
 const MAGIC: &[u8; 8] = b"ZXDMV1\0\0";
