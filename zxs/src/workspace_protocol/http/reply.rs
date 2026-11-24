@@ -2,7 +2,7 @@
 use super::super::dispatch::Reply;
 use crate::{
     container_store as core,
-    headless_http::{Outcome, Problem},
+    headless_http::{Outcome, PayloadReply, Problem},
 };
 use std::fmt::{self, Write as _};
 
@@ -18,6 +18,9 @@ pub(super) fn project(reply: Reply) -> Result<Outcome, Problem> {
                 sha256: bytes.node.body.sha256,
                 body: Box::new(bytes.file),
             });
+        }
+        Reply::Payload(bytes, window) => {
+            return Ok(Outcome::Payload(PayloadReply { bytes, window }));
         }
         Reply::Receipt(None) => return Ok(Outcome::ReceiptAbsent),
 

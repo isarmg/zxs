@@ -1,6 +1,9 @@
 //! Explicit new-profile reuse. A TCP connection never caches a client's identity.
 use super::{Head, Outcome, Problem};
-use crate::headless_auth::{Account, LoginError, SESSION_TTL_SECONDS};
+use crate::{
+    headless_auth::{Account, LoginError, SESSION_TTL_SECONDS},
+    workspace_protocol::is_payload_target,
+};
 use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
@@ -22,13 +25,15 @@ pub(super) fn profile(head: &Head<'_>) -> BackendProfile {
     if head.target == LOGIN {
         return BackendProfile::Login;
     }
-    if head.fields.iter().any(|(key, value)| {
-        key.eq_ignore_ascii_case("authorization")
-            && value
-                .split_ascii_whitespace()
-                .next()
-                .is_some_and(|scheme| scheme.eq_ignore_ascii_case("Bearer"))
-    }) {
+    if is_payload_target(head.target)
+        || head.fields.iter().any(|(key, value)| {
+            key.eq_ignore_ascii_case("authorization")
+                && value
+                    .split_ascii_whitespace()
+                    .next()
+                    .is_some_and(|scheme| scheme.eq_ignore_ascii_case("Bearer"))
+        })
+    {
         return BackendProfile::Bearer;
     }
     BackendProfile::Legacy

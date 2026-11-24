@@ -1,6 +1,6 @@
 //! Typed R2 dispatch adapter. It never starts a listener, parses raw JSON,
 //! positions a host path, or invents success without a selected Store receipt.
-use super::{Branch, Id, JsonMutation, MetadataMutation, Request};
+use super::{Branch, Id, JsonMutation, MetadataMutation, PayloadRead, PayloadWindow, Request};
 mod project;
 use crate::container_store as core;
 use project::{Revoked, branch_key, failed, receipt_for, save_node};
@@ -31,6 +31,7 @@ pub(crate) enum Reply {
     Detail(core::DetailPage),
     Tags(Vec<String>),
     Node(core::NodeBytes),
+    Payload(core::NodeBytes, PayloadWindow),
     BranchHistory(core::HistoryPage),
     Mutation(core::Receipt),
     Recycle {
@@ -56,6 +57,7 @@ fn access(request: &Request) -> Access {
         | Request::ContainerDetail { container, .. }
         | Request::BranchHistory { container, .. }
         | Request::Receipt { container, .. } => Access::Read(*container),
+        Request::NodePayload(read) => Access::Read(read.container),
         Request::SaveNode(save) => Access::Write(save.container),
         Request::CreateBranch { container, .. } => Access::Write(*container),
         Request::Delete(scope) | Request::Json { scope, .. } => Access::Write(scope.container),
@@ -144,6 +146,7 @@ fn execute<R: Read>(
                 .map_err(|_| Failure::Unavailable)?
                 .ok_or(Failure::Missing)?,
         )),
+        (Request::NodePayload(read), Body::Empty) => read_payload(store, read),
         (
             Request::Receipt {
                 container,
@@ -217,6 +220,15 @@ fn execute<R: Read>(
         ) => read_history(store, container, branch, head, next),
         _ => Err(Failure::BadBody),
     }
+}
+
+fn read_payload(store: &core::Store, read: PayloadRead) -> Result<Reply, Failure> {
+    let bytes = store
+        .node_for_payload(read.container.bytes(), read.node.bytes())
+        .map_err(|_| Failure::Unavailable)?
+        .ok_or(Failure::Missing)?;
+    let window = read.window(bytes.node.body.length, bytes.node.body.sha256);
+    Ok(Reply::Payload(bytes, window))
 }
 
 fn read_detail(

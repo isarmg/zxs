@@ -1,6 +1,9 @@
 //! Strict HTTP/1.1 behind a deployment-managed frontend. No TLS or forwarding policy.
+mod payload;
 mod reuse;
 
+pub(crate) use payload::PayloadReply;
+use payload::{ContentRange, write_payload};
 pub(super) use reuse::ReuseBudget;
 use reuse::{BackendProfile, MAX_EXCHANGES, NEXT_HEAD, can_reuse, profile, session_outcome};
 
@@ -50,6 +53,7 @@ fn body_for<'a>(request: &Request, source: &'a mut dyn Read) -> Result<Incoming<
         | Request::ContainerDetail { .. }
         | Request::Tags(_)
         | Request::NodeData { .. }
+        | Request::NodePayload(_)
         | Request::BranchHistory { .. }
         | Request::Receipt { .. }
         | Request::Delete(_) => Ok(Incoming::Empty),
@@ -73,6 +77,7 @@ pub(crate) enum Outcome {
         sha256: [u8; 32],
         body: Box<dyn Read>,
     },
+    Payload(PayloadReply),
     Failed(Problem),
 }
 
@@ -332,14 +337,19 @@ fn resource(
         Err(_) if stopping() => return None,
         Err(error) => return Some(Outcome::Failed(auth_problem(error))),
     };
-    let request = match workspace_protocol::request(head.method, head.target, &head.fields) {
+    let frame = if bearer && workspace_protocol::is_payload_target(head.target) {
+        workspace_protocol::payload_request(head.method, head.target, &head.fields)
+    } else {
+        workspace_protocol::request(head.method, head.target, &head.fields)
+    };
+    let request = match frame {
         Ok(request) => request,
         Err(workspace_protocol::Rejected::Route) => return Some(Outcome::Failed(Problem::Missing)),
         Err(_) => return Some(Outcome::Failed(Problem::Malformed)),
     };
-    if bearer && !matches!(request, Request::Receipt { .. }) {
-        // Until a separate v1 mutation policy is selected, a session is
-        // authority only for the original immutable receipt lookup.
+    if bearer && !matches!(request, Request::Receipt { .. } | Request::NodePayload(_)) {
+        // v1 authorizes exact read-only receipts and the distinct immutable
+        // payload path. All other current R3 routes remain Basic-only.
         return Some(Outcome::Failed(Problem::Denied));
     }
     let mut bounded = match body_for(&request, reader) {
@@ -367,6 +377,9 @@ struct HeaderExtras {
     challenge: Option<&'static str>,
     retry_after: Option<u64>,
     digest: Option<[u8; 32]>,
+    etag: Option<[u8; 32]>,
+    content_range: Option<ContentRange>,
+    accept_ranges: bool,
 }
 
 fn headers(
@@ -394,12 +407,35 @@ fn headers(
     write!(output, "Content-Length: {length}\r\n")?;
     if let Some(digest) = extras.digest {
         output.write_all(b"Zxs-Sha256: ")?;
-        for byte in digest {
-            write!(output, "{byte:02x}")?;
-        }
+        hex_digest(output, digest)?;
         output.write_all(b"\r\n")?;
     }
+    if extras.accept_ranges {
+        output.write_all(b"Accept-Ranges: bytes\r\n")?;
+    }
+    if let Some(tag) = extras.etag {
+        output.write_all(b"ETag: \"")?;
+        hex_digest(output, tag)?;
+        output.write_all(b"\"\r\n")?;
+    }
+    if let Some(range) = extras.content_range {
+        match range {
+            ContentRange::Interval { start, end, total } => {
+                write!(output, "Content-Range: bytes {start}-{end}/{total}\r\n")?;
+            }
+            ContentRange::NoneAt { total } => {
+                write!(output, "Content-Range: bytes */{total}\r\n")?;
+            }
+        }
+    }
     output.write_all(b"\r\n")
+}
+
+fn hex_digest(output: &mut impl Write, digest: [u8; 32]) -> io::Result<()> {
+    for byte in digest {
+        write!(output, "{byte:02x}")?;
+    }
+    Ok(())
 }
 
 fn write_problem(output: &mut impl Write, problem: Problem) -> io::Result<()> {
@@ -459,6 +495,7 @@ fn write_outcome(output: &mut impl Write, outcome: Outcome, keep: bool) -> io::R
             }
             Ok(())
         }
+        Outcome::Payload(reply) => write_payload(output, reply, keep),
         Outcome::Failed(problem) => write_problem(output, problem),
     }
 }

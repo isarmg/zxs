@@ -1,4 +1,4 @@
-use super::hex;
+use super::{PayloadRead, hex};
 use std::io::{Read, Take};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,6 +86,7 @@ pub(crate) enum Request {
         container: Id,
         node: Id,
     },
+    NodePayload(PayloadRead),
     BranchHistory {
         container: Id,
         branch: Branch,

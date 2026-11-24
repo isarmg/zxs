@@ -868,6 +868,14 @@ impl Store {
     }
 
     pub(crate) fn node(&self, id: Id, node: NodeId) -> io::Result<Option<NodeBytes>> {
+        self.open_node(id, node, false)
+    }
+
+    pub(crate) fn node_for_payload(&self, id: Id, node: NodeId) -> io::Result<Option<NodeBytes>> {
+        self.open_node(id, node, true)
+    }
+
+    fn open_node(&self, id: Id, node: NodeId, exact_name: bool) -> io::Result<Option<NodeBytes>> {
         let object = self.object(id)?;
         let mut memory = object
             .lock()
@@ -890,13 +898,20 @@ impl Store {
         let payload = entry
             .opaque_pin(c"payload")?
             .ok_or_else(|| invalid("selected node payload is absent"))?;
-        let file = payload.file;
-        if file.metadata()?.len() != node.body.length {
+        if payload.file.metadata()?.len() != node.body.length {
             return Err(invalid(
                 "complete node length differs from its durable receipt",
             ));
         }
-        Ok(Some(NodeBytes { node, file }))
+        if exact_name {
+            payload.require(&entry, c"payload")?;
+            container.require_named()?;
+            volume.require_named()?;
+        }
+        Ok(Some(NodeBytes {
+            node,
+            file: payload.file,
+        }))
     }
 }
 

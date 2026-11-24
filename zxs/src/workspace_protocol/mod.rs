@@ -2,7 +2,9 @@
 //! exact HTTP message framing; this module neither listens nor opens storage.
 const ROOT: &str = "/zxs/v1/containers";
 
+mod ranges;
 mod types;
+pub(crate) use ranges::{PayloadRead, PayloadWindow, is_payload_target, payload_request};
 pub(crate) use types::*;
 pub(crate) mod dispatch;
 pub(crate) mod http;
