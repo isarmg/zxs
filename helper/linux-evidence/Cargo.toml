@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
 license = "Apache-2.0"
-description = "Bounded Linux filesystem identity reads on an already-held local object"
+description = "Fixed Linux worker and signal boundaries, and local filesystem type admission"
 publish = false
 
 [dependencies]
