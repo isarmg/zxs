@@ -84,47 +84,87 @@ def issue_setup(password):
     pid, fd = pty.fork()
     if pid == 0:
         try:
+            # Raw execv does not restore CPython's ignored Linux signals like
+            # subprocess.Popen(restore_signals=True). Helper rejects ignored SIGXFSZ
+            # before its first prompt. Keep every other inherited policy and mask.
+            for sig in (signal.SIGPIPE, signal.SIGXFSZ):
+                signal.signal(sig, signal.SIG_DFL)
             os.execv(HELPER, [HELPER, "setup-headless", "new", *paths, ACCOUNT])
         finally:
             os._exit(127)
 
-    buf = b""
-    reaped = False
+    prompts = (("approval", b"Type SETUP to approve: ", b"SETUP"),
+               ("first-password", b"Password: ", password),
+               ("repeat-password", b"Repeat password: ", password))
     deadline = time.monotonic() + 90
-    prompts = ((b"Type SETUP to approve: ", b"SETUP"), (b"Password: ", password),
-               (b"Repeat password: ", password))
-    try:
-        for prompt, answer in prompts:
-            while prompt not in buf:
-                require(time.monotonic() < deadline, "setup terminal prompt timeout")
-                if select.select([fd], [], [], 1)[0]:
-                    block = os.read(fd, 4096)
-                    require(block and len(buf) + len(block) <= BODY_LIMIT,
-                            "setup terminal closed or excessive output")
-                    buf += block
-            buf = buf.split(prompt, 1)[1]
-            # Do not emit terminal transcript or synthetic credential.
-            require(os.write(fd, answer + b"\n") == len(answer) + 1, "short PTY write")
-        while time.monotonic() < deadline:
-            if select.select([fd], [], [], 0.1)[0]:
-                try:
-                    block = os.read(fd, 4096)
-                except OSError as exc:
-                    if exc.errno != errno.EIO:
-                        raise
-                    block = b""
-                require(len(buf) + len(block) <= BODY_LIMIT, "excess setup output")
-                buf += block
+    buf = b""
+    total = index = 0
+    closed = False
+    exit_code = None
+
+    def poll_child():
+        nonlocal exit_code
+        if exit_code is None:
             done, status = os.waitpid(pid, os.WNOHANG)
             if done:
-                reaped = True
-                require(os.waitstatus_to_exitcode(status) == 0, "Helper setup failed")
-                require(b"Setup confirmed:" in buf, "missing exact setup confirmation")
-                break
-        require(reaped, "Helper setup timeout")
+                exit_code = os.waitstatus_to_exitcode(status)
+
+    def failure(reason):
+        poll_child()
+        stage = prompts[index][0] if index < len(prompts) else "confirmation"
+        state = "running" if exit_code is None else (
+            f"exit={exit_code}" if exit_code >= 0 else f"signal={-exit_code}")
+        # Never interpolate PTY bytes, answers, or arbitrary child output here.
+        return RuntimeError(f"Helper setup stage={stage} child={state}: {reason}")
+
+    try:
+        # Reap AND drain through slave close: exit alone does not mean that the
+        # parent's last read has already received the confirmation.
+        while not closed or exit_code is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise failure("timeout")
+            poll_child()
+            if closed:
+                if exit_code is None:
+                    time.sleep(min(0.05, remaining))
+                continue
+            if not select.select([fd], [], [], min(0.25, remaining))[0]:
+                continue
+            try:
+                block = os.read(fd, 4096)
+            except OSError as exc:
+                if exc.errno != errno.EIO:
+                    raise failure(f"terminal read errno={exc.errno}") from None
+                block = b""  # Linux PTY master after the last slave closes
+            if not block:
+                closed = True
+                continue
+            total += len(block)
+            if total > BODY_LIMIT:
+                raise failure("excessive terminal output")
+            buf += block
+            if index < len(prompts):
+                _, prompt, answer = prompts[index]
+                if prompt in buf:
+                    if exit_code is not None:
+                        raise failure("child exited before reply")
+                    buf = buf.split(prompt, 1)[1]
+                    try:
+                        sent = os.write(fd, answer + b"\n")
+                    except OSError as exc:
+                        if exc.errno != errno.EIO:
+                            raise failure(f"terminal write errno={exc.errno}") from None
+                        closed = True
+                        continue
+                    if sent != len(answer) + 1:
+                        raise failure("short terminal write")
+                    index += 1
+        if exit_code != 0 or index != len(prompts) or b"Setup confirmed:" not in buf:
+            raise failure("terminal closed without successful completion")
     finally:
         os.close(fd)
-        if not reaped:
+        if exit_code is None:
             try:
                 os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
