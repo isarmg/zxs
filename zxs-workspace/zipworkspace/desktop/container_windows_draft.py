@@ -198,7 +198,11 @@ class _Backing:
     file_id: bytes
     length: int
     index: int
-    flushed: bool = False
+    # Native-final-close keys are never reused. An exclusive CREATE owns its rename
+    # even after Close: a different open must not adopt a canceled editor's scratch.
+    creator: object | None = None
+    flushed_by: object | None = None
+    creator_closed_dirty: bool = False
     faulted: bool = False
 
 
@@ -326,12 +330,14 @@ class WindowsHeldDraft:
             active, writable = self._contexts.get(key, (None, False))
             if (owner is None or owner is not self._provider or self._state != "editing"
                     or body is None or body is not self._scratch or body is not active
-                    or self._selected is not self._initial or writable):
+                    or self._selected is not self._initial):
                 raise PermissionError("not the original active Windows scratch rename handle")
+            if body.creator is not (key if writable else None):
+                raise PermissionError("the exclusive scratch creator cannot be reopened or substituted")
             if any(other is not key and backing is not None for other, (backing, _) in self._contexts.items()):
                 raise BlockingIOError(EBUSY, "finish all Windows file and provenance contexts before replacement")
-            if not body.flushed or body.faulted:
-                raise PermissionError("flush and close the original scratch writer before attempting replacement")
+            if body.flushed_by is None or (writable and body.flushed_by is not key) or body.faulted:
+                raise PermissionError("the last scratch change must be flushed by an admitted editor handle")
             # Both real files remain at their original generated names. No overwrite, copy onto
             # the primary, deletion, native rename or R3 action. Commit once with no failing I/O afterward.
             old, api = self._selected, self._home.api
@@ -384,7 +390,7 @@ class WindowsHeldDraft:
             self._state, self._provider, self._project_origin = "fault", None, False
             self._contexts.clear()
 
-    def open(self, *, writable=False, _provider=None, _backing=None, _root=False):
+    def open(self, *, writable=False, _provider=None, _backing=None, _root=False, _rename_writer=False):
         with self._lock:
             if (self._provider is not _provider or self._state != "editing" or type(writable) is not bool
                     or (_root and (_backing is not None or writable or _provider is None))):
@@ -392,10 +398,16 @@ class WindowsHeldDraft:
             body = self._selected if _backing is None else _backing
             if body is not self._selected and (body is not self._scratch or _provider is None):
                 raise Rejected("not an active original backing")
+            if type(_rename_writer) is not bool or (_rename_writer and
+                    (not writable or _root or _provider is None or body is not self._scratch
+                     or body is self._selected or body.creator is not None)):
+                raise Rejected("only the new original scratch may bind its exclusive creator")
             with self._fault_on_error(body):
                 self._observe_backing(body, body.length)
             key = object()
             self._contexts[key] = (None if _root else body, writable)
+            if _rename_writer:
+                body.creator = key
             return key
 
     def _allow(self, key, *, write=False):
@@ -451,7 +463,7 @@ class WindowsHeldDraft:
             with self._fault_on_error(body):
                 self._observe_backing(body, body.length)
                 if count:
-                    body.flushed = False
+                    body.flushed_by = None
                     api = self._home.api
                     if offset > body.length:
                         api.resize(body.handle, offset)  # FileEndOfFileInformation zero-pads the gap.
@@ -471,7 +483,7 @@ class WindowsHeldDraft:
                 self._home.api.flush(body.handle)
                 self._observe_backing(body, body.length)
                 if editor_data:
-                    body.flushed = True  # Native file Flush after the last data change, not cleanup.
+                    body.flushed_by = key  # Native file Flush after the last data change, not cleanup.
                 return body.length
 
     def resize(self, key, size):
@@ -483,7 +495,7 @@ class WindowsHeldDraft:
             with self._fault_on_error(body):
                 self._observe_backing(body, body.length)
                 if size != body.length:
-                    body.flushed = False
+                    body.flushed_by = None
                     self._home.api.resize(body.handle, size)
                     self._observe_backing(body, size)
                     body.length = size
@@ -493,6 +505,11 @@ class WindowsHeldDraft:
         with self._lock:
             if key not in self._contexts:
                 raise Rejected("unknown or previously released Windows draft context")
+            body, _ = self._contexts[key]
+            if body is self._selected and body.creator is key and body.flushed_by is not key:
+                # A cached or explicit change after Rename did reach the right body, but this
+                # creator never sealed it again. A later handle must not bless its final Close.
+                body.creator_closed_dirty = True
             del self._contexts[key]
 
     def begin_drain(self, *, _provider=None):
@@ -506,6 +523,8 @@ class WindowsHeldDraft:
         with self._lock:
             if confirmed is not True or self._provider is not None or self._state != "draining" or self._contexts:
                 raise Rejected("stop new opens, release every original context, then confirm local review")
+            if self._selected.creator_closed_dirty:
+                raise Rejected("临时文件改名后有写入未由原创建句柄再次刷新；保留两处私有原件，不准备或提交。")
             if self._attempted and (self._selected is self._initial or self._witnessed is not self._selected):
                 raise Rejected("原卷已关闭，不能确认临时内容已替换所选文件；保留两处私有原件，不准备或提交。")
             with self._fault_on_error():

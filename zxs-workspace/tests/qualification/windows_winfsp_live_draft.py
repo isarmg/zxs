@@ -3,7 +3,9 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import ctypes as c
 from hashlib import sha256
+import json
 from pathlib import Path
+import subprocess
 import sys
 import time
 import unittest
@@ -24,6 +26,35 @@ from zipworkspace.windows_nt import I32, P, U32, _function
 
 CONSENT = "--consent-create-volume-start-installed-winfsp-and-mount-private-directory"
 CONSENT_REPLACE = "--consent-live-winfsp-scratch-replace-and-retain-both-private-files"
+CONSENT_QSAVE = "--consent-live-winfsp-qt-save-and-retain-both-private-files"
+
+# Never execute QSaveFile.commit() in the provider interpreter. PySide may keep
+# its GIL while synchronously flushing/renaming, and the dispatcher needs its GIL.
+_QSAVEFILE_EDITOR = """
+import json
+from pathlib import Path
+import sys
+from PySide6.QtCore import QIODevice, QSaveFile, qVersion
+
+target, scenario = Path(sys.argv[1]), sys.argv[2]
+if not target.is_absolute() or scenario not in ("qt-save", "qt-cancel"):
+    raise ValueError("use only the supplied mounted file and selected qualification scenario")
+if qVersion() != "6.11.2":
+    raise RuntimeError("requires exactly Qt 6.11.2, got " + qVersion())
+out = QSaveFile(str(target))
+out.setDirectWriteFallback(False)
+if not out.open(QIODevice.OpenModeFlag.WriteOnly):
+    raise RuntimeError(out.errorString())
+scratch, = {p.name for p in target.parent.iterdir()} - {target.name}
+if out.write(b"whole") != 5 or not out.flush():
+    raise RuntimeError(out.errorString())
+if scenario == "qt-cancel":
+    out.cancelWriting()
+committed = out.commit()
+if committed != (scenario == "qt-save"):
+    raise RuntimeError("unexpected commit result: " + out.errorString())
+print(json.dumps([scratch, committed]))
+"""
 
 
 class FileRenameInfo(c.Structure):
@@ -45,11 +76,11 @@ def classic_replace(k, source, target, replace=True):
 
 class ActualDirectory(LocalWorkingFile):
     @contextmanager
-    def handle(self, path, rights, *, disposition=3, flags=0x80):
+    def handle(self, path, rights, *, disposition=3, flags=0x80, share=7):
         k = c.WinDLL("kernel32.dll", use_last_error=True, winmode=0x800)
         open_ = _function(k, "CreateFileW", P, c.c_wchar_p, U32, U32, P, U32, U32, P)
         close = _function(k, "CloseHandle", I32, P)
-        h = open_(str(path), rights, 7, None, disposition, flags, None)
+        h = open_(str(path), rights, share, None, disposition, flags, None)
         if h in (None, c.c_void_p(-1).value):
             raise c.WinError(c.get_last_error())
         try:
@@ -235,6 +266,130 @@ class ActualDirectory(LocalWorkingFile):
     def test_unflushed_scratch_cannot_replace_or_prepare(self):
         self._scratch_campaign(False)
 
+    def _held_creator(self, owner, primary, scenario):
+        k = c.WinDLL("kernel32.dll", use_last_error=True, winmode=0x800)
+        write = _function(k, "WriteFile", I32, P, P, U32, c.POINTER(U32), P)
+        flush = _function(k, "FlushFileBuffers", I32, P)
+        seek = _function(k, "SetFilePointerEx", I32, P, c.c_int64, P, U32)
+        end = _function(k, "SetEndOfFile", I32, P)
+        update = _function(k, "SetFileInformationByHandle", I32, P, I32, P, U32)
+        rw_delete = 0xc0010000  # GENERIC_READ | GENERIC_WRITE | DELETE, NOT FILE_ALL_ACCESS.
+        scratch = primary.with_name("editor.tmp")
+        for rights, share in ((rw_delete, 7), (0x10002, 0), (rw_delete | 0x40000, 0)):
+            with self.subTest(rights=rights, share=share), self.assertRaises(OSError):
+                with self.handle(scratch, rights, share=share, disposition=1):
+                    self.fail("broad/nonexclusive create was accepted; it also spent the only slot")
+        self.assertFalse(scratch.exists())
+        with self.handle(scratch, rw_delete, share=0, disposition=1) as writer:
+            n = U32()
+            self.assertTrue(write(writer, b"whole", 5, c.byref(n), None))
+            self.assertEqual(n.value, 5)
+            self.assertFalse(classic_replace(k, writer, primary), "rename borrowed an implicit or missing writer flush")
+            self.assertTrue(flush(writer), c.get_last_error())
+            armed = c.c_ubyte(1)
+            self.assertFalse(update(writer, 4, c.byref(armed), c.sizeof(armed)), "DELETE armed disposition")
+            if scenario != "abandon":
+                with self.handle(primary, 1):
+                    self.assertFalse(classic_replace(k, writer, primary), "old primary still had a read handle")
+                self._wait_only_rename(owner)
+                self.assertFalse(classic_replace(k, writer, primary.with_name("different")))
+                self.assertFalse(classic_replace(k, writer, primary, replace=False))
+                self.assertTrue(classic_replace(k, writer, primary), c.get_last_error())
+                # This HANDLE still refers to the promoted original. Late data and EOF must not
+                # affect the earlier private primary or retain its pre-rename flush as evidence.
+                self.assertTrue(seek(writer, 0, None, 0))
+                self.assertTrue(write(writer, b"late", 4, c.byref(n), None))
+                self.assertEqual(n.value, 4)
+                self.assertTrue(end(writer))  # 5 -> 4, an actual EOF change.
+                if scenario == "reflushed":
+                    self.assertTrue(flush(writer), c.get_last_error())
+        self._wait_closed(owner)
+        if scenario == "abandon":
+            for rights in (0x10000 | 0x100000, rw_delete):
+                with self.assertRaises(OSError), self.handle(scratch, rights, share=0):
+                    self.fail("a new FILE_OPEN adopted the closed sole creator")
+        if scenario == "dirty-close":
+            with self.handle(primary, 0x40000000) as later:
+                self.assertTrue(flush(later))  # Not the creator: cannot cure an unsealed final Close.
+        return scratch.name, b"whole" if scenario == "abandon" else b"late"
+
+    def _qt_creator(self, primary, scenario):
+        try:
+            finished = subprocess.run([sys.executable, "-I", "-B", "-c", _QSAVEFILE_EDITOR, str(primary), scenario],
+                                      stdin=subprocess.DEVNULL, capture_output=True, encoding="utf-8",
+                                      errors="replace", timeout=45, check=False)
+        except subprocess.TimeoutExpired:
+            self.fail("the isolated Qt editor did not exit within 45 seconds")
+        self.assertEqual(finished.returncode, 0, finished.stderr)
+        scratch, committed = json.loads(finished.stdout)
+        self.assertIs(committed, scenario == "qt-save")
+        self.assertIs(type(scratch), str)
+        self.assertNotEqual(scratch, primary.name)
+        return scratch, b"whole"
+
+    def _creator_campaign(self, scenario):
+        seed = b"seed"
+        choice, _ = self.choose_draft(seed, max_bytes=64)
+        expected_mark = _remote_mark(ORIGIN + TARGET, self.zone)
+        published = scenario not in ("abandon", "qt-cancel")
+        reviewable = published and scenario != "dirty-close"
+        with choice.begin(confirmed=True) as draft, ThreadPoolExecutor(max_workers=1) as worker:
+            owner = WindowsPrivateDraftMount(draft, "review.bin", confirmed=True, replacement=True)
+            job = worker.submit(owner.run, allow_installed_driver_start=True, allow_directory_mount=True)
+            try:
+                location = owner.wait_location(30)
+                self.assertIsNotNone(location, job.result() if job.done() else "driver observation timed out")
+                primary = Path(location) / "review.bin"
+                scratch, data = (self._qt_creator(primary, scenario) if scenario.startswith("qt-")
+                                 else self._held_creator(owner, primary, scenario))
+                self.assertEqual(primary.read_bytes(), data if published else seed)
+                # Independently read the live namespace. Child stdout is only an expected leaf
+                # for comparison, never a path to open or proof of the mount/retained bytes.
+                expected_names = {primary.name} if published else {primary.name, scratch}
+                self.assertEqual({entry.name for entry in primary.parent.iterdir()}, expected_names)
+                self.assertEqual(Path(str(primary) + ":Zone.Identifier").read_bytes(), expected_mark)
+                self._wait_closed(owner)
+                owner.stop()
+                report = job.result(timeout=30)
+                self.assertEqual((report["outcome"], report["drained"]), ("original-detached", 1), report)
+                if reviewable:
+                    review = draft.review(confirmed=True)
+                    self.assertEqual((review.local_file, review.length, review.sha256),
+                                     (owner.retained_scratch, len(data), sha256(data).hexdigest()))
+                    # Still local: prepare only after a separate confirmation, freeze only the selected body.
+                    key = draft.prepare_save(review, confirmed=True)
+                    with open_original_windows_save(choice._connection, self.staging, key, confirmed=True) as pending:
+                        action, = pending.plan.actions
+                        self.assertEqual((action.name, action.head, action.branch), (None, choice.source.head.id, "main"))
+                        with pending.body(action) as blocks:
+                            self.assertEqual(b"".join(blocks), data)
+                else:
+                    with self.assertRaises(Rejected):
+                        draft.review(confirmed=True)
+            finally:
+                if not job.done():
+                    owner.abandon(confirmed=True)
+        self.assertEqual(Path(choice.local_file).read_bytes(), seed)
+        self.assertEqual(Path(owner.retained_scratch).read_bytes(), data)
+        for path in (choice.local_file, owner.retained_scratch):
+            self.assertEqual(Path(path + ":Zone.Identifier").read_bytes(), expected_mark)
+        self.assertEqual(self.requests, [TARGET])  # Only initial fixture download; no upload even after freeze.
+
+    def test_same_creator_flush_rename_late_write_and_reflush(self):
+        self._creator_campaign("reflushed")
+
+    def test_other_handle_cannot_cure_dirty_creator_close(self):
+        self._creator_campaign("dirty-close")
+
+    def test_closed_unpromoted_creator_cannot_be_reopened_for_rename(self):
+        self._creator_campaign("abandon")
+
+    def test_real_qsavefile_no_direct_fallback(self):
+        self._creator_campaign("qt-save")
+
+    def test_real_qsavefile_cancel_preserves_both_originals(self):
+        self._creator_campaign("qt-cancel")
+
     def test_abort_never_certifies_or_submits(self):
         choice, _ = self.choose_draft(b"seed")
         with choice.begin(confirmed=True) as draft, ThreadPoolExecutor(max_workers=1) as worker:
@@ -252,7 +407,7 @@ class ActualDirectory(LocalWorkingFile):
         self.assertEqual(self.requests, [TARGET])
 
 
-def qualify(spelling, *, replacement=False):
+def qualify(spelling, *, replacement=False, qsavefile=False):
     if sys.platform != "win32":
         raise SystemExit("Requires a separately trusted installed WinFsp 2.1 x64 SDK/DLL and disposable native Windows.")
     with PinnedParent(spelling, output=True) as root:
@@ -262,14 +417,22 @@ def qualify(spelling, *, replacement=False):
         zone = _effective_zone(ORIGIN + TARGET)
         if zone not in (3, 4):
             raise SystemExit("No existing qualifying attachment policy for the synthetic URL.")
-        names = (("test_one_legacy_replace_then_current_full_body_only", "test_unflushed_scratch_cannot_replace_or_prepare")
-                 if replacement else ("test_edit_through_os_then_wait_for_original_close", "test_abort_never_certifies_or_submits"))
+        if qsavefile:
+            names = ("test_real_qsavefile_no_direct_fallback", "test_real_qsavefile_cancel_preserves_both_originals")
+        elif replacement:
+            names = ("test_one_legacy_replace_then_current_full_body_only", "test_unflushed_scratch_cannot_replace_or_prepare",
+                     "test_same_creator_flush_rename_late_write_and_reflush", "test_other_handle_cannot_cure_dirty_creator_close",
+                     "test_closed_unpromoted_creator_cannot_be_reopened_for_rename")
+        else:
+            names = ("test_edit_through_os_then_wait_for_original_close", "test_abort_never_certifies_or_submits")
         suite = unittest.TestSuite(ActualDirectory(name, root, spelling, security, actor, profile, zone) for name in names)
         r = unittest.TextTestRunner(verbosity=2).run(suite)
         return int(not (r.wasSuccessful() and r.testsRun == len(names) and not r.skipped))
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 3 or sys.argv[1] not in (CONSENT, CONSENT_REPLACE) or sys.argv[2].startswith("-"):
-        raise SystemExit(f"Explicitly consent with {CONSENT} or {CONSENT_REPLACE} and one existing disposable NTFS directory.")
-    raise SystemExit(qualify(Path(sys.argv[2]), replacement=sys.argv[1] == CONSENT_REPLACE))
+    modes = (CONSENT, CONSENT_REPLACE, CONSENT_QSAVE)
+    if len(sys.argv) != 3 or sys.argv[1] not in modes or sys.argv[2].startswith("-"):
+        raise SystemExit(f"Explicitly select one of {modes} and one existing disposable NTFS directory.")
+    raise SystemExit(qualify(Path(sys.argv[2]), replacement=sys.argv[1] == CONSENT_REPLACE,
+                             qsavefile=sys.argv[1] == CONSENT_QSAVE))

@@ -5,7 +5,7 @@ Linux、Windows、macOS 的原生功能分别实机验收。[桌面 CI](docs/hos
 ## 远程文件容器
 
 - 已写完待测试（Linux）：HTTPS 连接、容器和分支历史、精确节点另存、接入本机编辑卷、显式提交及按原号恢复。
-- 已接入桌面容器页，待发行验收：[Windows（WinFsp）](docs/windows-remote-draft.md)和 [macOS（FSKit）](docs/macos-remote-edit.md)均有挂载、编辑、正常卸载、显式全量提交和按原操作号恢复的源码。两端默认发行包尚未启用可写挂载；待签名包和实机端到端验证。Office/WPS 等通过临时文件替换原件的保存方式尚未支持。
+- 已接入桌面容器页，待发行验收：[Windows（WinFsp）](docs/windows-remote-draft.md)和 [macOS（FSKit）](docs/macos-remote-edit.md)均有挂载、编辑、正常卸载、显式全量提交和按原操作号恢复的源码。两端默认发行包尚未启用可写挂载；待签名包和实机端到端验证。Windows 高级模式有一次同目录经典替换的源码：可关写后另开改名句柄，或由独占原创建句柄刷新并改名；两份私有实物都保留。Win32 和 Qt 6.11.2 保存/取消源例未运行，Office/WPS 的实际保存、先删原件或备份式替换均未验收；macOS 不因此新增替换能力。
 
 ## 独立 ZIP 工作区
 

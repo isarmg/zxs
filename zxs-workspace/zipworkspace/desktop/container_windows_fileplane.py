@@ -12,6 +12,9 @@ _ROOT, _DATA, _ZONE, _TEMP = 1, 2, 3, 4
 _DELETE = 0x10000
 _TEMP_ALIAS = re.compile(r"[a-zA-Z0-9._~-]{1,120}")
 _READ_EA, _WRITE_EA, _TRAVERSE, _WRITE_ATTR = 0x8, 0x10, 0x20, 0x100
+# Exact expanded FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE for the one
+# nonshared CREATE_NEW. Never accept MAXIMUM_ALLOWED, or this combination on reopen.
+_CREATOR_RIGHTS = _ALLOWED | _READ_EA | _WRITE_EA | _WRITE_ATTR | _DELETE
 _BACKUP_INTENT, _COMPLETE_IF_OPLOCKED, _OPEN_REPARSE = 0x4000, 0x100, 0x00200000
 _MARK = ":Zone.Identifier"
 _DIRECTORY, _NON_DIRECTORY = 0x1, 0x40
@@ -118,7 +121,7 @@ class WindowsDraftFilePlane:
                 raise PermissionError("not accepting Windows name lookups")
             return self._info(*self._object(path))
 
-    def _rights(self, kind, options, granted, *, target=False, create=False, probe=False):
+    def _rights(self, kind, options, granted, *, target=False, create=False, probe=False, rename_writer=False):
         if type(options) is not int or type(granted) is not int or granted < 0:
             raise PermissionError("invalid Windows options or access mask")
         rights = _ALLOWED if kind in (_DATA, _TEMP) else READ | ATTR | CONTROL | SYNC
@@ -126,13 +129,16 @@ class WindowsDraftFilePlane:
             rights |= _READ_EA  # Generic read; this volume does not implement EAs.
             if kind in (_DATA, _TEMP):
                 rights |= _WRITE_EA | _WRITE_ATTR  # Accept ordinary GENERIC_WRITE, but no EA/attribute edits.
-            if kind == _TEMP and not create and options >> 24 == 1:
+            if kind == _TEMP and (rename_writer or (not create and options >> 24 == 1)):
                 rights |= _DELETE  # A rename token only, never delete-on-close or disposition.
         if kind == _ROOT:
             rights |= _TRAVERSE
             if target:
                 rights |= WRITE  # FILE_ADD_FILE bit on the SDK's exact target-parent request only.
-        if granted & ~rights or (granted & _DELETE and granted & (WRITE | APPEND)):
+        if type(rename_writer) is not bool or (rename_writer and
+                (not self._namespace or not create or kind != _TEMP or options >> 24 != 2 or granted != _CREATOR_RIGHTS)):
+            raise PermissionError("not the exact nonshared Windows scratch create")
+        if granted & ~rights or (not rename_writer and granted & _DELETE and granted & (WRITE | APPEND)):
             raise PermissionError("unapproved Windows object access")
         if options & _DIRECTORY and kind != _ROOT:
             raise NotADirectoryError("not a Windows directory")
@@ -156,13 +162,14 @@ class WindowsDraftFilePlane:
         if options >> 24 not in dispositions or options & 0xffffff & ~allowed:
             raise PermissionError("only the exact admitted Windows create/open variant is supported")
 
-    def _issue(self, kind, body, granted):
+    def _issue(self, kind, body, granted, *, rename_writer=False):
         if len(self._rows) >= 1024 or self._next >= 1 << 63:
             raise MemoryError("Windows file-context budget exhausted")
         slot = self._next
         self._next += 1
         writable = kind in (_DATA, _TEMP) and bool(granted & (WRITE | APPEND))
-        handle = self._draft.open(writable=writable, _provider=self, _backing=body, _root=kind == _ROOT)
+        handle = self._draft.open(writable=writable, _provider=self, _backing=body, _root=kind == _ROOT,
+                                  _rename_writer=rename_writer)
         try:
             info = self._info(kind, body)
             self._rows[slot] = (handle, granted, kind, body)
@@ -185,6 +192,8 @@ class WindowsDraftFilePlane:
             if target and (kind != _ROOT or self._visible_scratch() is None):
                 raise PermissionError("not the original selected replacement parent")
             self._rights(kind, options, granted, target=target, probe=probe)
+            if kind == _TEMP and body.creator is not None and granted & _DELETE:
+                raise PermissionError("only the nonshared scratch's original creator may rename it")
             return self._issue(kind, body, granted)
 
     def scratch_name(self, path):
@@ -212,9 +221,10 @@ class WindowsDraftFilePlane:
                 return True
             row = self._rows.get(slot)
             return bool(row is not None and old == scratch[0] and row[1] & _DELETE
-                        and row[2] == _TEMP and row[3] is scratch[1])
+                        and row[2] == _TEMP and row[3] is scratch[1]
+                        and (row[3].creator is None or row[3].creator is row[0]))
 
-    def create_scratch(self, path, options, granted):
+    def create_scratch(self, path, options, granted, rename_writer=False):
         with self._lock:
             if self._state != "bound" or not self._namespace or not self.scratch_name(path):
                 raise PermissionError("not an admitted one-time Windows scratch create")
@@ -222,12 +232,12 @@ class WindowsDraftFilePlane:
                 raise FileExistsError("only one original editor scratch name can be created")
             if len(self._rows) >= 1024:
                 raise MemoryError("Windows file-context budget exhausted")
-            self._rights(_TEMP, options, granted, create=True)
+            self._rights(_TEMP, options, granted, create=True, rename_writer=rename_writer)
             if not granted & (WRITE | APPEND):
                 raise PermissionError("scratch creation requires data writing")
             body = self._draft._new_scratch(self, self._retained_leaf)
             self._scratch = (path, body)
-            return self._issue(_TEMP, body, granted)
+            return self._issue(_TEMP, body, granted, rename_writer=rename_writer)
 
     def replace(self, slot, old, new):
         with self._lock:

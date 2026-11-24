@@ -220,7 +220,7 @@ class _Disk(QDialog):
                 alias = "文件-" + self.cid[:8]
             self.alias.setText(alias)
             self.limit.setText(str(max(64 << 20, node.length)))
-            self.replacement.setToolTip("仅限创建一个普通临时文件，刷新并关写后，同目录经典覆盖改名；不支持 QSaveFile、ReplaceFileW 或 Office/WPS 备份保存。")
+            self.replacement.setToolTip("仅限一个临时文件刷新后在同目录经典覆盖改名。独占创建者可用原句柄改名，否则须关写后另开改名句柄。未验收 QSaveFile、Office 或 WPS；不支持删除或备份式保存。")
             form.addRow("仅本机名称（不改变服务器名称）", self.alias)
             form.addRow("每份正文的大小上限（字节）", self.limit)
             form.addRow(self.replacement)
@@ -370,7 +370,7 @@ class _Disk(QDialog):
             raise Rejected("此临时替换模式需要 1 至 120 个简单 ASCII 字符的本机别名；不会改服务器名。")
         scratch = ("本次另允许创建并保留一个私有临时正文，不会删除被替换的私有原件；两份最多 "
                    f"{2*int(raw):,} 字节。准备提交时还需要一份完整正文。仅支持经典同目录覆盖改名，"
-                   "编辑器必须先刷新和关闭临时写句柄。\n" if replacement else "")
+                   "临时正文必须先刷新；可由独占原创建句柄直接改名，或关写后再开改名句柄。独占句柄改名后有写入，须用它再次刷新。\n" if replacement else "")
         text = (f"服务器 {self.site!r}　账号 {self.conn._account!r}\n容器 {self.cid}，分支 {self.selected[-2].id!r}\n"
                 f"原节点 {node.id}\n本机目录 {folder!r}\n磁盘内的名称 {alias!r}，最多 {int(raw):,} 字节。\n"
                 + scratch + "下载此原节点；Windows 可能启动已安装的 WinFsp 文件系统服务，并在所选目录创建新的私有目录挂载点。"
