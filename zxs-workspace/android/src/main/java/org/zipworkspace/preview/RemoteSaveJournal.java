@@ -18,21 +18,28 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.List;
+import java.util.TreeMap;
 import java.util.regex.Pattern;
 
 /** Private one-file Android draft records. No connection, credentials, or automatic submit. */
 final class RemoteSaveJournal {
     private static final String STORE = "remote-saves";
     private static final int MAGIC = 0x52533331; // RS31
+    private static final int PLAN_MAGIC = 0x52535031; // RSP1
     private static final int ATTEMPT_MAGIC = 0x52534131; // RSA1
     private static final int RECEIPT_MAGIC = 0x52535231; // RSR1
     private static final int MAX_BODY = PlainText.LIMIT;
     private static final int MAX_RECORD = MAX_BODY + 4096;
     private static final int RECORD_DIGEST_SIZE = 32;
+    private static final int PAGE_LIMIT = 24;
+    private static final int NAME_SCAN_LIMIT = 4096;
+    private static final Pattern PLAN_NAME = Pattern.compile("([0-9a-f]{32})\\.plan");
     private static final Pattern ID = Pattern.compile("[0-9a-f]{32}");
     private static final Pattern SHA = Pattern.compile("[0-9a-f]{64}");
     private static final int READ = OsConstants.O_RDONLY | OsConstants.O_NOFOLLOW
@@ -83,11 +90,55 @@ final class RemoteSaveJournal {
         requireBody(save, body);
         var prepared = new Prepared(authority, save, body);
         byte[] bytes = encode(prepared);
+        // The small independent selector is durable before body publication. A
+        // crash can leave a visible original ID with an unreadable body, never a
+        // picker entry that on its own grants send eligibility.
+        writeRecord(context, nameFor(save.operation(), ".plan"),
+                encodeMarker(new Plan(authority, save), PLAN_MAGIC, null));
         writeRecord(context, fileName(save.operation()), bytes);
         return prepared;
     }
 
     record Plan(Authority authority, RemoteSaveContract.Save save) {}
+    record Page(List<Plan> rows, String next) {}
+
+    /**
+     * Only this verified app-private directory, exact authority and one bounded
+     * page. No user/provider path, payload read, credentials, or network access.
+     */
+    static synchronized Page plans(Context context, Authority authority, String after) throws IOException {
+        need(authority != null);
+        if (after != null) nameFor(after, ".plan"); // Validate the cursor before filesystem work.
+        return inStore(context, false, (home, local, target) -> {
+            var page = new TreeMap<String, Plan>();
+            int visited = 0;
+            try (var names = target.openNames()) {
+                for (Path entry : names) {
+                    need(++visited <= NAME_SCAN_LIMIT && !Thread.currentThread().isInterrupted());
+                    String leaf = entry.getFileName().toString();
+                    var matcher = PLAN_NAME.matcher(leaf);
+                    if (!matcher.matches()) continue;
+                    String operation = matcher.group(1);
+                    if (after != null && operation.compareTo(after) <= 0) continue;
+                    if (page.size() > PAGE_LIMIT && operation.compareTo(page.lastKey()) >= 0) continue;
+                    target.check();
+                    byte[] raw = readNamed(target, new File(target.path, leaf), 4096);
+                    target.check();
+                    Plan checked = decodeMarker(raw, null, operation, PLAN_MAGIC).plan();
+                    if (!authority.equals(checked.authority())) continue;
+                    page.put(operation, checked);
+                    if (page.size() > PAGE_LIMIT + 1) page.pollLastEntry();
+                }
+            }
+            target.sync();
+            String next = null;
+            if (page.size() > PAGE_LIMIT) {
+                page.pollLastEntry();
+                next = page.lastKey();
+            }
+            return new Page(List.copyOf(page.values()), next);
+        });
+    }
 
     /** An attempted submission can be looked up without reading its frozen body. */
     static synchronized Plan attempted(Context context, Authority authority, String operation) throws IOException {
@@ -204,21 +255,33 @@ final class RemoteSaveJournal {
                 }
                 throw new IOException("original record publication remains unresolved");
             }
-            checkFile(named, named, target, 1);
-            try (var held = new LocalWorkspaceStore.Handle(published, READ, 0)) {
-                var before = Os.fstat(held.fd);
-                unchanged(before, named, target);
-                byte[] bytes = readExact(held.fd, before.st_size);
-                unchanged(Os.fstat(held.fd), before, target);
-                unchanged(Os.lstat(published.getPath()), before, target);
-                // Reestablish namespace durability after an interrupted operation.
-                target.sync();
-                local.sync();
-                home.sync();
-                unchanged(Os.lstat(published.getPath()), before, target);
-                return bytes;
-            }
+            byte[] bytes = readNamed(target, published, named, MAX_RECORD);
+            // Reestablish namespace durability after an interrupted operation.
+            target.sync();
+            local.sync();
+            home.sync();
+            unchanged(Os.lstat(published.getPath()), named, target);
+            return bytes;
         });
+    }
+
+    private static byte[] readNamed(LocalWorkspaceStore.Directory target, File original, int max)
+            throws IOException, ErrnoException {
+        return readNamed(target, original, Os.lstat(original.getPath()), max);
+    }
+
+    private static byte[] readNamed(LocalWorkspaceStore.Directory target, File original, StructStat named, int max)
+            throws IOException, ErrnoException {
+        checkFile(named, named, target, 1);
+        need(named.st_size > 0 && named.st_size <= max);
+        try (var held = new LocalWorkspaceStore.Handle(original, READ, 0)) {
+            var before = Os.fstat(held.fd);
+            unchanged(before, named, target);
+            byte[] bytes = readExact(held.fd, before.st_size);
+            unchanged(Os.fstat(held.fd), before, target);
+            unchanged(Os.lstat(original.getPath()), before, target);
+            return bytes;
+        }
     }
 
     private interface Access<T> {
@@ -415,7 +478,7 @@ final class RemoteSaveJournal {
     private static Plan readPlan(DataInputStream input, String expectedOperation, Authority expectedAuthority)
             throws IOException {
         var authority = new Authority(input.readUTF(), input.readUTF());
-        need(authority.equals(expectedAuthority));
+        need(expectedAuthority == null || authority.equals(expectedAuthority));
         String container = input.readUTF();
         String operation = input.readUTF();
         need(operation.equals(expectedOperation));

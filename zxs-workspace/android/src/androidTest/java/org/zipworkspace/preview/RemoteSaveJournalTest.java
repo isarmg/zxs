@@ -12,6 +12,8 @@ import java.io.RandomAccessFile;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.HexFormat;
 import java.util.UUID;
 
@@ -172,6 +174,45 @@ public final class RemoteSaveJournalTest {
         assertNull(RemoteSaveJournal.receipt(context, plan));
         RemoteSaveJournal.settle(context, plan, BigInteger.ONE);
         assertThrows(IOException.class, () -> RemoteSaveJournal.receipt(context, different));
+    }
+
+    @Test
+    public void coldPickerIsScopedAndDoesNotNeedTheSavedBody() throws Exception {
+        Context context = context();
+        String destination = UUID.randomUUID().toString().replace("-", "");
+        var own = new RemoteSaveJournal.Authority(destination.repeat(2), "cold-user");
+        var other = new RemoteSaveJournal.Authority(destination.repeat(2), "other-user");
+        var wrongOrigin = new RemoteSaveJournal.Authority("55".repeat(32), own.account());
+        byte[] bytes = {7};
+        var expected = new ArrayList<String>();
+        for (int index = 0; index < 26; index++) {
+            var saved = save(bytes);
+            RemoteSaveJournal.prepare(context, own, saved, bytes);
+            expected.add(saved.operation());
+        }
+        var excluded = save(bytes);
+        RemoteSaveJournal.prepare(context, other, excluded, bytes);
+        expected.sort(String::compareTo);
+        var broken = new File(store(context), expected.get(0) + ".save");
+        try (var file = new RandomAccessFile(broken, "rw")) {
+            file.setLength(0);
+        }
+
+        var first = RemoteSaveJournal.plans(context, own, null);
+        assertEquals(expected.subList(0, 24), operations(first));
+        assertEquals(expected.get(23), first.next());
+        var second = RemoteSaveJournal.plans(context, own, first.next());
+        assertEquals(expected.subList(24, 26), operations(second));
+        assertNull(second.next());
+        assertEquals(List.of(excluded.operation()), operations(RemoteSaveJournal.plans(context, other, null)));
+        assertTrue(RemoteSaveJournal.plans(context, wrongOrigin, null).rows().isEmpty());
+        assertThrows(IOException.class, () -> RemoteSaveJournal.reopen(context, own, expected.get(0)));
+    }
+
+    private static List<String> operations(RemoteSaveJournal.Page page) {
+        var ops = new ArrayList<String>();
+        for (var row : page.rows()) ops.add(row.save().operation());
+        return ops;
     }
 
     private static File store(Context context) {

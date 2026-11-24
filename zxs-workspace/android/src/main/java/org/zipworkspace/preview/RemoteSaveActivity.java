@@ -33,7 +33,7 @@ public final class RemoteSaveActivity extends Activity {
     private static final Pattern OPERATION = Pattern.compile("[0-9a-f]{32}");
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private EditText origin, account, password, name, body, operation;
-    private Button create, recover;
+    private Button create, recover, chooseLocal;
     private TextView status;
     private Future<?> pending;
     private AlertDialog decision;
@@ -68,6 +68,7 @@ public final class RemoteSaveActivity extends Activity {
         status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         form.addView(status);
         operation = field(form, "原操作号", InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD, 32, true);
+        chooseLocal = button(form, "从本机选择原操作…", () -> listLocal(null));
         recover = button(form, "查看原提交…", this::loadOriginal);
         name = field(form, "新文件名", InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS, 255, true);
         body = field(form, "全文", InputType.TYPE_TEXT_FLAG_MULTI_LINE, PlainText.LIMIT, false);
@@ -143,6 +144,73 @@ public final class RemoteSaveActivity extends Activity {
             if (!running) releasePeer(exactPeer);
         });
         decision.show();
+    }
+
+    private void listLocal(String after) {
+        if (!live || running || decision != null) return;
+        RemoteSaveJournal.Authority exact;
+        try {
+            var selected = RemoteH2Exchange.Origin.parse(origin.getText().toString());
+            exact = new RemoteSaveJournal.Authority(selected.identity(), account.getText().toString());
+        } catch (IllegalArgumentException invalid) {
+            status.setText("请输入原服务器的 HTTPS 地址和账号。");
+            return;
+        }
+        Context context = getApplicationContext();
+        int current = beginTask();
+        pending = worker.submit(() -> {
+            RemoteSaveJournal.Page page;
+            try {
+                page = RemoteSaveJournal.plans(context, exact, after);
+            } catch (IOException | RuntimeException unavailable) {
+                page = null;
+            }
+            var delivered = page;
+            runOnUiThread(() -> {
+                if (!live || epoch != current || isFinishing() || isDestroyed()) return;
+                pending = null;
+                running = false;
+                showControls();
+                if (delivered == null) {
+                    status.setText("本机原操作列表不可用。已知原操作号时仍可按原号核对。");
+                } else if (delivered.rows().isEmpty()) {
+                    status.setText("此服务器和账号没有可选的本机原操作。");
+                } else {
+                    showLocalPage(delivered);
+                }
+            });
+        });
+    }
+
+    private void showLocalPage(RemoteSaveJournal.Page page) {
+        var rows = page.rows();
+        String[] choices = new String[rows.size()];
+        for (int index = 0; index < rows.size(); index++) {
+            var original = rows.get(index).save();
+            String label = original.target() instanceof RemoteSaveContract.FirstMain first
+                    ? first.name() : original.container() + " / " + original.target().branch();
+            choices[index] = label + "\n" + original.operation();
+        }
+        var builder = new AlertDialog.Builder(this).setTitle("本机原操作")
+                .setItems(choices, (dialog, index) -> {
+                    if (!live || running || dialog != decision) return;
+                    operation.setText(rows.get(index).save().operation());
+                    status.setText("已选原操作。输入密码后可核对并选择查询或提交。");
+                })
+                .setNegativeButton("取消", null);
+        if (page.next() != null) {
+            builder.setNeutralButton("下一页", (dialog, which) -> {
+                if (dialog != decision) return;
+                decision = null;
+                listLocal(page.next());
+            });
+        }
+        var chooser = builder.create();
+        decision = chooser;
+        chooser.setOnDismissListener(dialog -> {
+            if (decision == chooser) decision = null;
+        });
+        chooser.show();
     }
 
     private void loadOriginal() {
@@ -299,6 +367,7 @@ public final class RemoteSaveActivity extends Activity {
         create.setEnabled(!running && !lockedNew);
         name.setEnabled(!running && !lockedNew);
         body.setEnabled(!running && !lockedNew);
+        chooseLocal.setEnabled(!running);
         recover.setEnabled(!running);
         origin.setEnabled(!running);
         account.setEnabled(!running);
