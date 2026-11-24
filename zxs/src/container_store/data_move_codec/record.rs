@@ -1,5 +1,7 @@
 //! Private, non-I/O codec for the immutable DATA move journal.
 //! A checked record proves bytes and lineage only, never a live mount, a lease or sync.
+#[path = "native/mod.rs"]
+mod native;
 #[path = "proof.rs"]
 pub(in crate::container_store) mod proof;
 
