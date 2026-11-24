@@ -1,0 +1,199 @@
+import Foundation
+import XCTest
+@testable import ZipPreview
+
+private actor ScriptedSaveExchange: RemoteSaveExchange {
+    nonisolated let destination: String
+    private var scripted: [RemoteSavePacket?]
+    private let checkPOST: @Sendable () throws -> Void
+    private(set) var methods: [String] = []
+    private(set) var requests: [RemoteSave.Request] = []
+
+    init(destination: String, scripted: [RemoteSavePacket?],
+         checkPOST: @escaping @Sendable () throws -> Void = {}) {
+        self.destination = destination
+        self.scripted = scripted
+        self.checkPOST = checkPOST
+    }
+
+    func once(_ request: RemoteSave.Request) async throws -> RemoteSavePacket {
+        methods.append(request.method)
+        requests.append(request)
+        if request.method == "POST" { try checkPOST() }
+        guard !scripted.isEmpty, let response = scripted.removeFirst() else { throw TestFailure.interrupted }
+        return response
+    }
+
+    enum TestFailure: Error { case interrupted }
+}
+
+private actor BlockingLookup: RemoteSaveExchange {
+    nonisolated let destination: String
+    private var blocked: CheckedContinuation<RemoteSavePacket, Never>?
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    init(destination: String) { self.destination = destination }
+    func once(_ request: RemoteSave.Request) async throws -> RemoteSavePacket {
+        await withCheckedContinuation { continuation in
+            blocked = continuation
+            waiter?.resume()
+            waiter = nil
+        }
+    }
+    func waitForLookup() async {
+        if blocked != nil { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
+    func finish(_ packet: RemoteSavePacket) { blocked?.resume(returning: packet); blocked = nil }
+}
+
+final class RemoteSaveCoordinatorTests: XCTestCase {
+    private let destination = "fixture-authority-and-account"
+    private let operation = String(repeating: "b", count: 32)
+    private let container = String(repeating: "a", count: 32)
+    private let node = String(repeating: "c", count: 32)
+    private var absent: RemoteSavePacket { .init(status: 404, bytes: Data(#"{"state":"not_found"}"#.utf8)) }
+    private var recorded: RemoteSavePacket {
+        let digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        let json = #"{"container_id":"\#(container)","operation_id":"\#(operation)","sequence":1,"kind":"save_node","node_id":"\#(node)","length":3,"sha256":"\#(digest)","target":{"kind":"first_main","name":"draft.txt"}}"#
+        return .init(status: 200, bytes: Data(json.utf8))
+    }
+
+    func testLostReplyRetainsAttemptThenFindsOriginalWithoutResending() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = RemoteSaveStore(directory: directory)
+        let save = try RemoteSave(destination: destination, container: container, operation: operation,
+                                  node: node, base: 0, target: .firstMain(name: "draft.txt"),
+                                  draft: LocalDraft.Revision(bytes: Data("abc".utf8)))
+        try store.retain(save)
+        let statusOnly = ScriptedSaveExchange(destination: destination, scripted: [absent])
+        let start = RemoteSaveCoordinator(store: store)
+        let before = try await start.run(operation: operation, choice: .lookup, over: statusOnly)
+        let beforeMethods = await statusOnly.methods
+        XCTAssertEqual(before, .absent)
+        XCTAssertEqual(beforeMethods, ["GET"])
+        XCTAssertFalse(try store.attempted(save))
+
+        let originalID = operation
+        let failed = ScriptedSaveExchange(destination: destination, scripted: [absent, nil]) {
+            let marker = directory.appendingPathComponent(originalID + ".attempt")
+            XCTAssertEqual(try Data(contentsOf: marker), try save.encode())
+        }
+        do {
+            _ = try await start.run(operation: operation, choice: .submitFirst, over: failed)
+            XCTFail("expected loss")
+        } catch ScriptedSaveExchange.TestFailure.interrupted {}
+        let firstMethods = await failed.methods
+        XCTAssertEqual(firstMethods, ["GET", "POST"])
+        XCTAssertTrue(try store.attempted(save))
+
+        let reopened = RemoteSaveCoordinator(store: RemoteSaveStore(directory: directory))
+        let absentAfterLoss = ScriptedSaveExchange(destination: destination, scripted: [absent])
+        let rejectedRetry = try await reopened.run(operation: operation, choice: .submitFirst, over: absentAfterLoss)
+        let noRetryMethods = await absentAfterLoss.methods
+        XCTAssertEqual(rejectedRetry, .requiresExplicitRetry)
+        XCTAssertEqual(noRetryMethods, ["GET"])
+
+        let found = ScriptedSaveExchange(destination: destination, scripted: [recorded])
+        let resolved = try await reopened.run(operation: operation, choice: .retrySameOperation, over: found)
+        let foundMethods = await found.methods
+        XCTAssertEqual(resolved, .committed(1))
+        XCTAssertEqual(foundMethods, ["GET"])
+        XCTAssertEqual(try store.cachedReceipt(save), recorded.bytes)
+
+        let unused = ScriptedSaveExchange(destination: destination, scripted: [])
+        let cached = try await reopened.run(operation: operation, choice: .lookup, over: unused)
+        let cachedMethods = await unused.methods
+        XCTAssertEqual(cached, .committed(1))
+        XCTAssertEqual(cachedMethods, [])
+
+        let receiptPath = directory.appendingPathComponent(operation + ".receipt")
+        let envelopeData = try Data(contentsOf: receiptPath)
+        let envelope = try XCTUnwrap(JSONSerialization.jsonObject(with: envelopeData) as? [String: String])
+        let exactValue = try XCTUnwrap(envelope["exact"])
+        let changed = Data(String(decoding: recorded.bytes, as: UTF8.self)
+            .replacingOccurrences(of: #""sequence":1"#, with: #""sequence":2"#).utf8)
+        let tampered = String(decoding: envelopeData, as: UTF8.self)
+            .replacingOccurrences(of: exactValue, with: changed.base64EncodedString())
+        try Data(tampered.utf8).write(to: receiptPath)
+        XCTAssertThrowsError(try store.cachedReceipt(save))
+    }
+
+    func testExplicitRetryUsesIdenticalBodyAndSameIDAndBlocksConcurrentAction() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = RemoteSaveStore(directory: directory)
+        let save = try RemoteSave(destination: destination, container: container, operation: operation,
+                                  node: node, base: 0, target: .firstMain(name: "draft.txt"),
+                                  draft: LocalDraft.Revision(bytes: Data("abc".utf8)))
+        try store.retain(save)
+        let coordinator = RemoteSaveCoordinator(store: store)
+        let gate = BlockingLookup(destination: destination)
+        let waiting = Task { try await coordinator.run(operation: operation, choice: .lookup, over: gate) }
+        await gate.waitForLookup()
+        let duplicate = ScriptedSaveExchange(destination: destination, scripted: [absent])
+        do {
+            _ = try await coordinator.run(operation: operation, choice: .submitFirst, over: duplicate)
+            XCTFail("expected busy")
+        } catch RemoteSaveCoordinator.Failure.busy {}
+        await gate.finish(absent)
+        let lookup = try await waiting.value
+        XCTAssertEqual(lookup, .absent)
+        let neverSent = await duplicate.methods
+        XCTAssertTrue(neverSent.isEmpty)
+
+        let first = ScriptedSaveExchange(destination: destination, scripted: [absent, nil])
+        do {
+            _ = try await coordinator.run(operation: operation, choice: .submitFirst, over: first)
+            XCTFail("expected lost reply")
+        } catch ScriptedSaveExchange.TestFailure.interrupted {}
+        let retry = ScriptedSaveExchange(destination: destination, scripted: [absent, recorded])
+        let result = try await coordinator.run(operation: operation, choice: .retrySameOperation, over: retry)
+        XCTAssertEqual(result, .committed(1))
+        let firstRequests = await first.requests, retriedRequests = await retry.requests
+        XCTAssertEqual(firstRequests.map(\.method), ["GET", "POST"])
+        XCTAssertEqual(retriedRequests.map(\.method), ["GET", "POST"])
+        XCTAssertEqual(firstRequests.last?.path, retriedRequests.last?.path)
+        XCTAssertEqual(firstRequests.last?.headers, retriedRequests.last?.headers)
+        XCTAssertEqual(firstRequests.last?.body, retriedRequests.last?.body)
+    }
+
+    func testDamagedPrimaryAfterLostReplyPermitsOnlyReceiptLookup() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = RemoteSaveStore(directory: directory)
+        let save = try RemoteSave(destination: destination, container: container, operation: operation,
+                                  node: node, base: 0, target: .firstMain(name: "draft.txt"),
+                                  draft: LocalDraft.Revision(bytes: Data("abc".utf8)))
+        try store.retain(save)
+        let first = ScriptedSaveExchange(destination: destination, scripted: [absent, nil])
+        do {
+            _ = try await RemoteSaveCoordinator(store: store).run(operation: operation, choice: .submitFirst, over: first)
+            XCTFail("expected lost reply")
+        } catch ScriptedSaveExchange.TestFailure.interrupted {}
+
+        let original = directory.appendingPathComponent(operation + ".json")
+        for removed in [false, true] {
+            if removed { try FileManager.default.removeItem(at: original) }
+            else { try Data("damaged".utf8).write(to: original) }
+            let reloaded = RemoteSaveCoordinator(store: RemoteSaveStore(directory: directory))
+            let retry = ScriptedSaveExchange(destination: destination, scripted: [absent])
+            do {
+                _ = try await reloaded.run(operation: operation, choice: .retrySameOperation, over: retry)
+                XCTFail("missing exact primary must prevent retry")
+            } catch RemoteSave.Failure.invalidStoredRecord {}
+            let methods = await retry.methods
+            XCTAssertEqual(methods, ["GET"])
+            if removed { XCTAssertFalse(FileManager.default.fileExists(atPath: original.path)) }
+            else { XCTAssertEqual(try Data(contentsOf: original), Data("damaged".utf8)) }
+        }
+
+        let resolved = ScriptedSaveExchange(destination: destination, scripted: [recorded])
+        let found = try await RemoteSaveCoordinator(store: store)
+            .run(operation: operation, choice: .lookup, over: resolved)
+        XCTAssertEqual(found, .committed(1))
+        let methods = await resolved.methods
+        XCTAssertEqual(methods, ["GET"])
+    }
+}

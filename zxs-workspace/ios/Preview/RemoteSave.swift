@@ -4,8 +4,8 @@ import Foundation
 
 // R3 full-file SAVE, frozen independently of URL loading or UI. The destination
 // is an opaque authenticated identity provided by the future connection layer.
-struct RemoteSave {
-    enum Target: Codable, Equatable {
+struct RemoteSave: Sendable {
+    enum Target: Codable, Equatable, Sendable {
         case firstMain(name: String)
         case append(branch: String, head: String)
         case forkMain(branch: String, from: String)
@@ -48,14 +48,14 @@ struct RemoteSave {
 
     enum Failure: Error { case invalidIntent, invalidStoredRecord, syncFailed(Int32) }
     enum Reply: Equatable { case committed(UInt64), absent, conflict, unknown }
-    struct Request {
+    struct Request: Sendable {
         let method: String
         let path: String
         let headers: [String: String]
         let body: Data?
     }
 
-    private struct Record: Codable {
+    private struct Record: Codable, Sendable {
         let version: Int
         let destination: String
         let container: String
@@ -69,6 +69,11 @@ struct RemoteSave {
 
     private struct Envelope: Codable {
         let record: Data
+        let sha256: String
+    }
+
+    private struct SavedReceipt: Codable {
+        let exact: Data
         let sha256: String
     }
 
@@ -109,6 +114,19 @@ struct RemoteSave {
     func encode() throws -> Data {
         let bytes = try Self.encodeCanonical(record)
         return try Self.encodeCanonical(Envelope(record: bytes, sha256: Self.hex(SHA256.hash(data: bytes))))
+    }
+
+    fileprivate func encodeReceipt(_ exact: Data) throws -> Data {
+        var bound = try encode()
+        bound.append(0)
+        bound.append(exact)
+        return try Self.encodeCanonical(SavedReceipt(exact: exact, sha256: Self.hex(SHA256.hash(data: bound))))
+    }
+
+    fileprivate func decodeReceipt(_ encoded: Data) throws -> Data {
+        let stored = try JSONDecoder().decode(SavedReceipt.self, from: encoded)
+        guard try encodeReceipt(stored.exact) == encoded else { throw Failure.invalidStoredRecord }
+        return stored.exact
     }
 
     private static func encodeCanonical(_ value: some Encodable) throws -> Data {
@@ -193,11 +211,51 @@ struct RemoteSaveStore {
     }
 
     func retain(_ save: RemoteSave) throws {
+        try publish(save.encode(), at: location(save.operation))
+    }
+
+    func attempted(_ save: RemoteSave) throws -> Bool {
+        guard let found = try loadOptional(location(save.operation, ending: ".attempt")) else { return false }
+        guard found == (try save.encode()) else { throw RemoteSave.Failure.invalidStoredRecord }
+        return true
+    }
+
+    func admitAttempt(_ save: RemoteSave, after attempted: Bool,
+                      authenticatedDestination: String) throws -> RemoteSave.Request {
+        // Caller already made one same-operation authority lookup. Re-sync
+        // discovery after a crash, then persist the matching marker before
+        // the caller can construct its body-bearing request.
+        guard try self.attempted(save) == attempted else { throw RemoteSave.Failure.invalidStoredRecord }
+        let original = try location(save.operation)
+        let expected = try save.encode()
+        guard try load(original) == expected else { throw RemoteSave.Failure.invalidStoredRecord }
+        let handle = try FileHandle(forWritingTo: original)
+        defer { try? handle.close() }
+        try handle.synchronize()
+        try syncDirectory(directory)
+        try syncDirectory(directory.deletingLastPathComponent())
+        guard try load(original) == expected else { throw RemoteSave.Failure.invalidStoredRecord }
+        try publish(expected, at: location(save.operation, ending: ".attempt"))
+        guard try load(original) == expected else { throw RemoteSave.Failure.invalidStoredRecord }
+        return try save.upload(for: authenticatedDestination)
+    }
+
+    func cachedReceipt(_ save: RemoteSave) throws -> Data? {
+        guard let stored = try loadOptional(location(save.operation, ending: ".receipt")) else { return nil }
+        return try save.decodeReceipt(stored)
+    }
+
+    func recordReceipt(_ bytes: Data, for save: RemoteSave) throws {
+        guard case .committed = try save.receipt(status: 200, bytes: bytes, isLookup: true,
+                                                authenticatedDestination: save.destination)
+        else { throw RemoteSave.Failure.invalidStoredRecord }
+        try publish(save.encodeReceipt(bytes), at: location(save.operation, ending: ".receipt"))
+    }
+
+    private func publish(_ body: Data, at final: URL) throws {
         let manager = FileManager.default
         try manager.createDirectory(at: directory, withIntermediateDirectories: true)
         let staged = directory.appendingPathComponent("." + UUID().uuidString)
-        let final = try location(save.operation)
-        let body = try save.encode()
         try body.write(to: staged, options: [.withoutOverwriting, .completeFileProtection])
         defer { try? manager.removeItem(at: staged) }
         let handle = try FileHandle(forWritingTo: staged)
@@ -225,9 +283,20 @@ struct RemoteSaveStore {
         return save
     }
 
-    private func location(_ operation: String) throws -> URL {
+    func reopenForRecovery(operation: String) throws -> RemoteSave {
+        if let attempted = try loadOptional(location(operation, ending: ".attempt")) {
+            // Independently reopen the original marker. It may authorize
+            // GET even when the primary intent is missing, never a POST.
+            let save = try RemoteSave(reopening: attempted)
+            guard save.operation == operation else { throw RemoteSave.Failure.invalidStoredRecord }
+            return save
+        }
+        return try reopen(operation: operation)
+    }
+
+    private func location(_ operation: String, ending: String = ".json") throws -> URL {
         guard RemoteSave.validID(operation) else { throw RemoteSave.Failure.invalidIntent }
-        return directory.appendingPathComponent(operation + ".json")
+        return directory.appendingPathComponent(operation + ending)
     }
 
     private func syncDirectory(_ url: URL) throws {
@@ -245,15 +314,36 @@ struct RemoteSaveStore {
     }
 
     private func load(_ url: URL) throws -> Data {
-        let handle = try FileHandle(forReadingFrom: url)
+        guard let bytes = try loadOptional(url) else { throw RemoteSave.Failure.invalidStoredRecord }
+        return bytes
+    }
+
+    private func loadOptional(_ url: URL) throws -> Data? {
+        let (descriptor, openError) = url.withUnsafeFileSystemRepresentation { path -> (Int32, Int32) in
+            guard let path else { return (-1, EINVAL) }
+            let fd = Darwin.open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK)
+            return (fd, errno)
+        }
+        guard descriptor >= 0 else {
+            if openError == ENOENT { return nil }
+            throw RemoteSave.Failure.invalidStoredRecord
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         defer { try? handle.close() }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, (info.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG),
+              (0...Int64(Self.maxRecord)).contains(info.st_size) else {
+            throw RemoteSave.Failure.invalidStoredRecord
+        }
         var bytes = Data()
         while bytes.count <= Self.maxRecord {
             guard let next = try handle.read(upToCount: Self.maxRecord + 1 - bytes.count),
                   !next.isEmpty else { break }
             bytes.append(next)
         }
-        guard bytes.count <= Self.maxRecord else { throw RemoteSave.Failure.invalidStoredRecord }
+        guard bytes.count <= Self.maxRecord, Int64(bytes.count) == info.st_size else {
+            throw RemoteSave.Failure.invalidStoredRecord
+        }
         return bytes
     }
 }
