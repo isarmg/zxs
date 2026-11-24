@@ -8,8 +8,6 @@
 - `sha2 = 0.10.9`（不启用默认功能）：在内存中以 RustCrypto SHA-256 核验候选新登记完整前缀；不用于认证操作者或保护口令。
 - `linux-raw-sys = 0.12.1`（关闭默认功能，显式 `general`、`std`）：提供诊断、准入和凭据派生阶段所需的 Linux 文件系统类型常量。
 
-历史测试另外启用 `rusqlite 0.43.0`（`bundled`、`limits`）与小库的 `historical-fixtures` 功能，用固定 `libsqlite3-sys 0.40.0` 核对旧协议的原件及事务。普通和内嵌 Helper 的非开发依赖都不包含 SQLite，也不包含这条 SMB 凭据路径。
-
 `tempfile = 3.27.0` 仅供测试，在专用临时父目录内独占创建私有子目录。Rust 工具链固定为 1.100.0。
 
 本项目内部的 [helper-linux-evidence](linux-evidence/Cargo.toml) 是单独静审的 Linux LP64 小库，不依赖其他项目。它直接使用锁内的 `libc 0.2.190`、`linux-raw-sys 0.12.1` 和 `rustix 1.1.5`。主程序仍禁止 unsafe；小库的固定 Linux/POSIX 只读接口使用少量 unsafe：通过持有的原描述符读取 [FS_IOC_GETFSUUID](https://github.com/torvalds/linux/blob/master/include/uapi/linux/fs.h) 和 [name_to_handle_at](https://www.man7.org/linux/man-pages/man2/name_to_handle_at.2.html)；每个卷行的原生名称字节限额使用同目录 [fpathconf(_PC_NAME_MAX)](https://man7.org/linux/man-pages/man3/fpathconf.3.html)，不猜未知值。另有一个仅供独立诊断 CLI 的 [close_range](https://man7.org/linux/man-pages/man2/close_range.2.html) 固定调用，私有化描述符表并给所有非标准描述符加 close-on-exec，不关闭外部文件。隔离运行的极小 Linux 层还核验可等待的子进程信号策略，在本次 CLI 处理取消消息；子进程在启动之前用 setsid 建独立组，并仅对已核的 ELF 文件描述符使用 execveat。小库另单独封装专用单线程输入期间的固定信号集和原线程信号掩码恢复，不读取凭据。主程序通过 rustix 的 netlink 接口只问当前任务固定的 AUDIT_TTY_GET；该接口不修改宿主审计设置。主程序没有 unsafe。没有任意 ioctl、路径重开或按句柄开文件的接口。libc 现在是小库的直接普通依赖，不是新增或升级了注册表包。
@@ -18,26 +16,16 @@
 
 在独立目录使用标准 crates.io 源，或使用已备齐精确版本的本机可信缓存；不从父目录导入清单、源码、锁文件或构建产物。缓存不全时显式报告缺件，不替换包名或校验值。本次未捆绑或安装第三方二进制。已有[离线工具包配方](packaging/debian13-amd64/README.md)分别核上游工具、库、准确原包和对应源码；这些不是 Cargo 依赖。
 
-## 已核对的 37 份发行源码包
+## 已核对的 27 份发行源码包
 
 `httparse` 的完整锁记录由 [crates.io 登记](https://github.com/rust-lang/crates.io-index/blob/master/ht/tp/httparse)及上游 axum 的 Cargo.lock 对读；原始发行包 SHA-256 为 `6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87`，静态核对了包内许可；未执行其 build.rs、解析器或 Cargo。
 
-Cargo.lock SHA-256: `8503cec8033ef739a5371efb24b3d3d5d297bf3b8c9f1b9839ccbe8f2e2ea97b`
+Cargo.lock SHA-256: `78453abcf2d7da38fa775b0d27213e5c91d9477930ebf03524fd8125c83a3b08`
 
 本表使用 [Cargo.lock](Cargo.lock) 中的版本和 `checksum` 核对整个 `.crate` 归档，许可及署名以归档材料为准。[Cargo 注册表规范](https://doc.rust-lang.org/cargo/reference/registry-index.html#download-endpoint)给出原始包下载方式。
 
 | 精确发行包 | 谁在锁里引用它 | 包声明的许可表达式 | 包内已核材料 |
 | --- | --- | --- | --- |
-| [cc 1.11.2](https://crates.io/crates/cc/1.11.2) | libsqlite3-sys 编译原 C | `MIT OR Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
-| [fallible-iterator 0.3.0](https://crates.io/crates/fallible-iterator/0.3.0) | rusqlite | `MIT/Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
-| [fallible-streaming-iterator 0.1.9](https://crates.io/crates/fallible-streaming-iterator/0.1.9) | rusqlite | `MIT/Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
-| [find-msvc-tools 0.1.15](https://crates.io/crates/find-msvc-tools/0.1.15) | cc | `MIT OR Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
-| [libsqlite3-sys 0.40.0](https://crates.io/crates/libsqlite3-sys/0.40.0) | rusqlite 与本工程 native 资格读取 | `MIT` | `LICENSE` |
-| [pkg-config 0.3.34](https://crates.io/crates/pkg-config/0.3.34) | libsqlite3-sys 构建依赖；此处不向系统库回退 | `MIT OR Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
-| [rusqlite 0.43.0](https://crates.io/crates/rusqlite/0.43.0) | 历史测试夹具 | `MIT` | `LICENSE` |
-| [shlex 2.0.1](https://crates.io/crates/shlex/2.0.1) | cc | `MIT OR Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
-| [smallvec 1.16.5](https://crates.io/crates/smallvec/1.16.5) | rusqlite | `MIT OR Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
-| [vcpkg 0.2.15](https://crates.io/crates/vcpkg/0.2.15) | libsqlite3-sys 构建依赖；不代表支持 Windows | `MIT/Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
 | [argon2 0.5.3](https://crates.io/crates/argon2/0.5.3) | 主程序；固定 Argon2id v19 | `MIT OR Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
 | [base64ct 1.8.3](https://crates.io/crates/base64ct/1.8.3) | argon2；本项目不让操作者提供 PHC 参数串 | `Apache-2.0 OR MIT` | `LICENSE-APACHE`、`LICENSE-MIT` |
 | [blake2 0.10.6](https://crates.io/crates/blake2/0.10.6) | argon2 | `MIT OR Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
@@ -68,12 +56,6 @@ Cargo.lock SHA-256: `8503cec8033ef739a5371efb24b3d3d5d297bf3b8c9f1b9839ccbe8f2e2
 
 **还没有核实哪几项进入未来的二进制。** 锁中出现不等于实际链接：开发依赖、目标特有依赖、运行时路径分别记录。`rustix` 与 `linux-raw-sys` 的 `COPYRIGHT` 还指向个别源文件的说明；`r-efi` 的 `AUTHORS` 不是三份独立许可全文。制品实际包含哪些代码、适用的许可选项、应原样随附的版权/例外/通知，以及工具链或系统带入的材料，需在有真实制品时逐项复核。项目本身的 [Apache-2.0 许可](LICENSE)不能替代第三方材料；本表不是打包后的 notices，也不是签名。见[交付核对表](RELEASE.md)。
 
-## 历史夹具：SQLite 的对应源码与核验
+## 退役材料的来源记录
 
-新增 10 个准确注册表归档均按 rusqlite 上游锁/发行摘录逐个与完整 SHA-256、清单和包内许可材料静态对读；只取实际选择的绑定/构建依赖，不取上游的测试、缓存、WAL、扩展加载或 SQLCipher 功能。绑定源包内的 sqlite3.c 和 sqlite3.h 是 [SQLite 3.54.1](https://sqlite.org/releaselog/3_54_1.html) 的发布材料。sqlite3.c 的 SHA3-256 为 `e2b869d3003b33c942b7dd7063604fbc53553e1b66609570df39b9b7b558ee81`，与官方 [amalgamation](https://sqlite.org/amalgamation.html) 原文件相同。MIT 针对 Rust 绑定；引擎本体的[公有领域声明](https://sqlite.org/copyright.html)及原源内声明另行保留。打包保留整个绑定归档，不将一份 MIT 文件当作引擎许可。
-
-历史夹具构建使用本工程的 [.cargo/config.toml](.cargo/config.toml)，没有动态系统 SQLite 回退；实际链接、链接符号、OMIT_WAL / OMIT_LOAD_EXTENSION、连接选项、精确 ABI、归档与许可随附均待发行验收。本阶段没有运行解析器/引擎、编译 Cargo 或创建数据库。
-
-## 历史夹具：专实例首设提供者
-
-本机首次帐号发行选择 Debian 13 amd64 **Libgcrypt 1.11.0-7+deb13u1** 和 **libgpg-error 1.51-4**，只使用固定动态 ABI 与已记录的两份 ELF，不供应自研密码算法。它们不是 Cargo 依赖或只读命令的启动依赖；[组包锁](packaging/debian13-amd64/lock.json)固定原 .deb，[配方](packaging/debian13-amd64/README.md)保留对应来源、补丁、版权和发行签名输入。原生小叶复用已经锁定的 rusqlite 与 zeroize，不引入新的 crate 版本。真实装载、加密提供者许可、锁页和跨组件行为尚未构建或运行验收。
+不再构建 SQLite/SMB 历史夹具，也不随诊断工具提取旧凭据提供者。过去版本的[锁定源码及许可核对](https://github.com/isarmg/zxs/blob/b2e3af5aba9c0901bfaa83c4bebf16d75a25e79e/helper/DEPENDENCIES.md)和[原 Debian 包摘要](https://github.com/isarmg/zxs/blob/b2e3af5aba9c0901bfaa83c4bebf16d75a25e79e/helper/packaging/debian13-amd64/lock.json)仍可按该提交只读查证。这些材料不属于当前锁或发行配方。

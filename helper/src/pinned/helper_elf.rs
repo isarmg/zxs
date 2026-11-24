@@ -10,8 +10,6 @@ use rustix::{
     io::Errno,
     process::{Pid, getegid, geteuid, getgid, getpid, getppid, getuid},
 };
-#[cfg(test)]
-use sha2::{Digest, Sha256};
 use std::{
     ffi::OsStr,
     fs::File,
@@ -458,10 +456,6 @@ pub(crate) struct ForegroundElf {
     role: Role,
 }
 impl ForegroundElf {
-    #[cfg(test)]
-    pub(crate) fn host() -> io::Result<Self> {
-        Self::select(Role::Privileged)
-    }
     pub(crate) fn local() -> io::Result<Self> {
         Self::select(Role::Local {
             uid: getuid().as_raw(),
@@ -509,64 +503,12 @@ impl ForegroundElf {
         }
         Ok(())
     }
-    /// A later privileged cut still independently attests the *current*
-    /// proc, file policy and actual executable mapping. Its original data
-    /// reader is already owned; never reopen it or accept another inode.
-    #[cfg(test)]
-    pub(crate) fn requalify_host_image(&self) -> io::Result<()> {
-        if self.role != Role::Privileged {
-            return Err(no());
-        }
-        self.role.require()?;
-        let current = ProcessFiles::select()?;
-        if current.mount != self.process.mount
-            || Entity::of(&current.proc.metadata()?)? != Entity::of(&self.process.proc.metadata()?)?
-        {
-            return Err(no());
-        }
-        let same = || -> io::Result<()> {
-            self.require()?;
-            if Stamp::at(&current.exe(getpid())?)? != self.stamp {
-                return Err(no());
-            }
-            Ok(())
-        };
-        same()?;
-        local_data_filesystem(&self.original)?;
-        check_image_file(&self.reader, self.stamp)?;
-        require_application_text(&current, &self.reader, self.stamp)?;
-        same()
-    }
     pub(crate) fn parent_is_same_image(&self, expected: Pid) -> io::Result<()> {
         if getppid() != Some(expected) {
             return Err(no());
         }
         self.require()?;
         if Stamp::at(&self.process.exe(expected)?)? != self.stamp || getppid() != Some(expected) {
-            return Err(no());
-        }
-        self.require()
-    }
-    #[cfg(test)]
-    pub(crate) fn require_independent_digest(&self, expected: &[u8; 32]) -> io::Result<()> {
-        if expected == &[0; 32] {
-            return Err(no());
-        }
-        self.require()?;
-        let mut hash = Sha256::new();
-        let mut buf = vec![0_u8; 32 << 10];
-        let mut offset = 0;
-        while offset < self.stamp.len {
-            let n = usize::try_from(self.stamp.len - offset)
-                .unwrap_or(usize::MAX)
-                .min(buf.len());
-            self.reader.read_exact_at(&mut buf[..n], offset)?;
-            hash.update(&buf[..n]);
-            offset += n as u64;
-        }
-        if self.reader.read_at(&mut [0], offset)? != 0
-            || <[u8; 32]>::from(hash.finalize()) != *expected
-        {
             return Err(no());
         }
         self.require()

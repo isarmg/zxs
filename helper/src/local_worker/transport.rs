@@ -2,8 +2,6 @@
 //! Every receive is from the other still-live process of this one invocation,
 //! with `SCM_CREDENTIALS` and exactly the descriptors fixed by this stage.
 use super::bad;
-#[cfg(test)]
-use rustix::net::{Shutdown, shutdown};
 use rustix::{
     fd::{AsFd, OwnedFd},
     net::{
@@ -24,56 +22,8 @@ pub(crate) type Payload = [u8; 65];
 
 #[derive(Clone, Copy)]
 pub(crate) enum Kind {
-    #[cfg(test)]
-    Reserved = 3,
-    #[cfg(test)]
-    Complete = 5,
-    #[cfg(test)]
-    Lease = 6,
-    #[cfg(test)]
-    ChosenFolder = 9,
-    #[cfg(test)]
-    VolumeClaim = 10,
-    #[cfg(test)]
-    FirstBrowserReady = 12,
-    #[cfg(test)]
-    FirstBrowserRequest = 13,
-    #[cfg(test)]
-    RustInspect = 15,
-    #[cfg(test)]
-    RustStage = 16,
-    #[cfg(test)]
-    RustVaultPlaced = 17,
-    #[cfg(test)]
-    RustVaultSealed = 18,
     CopyRepairBrowserReady = 22,
     CopyRepairBrowserRequest = 23,
-    #[cfg(test)]
-    RetirementCheck = 29,
-    #[cfg(test)]
-    ImportInventory = 30,
-    #[cfg(test)]
-    FreshDatabase = 31,
-    #[cfg(test)]
-    DeployedActive = 32,
-    #[cfg(test)]
-    DeployedDatabase = 33,
-    #[cfg(test)]
-    DeployedMarker = 34,
-    #[cfg(test)]
-    SharedAccountDurable = 38,
-    #[cfg(test)]
-    JointWriterReady = 39,
-    #[cfg(test)]
-    JointWebReceiverReady = 40,
-    #[cfg(test)]
-    JointWebMaterial = 41,
-    #[cfg(test)]
-    JointSqlPeer = 42,
-    #[cfg(test)]
-    JointWriterPeer = 43,
-    #[cfg(test)]
-    JointVaultDurable = 44,
     ImportStep = 45,
     InitData = 46,
 }
@@ -260,15 +210,6 @@ impl Channel {
             }
         }
     }
-    #[cfg(test)]
-    pub(crate) fn wait<const K: usize>(
-        &self,
-        kind: Kind,
-        digest: &[u8; 32],
-        until: Instant,
-    ) -> io::Result<(Payload, [File; K])> {
-        self.wait_checked(kind, digest, until, || Ok(()))
-    }
     pub(crate) fn wait_checked<const K: usize>(
         &self,
         kind: Kind,
@@ -281,7 +222,7 @@ impl Channel {
             if Instant::now() >= until {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
-                    "offline credential worker stopped responding",
+                    "offline maintenance worker stopped responding",
                 ));
             }
             match self.receive(kind, digest) {
@@ -292,10 +233,6 @@ impl Channel {
                 r => return r,
             }
         }
-    }
-    #[cfg(test)]
-    pub(crate) fn finish_writing(&self) -> io::Result<()> {
-        shutdown(&self.fd, Shutdown::Write).map_err(Into::into)
     }
     pub(crate) fn eof(&self) -> io::Result<()> {
         let mut buffer = [0];
@@ -314,7 +251,7 @@ impl Channel {
             || extras.drain().next().is_some()
         {
             return Err(bad(
-                "offline credential worker did not close its exact result channel",
+                "offline maintenance worker did not close its exact result channel",
             ));
         }
         Ok(())
@@ -337,20 +274,20 @@ mod tests {
         let worker = Channel::from_owned_child_session(b, c, [8; 32]).unwrap();
         let data = [5; 65];
         let digest = [4; 32];
-        root.send(Kind::Reserved, &digest, &data).unwrap();
+        root.send(Kind::CopyRepairBrowserReady, &digest, &data).unwrap();
         assert_eq!(
-            worker.receive::<0>(Kind::Reserved, &digest).unwrap().0,
+            worker.receive::<0>(Kind::CopyRepairBrowserReady, &digest).unwrap().0,
             data
         );
-        root.send(Kind::Complete, &digest, &data).unwrap();
-        assert!(worker.receive::<0>(Kind::Reserved, &digest).is_err());
-        root.send(Kind::Reserved, &[7; 32], &data).unwrap();
-        assert!(worker.receive::<0>(Kind::Reserved, &digest).is_err());
+        root.send(Kind::CopyRepairBrowserRequest, &digest, &data).unwrap();
+        assert!(worker.receive::<0>(Kind::CopyRepairBrowserReady, &digest).is_err());
+        root.send(Kind::CopyRepairBrowserReady, &[7; 32], &data).unwrap();
+        assert!(worker.receive::<0>(Kind::CopyRepairBrowserReady, &digest).is_err());
         let mut wrong = c;
         wrong.uid = Uid::from_raw(u32::from(c.uid.is_root()));
         let worker = Channel::from_owned_child_session(worker.fd, wrong, [8; 32]).unwrap();
-        root.send(Kind::Reserved, &digest, &data).unwrap();
-        assert!(worker.receive::<0>(Kind::Reserved, &digest).is_err());
+        root.send(Kind::CopyRepairBrowserReady, &digest, &data).unwrap();
+        assert!(worker.receive::<0>(Kind::CopyRepairBrowserReady, &digest).is_err());
         drop(root);
         worker.eof().unwrap();
     }

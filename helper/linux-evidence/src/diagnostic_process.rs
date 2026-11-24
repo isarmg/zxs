@@ -295,39 +295,26 @@ pub fn prepare_panel_worker_exec(
     )
 }
 
-/// Fixed private child kinds. Neither can execute a caller-supplied program
-/// or inherit descriptors beyond the same dedicated 3/4 layout.
-#[derive(Clone, Copy)]
-pub enum OfflineSql {
-    FirstLayout,
-    FirstBrowser,
-    RustAccount,
-    RustVaultWriter,
-    CopyRepairBrowser,
-}
-
-/// The account SQL child retains the operator's TERMINAL session (not
-/// the unrelated diagnostic worker session). Only 3=private seqpacket and
-/// 4=sealed nonsecret order are introduced; all other caller FDs close.
+/// Select the isolated copy-repair browser on the exact installed Helper.
+/// The child retains the session, but receives only private 3=seqpacket
+/// and 4=sealed nonsecret order besides its null standard streams.
 ///
 /// # Errors
-/// Returns an error if the executable, channel or sealed order descriptor
-/// cannot be duplicated for the fixed child. A failed child setup aborts the spawn.
-pub fn prepare_account_sql_exec(
+/// Fails if the exact executable, order or channel cannot be retained.
+pub fn prepare_copy_repair_browser_exec(
     cmd: &mut Command,
     original: &File,
     channel: &File,
     order: &File,
-    mode: OfflineSql,
 ) -> io::Result<()> {
-    let action = match mode {
-        OfflineSql::FirstLayout => c"__first-layout-sql-v9",
-        OfflineSql::FirstBrowser => c"__first-install-browser-v1",
-        OfflineSql::RustAccount => c"__zxs-shared-account-sql-v2",
-        OfflineSql::RustVaultWriter => c"__zxs-shared-vault-writer-v2",
-        OfflineSql::CopyRepairBrowser => c"__copy-repair-browser-v2",
-    };
-    prepare_fixed_peer_exec(cmd, original, channel, order, c"helper", action)
+    prepare_fixed_peer_exec(
+        cmd,
+        original,
+        channel,
+        order,
+        c"helper",
+        c"__copy-repair-browser-v2",
+    )
 }
 
 /// Select the fixed local file import entrypoint on the exact installed executable.
@@ -448,7 +435,7 @@ fn prepare_fixed_peer_exec(
 /// # Errors
 /// Propagates failure to mark either inherited descriptor close-on-exec.
 #[allow(unsafe_code)]
-pub fn account_sql_descriptors() -> io::Result<[File; 2]> {
+pub fn copy_repair_browser_descriptors() -> io::Result<[File; 2]> {
     use std::os::fd::FromRawFd;
     if unsafe { libc::fcntl(3, libc::F_SETFD, libc::FD_CLOEXEC) } < 0
         || unsafe { libc::fcntl(4, libc::F_SETFD, libc::FD_CLOEXEC) } < 0

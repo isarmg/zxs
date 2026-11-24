@@ -1,5 +1,5 @@
 {
-  "debian_version": "1.0.0+diskpack20261120.5",
+  "debian_version": "1.0.0+diskpack20261120.6",
   "releases": {
     "debian": {"suite":"trixie","inrelease":"0584fba32e13e0ab8285fb16c27adea1ec03a73669c18702821094fd6ca86675"},
     "debian-security": {"suite":"trixie-security","inrelease":"4bcc789fc8cf9d937b6d721b04f3687984e282ea848c8ecbdb234ebe851e748c"}
@@ -23,8 +23,6 @@
     "libblkid1": ["debian","2.41.5-0+deb13u1","81535f3c2c0efc732965907c8749103a0a26377c761622c9ce39b4c92dcde52f"],
     "libuuid1": ["debian","2.41.5-0+deb13u1","c1bf4c4c3ff48c57fabf93307dfb56996b60cfa33927afc4158b5db36fb2721e"],
     "libc6": ["debian","2.41-12+deb13u4","967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9"],
-    "libgcrypt20": ["debian","1.11.0-7+deb13u1","f0eb41f8cb40896e0822e9ab65611e8383c12b721c76c54764f744abb4a8c247"],
-    "libgpg-error0": ["debian","1.51-4","22b95570fd41c113ef6f5651563b4d748292844baab1278a46eb940c1dec2322"],
     "libcap2": ["debian","1:2.75-10+deb13u1+b3","89fc4d34fc7a28ad6f0fcd0c561ab253b9dedf6f77f5a000b47c276c8295bf67"],
     "libselinux1": ["debian","3.8.1-1","68bb8d32bd8d6d7d2f5952a169db03d1484b46ae1e52abccdec42a19dccea5d5"],
     "libpcre2-8-0": ["debian-security","10.46-1~deb13u3","e226f661d918f04daf38cdbc4806b7ed7d6ef95c7eb0ade692fc350e31970040"],
@@ -51,8 +49,6 @@
     "libblkid1":{"usr/lib/x86_64-linux-gnu/libblkid.so.1.1.0":"lib/libblkid.so.1"},
     "libuuid1":{"usr/lib/x86_64-linux-gnu/libuuid.so.1.3.0":"lib/libuuid.so.1"},
     "libc6":{"usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2":"lib/ld-linux-x86-64.so.2","usr/lib/x86_64-linux-gnu/libc.so.6":"lib/libc.so.6"},
-    "libgcrypt20":{"usr/lib/x86_64-linux-gnu/libgcrypt.so.20.5.0":"lib/libgcrypt.so.20"},
-    "libgpg-error0":{"usr/lib/x86_64-linux-gnu/libgpg-error.so.0.38.0":"lib/libgpg-error.so.0"},
     "libcap2":{"usr/lib/x86_64-linux-gnu/libcap.so.2.75":"lib/libcap.so.2"},
     "libselinux1":{"usr/lib/x86_64-linux-gnu/libselinux.so.1":"lib/libselinux.so.1"},
     "libpcre2-8-0":{"usr/lib/x86_64-linux-gnu/libpcre2-8.so.0.14.0":"lib/libpcre2-8.so.0"},

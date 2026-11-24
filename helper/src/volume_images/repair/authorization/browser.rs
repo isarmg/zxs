@@ -14,7 +14,7 @@ use crate::{
     pinned::helper_elf::ForegroundElf,
 };
 use helper_linux_evidence::{
-    diagnostic_process::{OfflineSql, account_sql_descriptors},
+    diagnostic_process::copy_repair_browser_descriptors,
     prompt_signals::PromptSignals,
 };
 use rustix::{
@@ -58,12 +58,7 @@ pub(super) fn offer(
     };
     check()?;
     let (left, right) = transport::pair()?;
-    let mut child = Worker::spawn(
-        helper.descriptor(),
-        &right,
-        &envelope,
-        OfflineSql::CopyRepairBrowser,
-    )?;
+    let mut child = Worker::spawn_copy_repair_browser(helper.descriptor(), &right, &envelope)?;
     drop(right);
     drop(envelope);
     let channel = Channel::from_owned_child_session(
@@ -105,7 +100,7 @@ pub(super) fn offer(
 }
 
 pub(super) fn worker() -> io::Result<()> {
-    let [fd, meta] = account_sql_descriptors()?;
+    let [fd, meta] = copy_repair_browser_descriptors()?;
     only_inherited_descriptors(&[3, 4])?;
     let (uid, gid) = (getuid(), getgid());
     maintenance::diagnostic_worker(uid.as_raw(), gid.as_raw())?;

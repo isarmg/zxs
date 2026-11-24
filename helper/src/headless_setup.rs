@@ -658,3 +658,7 @@ fn stage_name(epoch: &[u8; 16]) -> String {
     }
     name
 }
+
+#[cfg(test)]
+#[path = "../tests/maintenance/headless_argon2.rs"]
+mod headless_argon2_tests;

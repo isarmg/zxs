@@ -16,7 +16,6 @@ name = "helper"
 path = "src/main.rs"
 
 [features]
-private-fresh-install = []
 embedded-zxs = []
 
 [dependencies]
@@ -31,9 +30,6 @@ sha2 = { version = "=0.10.9", default-features = false }
 linux-raw-sys = { version = "=0.12.1", default-features = false, features = ["general", "std"] }
 
 [dev-dependencies]
-# Retired installation fixtures still verify their original wire and custody boundaries.
-helper-linux-evidence = { path = "linux-evidence", features = ["historical-fixtures"] }
-rusqlite = { version = "=0.43.0", default-features = false, features = ["bundled", "limits"] }
 rustix = { version = "=1.1.5", features = ["pty", "stdio"] }
 tempfile = "=3.27.0"
 

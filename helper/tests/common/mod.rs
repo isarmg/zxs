@@ -9,14 +9,6 @@ pub fn data_directory() -> TempDir {
     )
 }
 
-#[allow(dead_code)] // some standalone test targets use only the data directory
-pub fn recycle_directory() -> TempDir {
-    let parent = std::env::var_os("HELPER_TEST_RECYCLE_PARENT").expect(
-        "supply a dedicated private test parent on a different supported dev AND filesystem UUID",
-    );
-    private_directory(PathBuf::from(parent))
-}
-
 #[allow(dead_code)]
 pub fn subtree_bind_directory() -> TempDir {
     let parent = std::env::var_os("HELPER_TEST_SUBTREE_BIND_PARENT").expect(

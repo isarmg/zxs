@@ -111,16 +111,15 @@ def bind_private_loader(exe):
             "private ELF relocation did not take effect")
 
 def require_tool_inputs(lock):
-    # Match the actual existing diagnostic/tool and private KDF payload,
-    # not a copy of the Native archive or a broad list of all Debian Depends.
+    # Match only the fixed diagnostic/tool payload, not a broad list of Debian Depends.
     tools={"bin/fsck.exfat","bin/e2fsck","bin/xfs_repair","bin/ntfsfix","bin/btrfs"}
-    libraries={f"lib/{leaf}" for leaf in EXT4_LIBS+XFS_LIBS+NTFS_LIBS+BTRFS_LIBS+("libgcrypt.so.20","libgpg-error.so.0")}
+    libraries={f"lib/{leaf}" for leaf in EXT4_LIBS+XFS_LIBS+NTFS_LIBS+BTRFS_LIBS}
     expected=set(FILES)|tools|libraries
     payload=lock["payload"]
     files=[path for archive in payload.values() for path in archive.values()]
     require(len(files)==len(expected) and set(files)==expected
             and set(lock["packages"])==(set(payload)|{"base-files","gcc-14-base"}),
-            "offline input has more than the fixed disk tools and approved provider files")
+            "offline inputs do not match the fixed diagnostic tool payload")
 
 def build(args):
     require(os.geteuid()!=0,"the offline material builder must run unprivileged")
@@ -160,15 +159,6 @@ def build(args):
         require(expected is None or set(needed)==expected,"checker guest DT_NEEDED differs from the fixed Debian closure")
         requires[str(path.relative_to(root))]=needed
         path.chmod(0o755 if path in programs or path.name==LOADER else 0o644)
-    # Provider is loaded only for an allowed NEW first setup. Even an
-    # accidentally hard-linked build must not make a receipt depend on it.
-    pair={"libgcrypt.so.20","libgpg-error.so.0"}
-    for path in programs:
-        require(not pair.intersection(requires[str(path.relative_to(root))]),"mandatory credential provider on an ordinary program")
-    g=set(requires[str((home/"lib/libgcrypt.so.20").relative_to(root))])
-    e=set(requires[str((home/"lib/libgpg-error.so.0").relative_to(root))])
-    require({"libc.so.6","libgpg-error.so.0"}<=g<={"libc.so.6","libgpg-error.so.0",LOADER}
-            and {"libc.so.6"}<=e<={"libc.so.6",LOADER},"unexpected private pair provider closure")
     for checker in programs[1:]:
         require(textout(["/usr/bin/patchelf","--print-interpreter",str(checker)])==SYSTEM_LOADER,"unexpected sandbox loader")
     for path in programs[:1]:
@@ -187,7 +177,7 @@ def build(args):
             f.write("debian13-amd64/private-pack-1/bubblewrap-0.12/"+version_label+"\n"+"\n".join(lines)+"\n")
     info={"abi":"debian13-amd64-gnu","source_archives":lock["releases"],"packages":lock["packages"],
           "needed":requires,"files":{str(p.relative_to(home)):digest(p) for p in sorted(home.rglob("*")) if p.is_file()},
-          "scope":"offline diagnostics and separately verified offline credential provider inputs only"}
+          "scope":"offline diagnostics tool inputs only"}
     (out/"MATERIALS.json").write_text(json.dumps(info,sort_keys=True,indent=2)+"\n",encoding="ascii")
     with (out/"SHA256SUMS").open("x",encoding="ascii") as sums:
         for p in sorted(out.rglob("*")):

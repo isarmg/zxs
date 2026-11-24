@@ -25,23 +25,6 @@ fn failure(s: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, s)
 }
 
-#[cfg(test)]
-#[derive(Clone, Copy)]
-pub(crate) enum Prompt {
-    Joint,
-}
-#[cfg(test)]
-impl Prompt {
-    fn wording(self) -> [&'static [u8]; 2] {
-        match self {
-            Self::Joint => [
-                "请输入 Web 与 SMB 共用的同一账户口令（不回显），然后按回车。\n".as_bytes(),
-                "请再次输入同一账户口令。\n".as_bytes(),
-            ],
-        }
-    }
-}
-
 fn already_writable(flags: OFlags) -> bool {
     let access = flags & OFlags::ACCMODE;
     !flags.contains(OFlags::PATH) && (access == OFlags::WRONLY || access == OFlags::RDWR)
@@ -162,20 +145,6 @@ impl Channel {
         }
         Ok(())
     }
-    #[cfg(test)]
-    pub(crate) fn prompt(
-        &self,
-        prompt: Prompt,
-        index: usize,
-        end: Instant,
-        check: impl Fn() -> io::Result<()>,
-    ) -> io::Result<()> {
-        let bytes = *prompt
-            .wording()
-            .get(index)
-            .ok_or_else(|| failure("unknown credential prompt"))?;
-        nonblocking_prompt(self.out.as_fd(), bytes, end, check)
-    }
 }
 
 // This is not a poll-then-blocking-write trick: each actual write uses the
@@ -220,15 +189,6 @@ mod tests {
         ] {
             assert!(!already_writable(f));
         }
-    }
-    #[test]
-    fn joint_account_secret_has_one_shared_prompt_and_one_repeat_not_two_roles() {
-        let [first, repeat] = Prompt::Joint.wording();
-        assert_eq!(
-            first,
-            "请输入 Web 与 SMB 共用的同一账户口令（不回显），然后按回车。\n".as_bytes()
-        );
-        assert_eq!(repeat, "请再次输入同一账户口令。\n".as_bytes());
     }
     #[test]
     fn full_nonblocking_output_can_time_out_without_a_reader_or_a_blocking_write() {

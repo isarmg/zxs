@@ -14,7 +14,7 @@ Helper 是独立的按需本机程序。宿主诊断可在业务服务运行时�
   重置只更换该文件的账号验证值和代次，保留登录名、池和角色。
 - Helper 不启动服务。首设后以同一非 root 服务账号运行 `zxs --listen IP:PORT`，详见 [ZXS 部署说明](../zxs/docs/headless-activation.md)。
 
-见[操作表](docs/headless-offline.md)。此前 SQLite/SMB 资料是历史内容，
+见[操作表](docs/headless-offline.md)。历史 SQLite/SMB 流程不再交付，
 不用于当前格式，也不作为旧池迁移入口。
 
 ## 当前格式的权限边界
@@ -35,4 +35,4 @@ CLI 以互斥动作区分检查、可选单元预览、首设、口令重置和�
 
 ## 可选单文件发布
 
-默认 Helper 不含业务程序映像。编译时显式启用 `embedded-zxs` 才从同一前台 root 终端将经过独立摘要核验的完整 ELF 无覆盖发布。此命令独占原空 `/zxs/state`，绑定受保护的宿主、目录和已发布的同一 inode，不发行账户或启动服务。离线维护仍只调用固定安装位置的业务文件。宿主证据与[映像发布](docs/embedded-image.md)独立于历史 SQLite/SMB。历史协议仅供测试，不进入默认或内嵌程序的运行依赖；各子项目独立构建。
+默认 Helper 不含业务程序映像。编译时显式启用 `embedded-zxs` 才从同一前台 root 终端将经过独立摘要核验的完整 ELF 无覆盖发布。此命令独占原空 `/zxs/state`，绑定受保护的宿主、目录和已发布的同一 inode，不发行账户或启动服务。离线维护仍只调用固定安装位置的业务文件。宿主证据与[映像发布](docs/embedded-image.md)不依赖旧安装或共享协议；各子项目独立构建。

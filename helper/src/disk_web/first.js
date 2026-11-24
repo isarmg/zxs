@@ -42,23 +42,14 @@ async function fetchPreview() {
         if (!["ext", "exFAT", "FAT32"].includes(fields[0]) || !validByteCount(fields[1])) throw new Error();
         plan.textContent = "终端已选一份 " + fields[1] + " 字节的 " + fields[0] + " 输入镜像和一个新工作副本位置。这里只发起终端确认，尚未读取镜像，也未创建文件。自动修复可能丢弃工作副本中的受损内容。";
     } else {
-        if (!["new", "resume", "setup", "headless"].includes(fields[0]) || !/^(?:[1-9]|[1-5][0-9]|6[0-2])$/.test(fields[1])) throw new Error();
-        if (fields[0] === "headless") {
-            if (fields[1] !== "1") throw new Error();
-            plan.textContent = "已在终端选择系统目录、数据盘和独立回收站盘。请返回该终端核对目录并设置账户。";
-        } else if (fields[0] === "setup") {
-            plan.textContent = "发行单一 Web/SMB 账号：终端已预选 " + fields[1] +
-                " 个共享目录。尚未核实原池或设密；原终端将核对完整范围，并在确认后单独隐藏输入口令。";
-        } else {
-            plan.textContent = (fields[0] === "new" ? "新建空池" : "只续同一原单") + "：终端已选 1 个 SYSTEM、1 个独立回收盘和 " +
-                fields[1] + " 个数据根。终端将显示实际原名和身份，本次预览不核盘内内容。";
-        }
+        if (phase !== "headless" || count !== "1") throw new Error();
+        plan.textContent = "已在终端选择系统目录、数据盘和独立回收站盘。请返回该终端核对目录并设置账户。";
     }
     if (tail.length && unitPreview !== null && unitText !== null) {
         unitText.textContent = tail.join("\n");
         unitPreview.hidden = false;
     }
-    return {value: proof, phase: repair ? null : phase};
+    return {value: proof};
 }
 async function preview() {
     if (auth === null || refresh.disabled) return;
@@ -114,7 +105,7 @@ proceed.addEventListener("click", async () => {
     lockControls();
     try {
         await post(route + "/request", proposed.value);
-        currentStep(proposed.phase === "setup" ? "account-step" : "init-step");
+        currentStep("init-step");
         status.textContent = "请求已交给本机终端，网页将关闭。请回原终端核对原件并决定；现在还没有开始。";
     } catch (_) {
         status.textContent = "未取得网页回执。先看原终端；收到本机确认提示才可继续，不另开新单。";

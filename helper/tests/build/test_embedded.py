@@ -1,6 +1,7 @@
 """Inert ELF header fixtures only, never invoke the build recipe or a product."""
 import runpy
 import struct
+import tempfile
 from pathlib import Path
 import unittest
 
@@ -30,6 +31,27 @@ def embedded_image(*extra):
 
 
 class EmbeddedProof(unittest.TestCase):
+    def test_project_or_ancestor_cargo_configuration_is_not_a_build_input(self):
+        with tempfile.TemporaryDirectory() as home:
+            parent = Path(home)
+            source = parent / "source"
+            source.mkdir()
+            original = source / ".cargo"
+            original.mkdir()
+            R["check_cargo_scope"](source)
+            for directory in (original, parent / ".cargo"):
+                directory.mkdir(exist_ok=True)
+                for name in ("config", "config.toml"):
+                    config = directory / name
+                    config.symlink_to(directory / "missing-config")
+                    with self.assertRaisesRegex(ValueError, "Cargo config"):
+                        R["check_cargo_scope"](source)
+                    config.unlink()
+            original.rmdir()
+            original.symlink_to(parent / ".cargo", target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "not an original directory"):
+                R["check_cargo_scope"](source)
+
     def test_whole_static_pie_not_old_dependencies_or_a_loader(self):
         def with_tags(tags, extra=()):
             rows = [(1, 4, 0, 0, 0, 0x400, 0x400, 0x1000),

@@ -17,7 +17,7 @@
    cargo +1.100.0 test --workspace --locked --offline --target x86_64-unknown-linux-gnu
    ```
 
-   默认构建提供当前的[离线首设与重置](docs/headless-offline.md)。旧 SQLite 安装夹具不作为当前发行证据。
+   默认构建提供当前的[离线首设与重置](docs/headless-offline.md)；安装、密码重置和离线维护仍需在获准的环境独立验收。
 
    测试和发行构建分别记录。正向介质用例用专用临时目录，不能使用业务数据。记录运行用例数、失败及环境限制。
 

@@ -2,8 +2,8 @@
 
 The normal Helper has no placeholder payload. Build the optional separate
 Helper only with the already reviewed and independently measured **complete**
-standalone ZXS ELF from the independently selected current ZXS source. Do not use a retired
-SQLite/SMB image or a development stand-in. This action neither releases
+standalone ZXS ELF from the independently selected current ZXS source. Do not use
+an old-format or development stand-in. This action neither releases
 nor starts either program.
 The final runnable ZXS remains that one unchanged file; it never calls Helper.
 
@@ -23,7 +23,9 @@ python3 build_embedded.py \
 
 Inputs are named canonical local paths, not auto-fetched dependencies. The
 script makes a private exact-byte copy, independently checks the approved
-input hash and static PIE shape, builds locked/offline with a fresh private Cargo home and only the known tracked config (its SQLite flags apply to historical test dependencies, not this binary) (no alternate or ancestor Cargo config), and verifies that
+input hash and static PIE shape, builds locked/offline with a fresh private Cargo
+home and only its generated offline registry configuration (no source or
+ancestor Cargo config), and verifies that
 the actual Helper ELF contains **one whole unchanged payload** in one read-only
 loadable region, with no other `PT_LOAD` mapping over its Linux x86-64 virtual
 pages, including a load's zero-filled memory range. See the
@@ -68,6 +70,5 @@ non-root service account, not this root publisher. Its default installed
 program location, also used by offline name lookup, DATA initialization and
 imports, is `/zxs/bin/zxs`. Extracting to a different protected directory
 does **not** reconfigure those commands. Extraction grants no account and
-creates no role markers or `server.conf`. The `embedded-zxs` build feature
-does not enable a legacy installation, unlock old workers, or require
-a SQLite schema or engine.
+creates no role markers or `server.conf`. The `embedded-zxs` build feature only
+adds the explicitly selected payload and its independent extraction entry.

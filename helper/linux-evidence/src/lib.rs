@@ -9,13 +9,9 @@
 compile_error!("helper-linux-evidence supports x86_64 Linux LP64 only");
 
 pub mod diagnostic_process;
-#[cfg(feature = "historical-fixtures")]
-pub mod first_smb;
 pub mod nvme_health;
 pub mod panel_confinement;
 pub mod prompt_signals;
-#[cfg(feature = "historical-fixtures")]
-pub mod sqlite_vfs;
 
 use linux_raw_sys::general as uapi;
 use rustix::fs::{OFlags, fcntl_getfl, fstatfs};

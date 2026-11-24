@@ -14,9 +14,6 @@ mod dependency_document;
 mod disk_web;
 #[cfg(any(test, feature = "embedded-zxs"))]
 mod embedded_image;
-#[cfg(test)]
-#[path = "../tests/common/child.rs"]
-mod fixture_child;
 mod foreground;
 mod fresh_password;
 mod fresh_random;
@@ -31,11 +28,6 @@ mod maintenance;
 mod path_rules;
 mod pinned;
 pub(crate) mod product_layout;
-// Retained fixture coverage only. Neither normal nor embedded Helper executes these protocols.
-#[cfg(test)]
-mod smb_profile;
-#[cfg(test)]
-mod sqlite_install;
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]
 mod test_area;
@@ -97,14 +89,6 @@ enum Command {
     DiskWebStorage(Selection),
     SealedWorker(volume_images::Format, [u8; 32]),
     LeasedPanelWorker(volume_images::LeasedFormat, [u8; 32]),
-    #[cfg(test)]
-    RustAccountWorker,
-    #[cfg(test)]
-    RustVaultWriter,
-    #[cfg(test)]
-    LayoutSqlWorker,
-    #[cfg(test)]
-    FirstBrowserWorker,
     CopyRepairBrowserWorker,
     FsTools(fs_tools::Query),
     CopyCheck(volume_images::Request),
@@ -214,36 +198,11 @@ fn parse_worker(
     op: &OsStr,
     args: &mut impl Iterator<Item = OsString>,
 ) -> Result<Option<Command>, &'static str> {
-    #[cfg(test)]
-    if op == "__zxs-shared-account-sql-v2" || op == "__zxs-shared-vault-writer-v2" {
-        if args.next().is_some() {
-            return Err("invalid internal worker");
-        }
-        return Ok(Some(if op == "__zxs-shared-account-sql-v2" {
-            Command::RustAccountWorker
-        } else {
-            Command::RustVaultWriter
-        }));
-    }
-    #[cfg(test)]
-    if op == "__first-install-browser-v1" {
-        if args.next().is_some() {
-            return Err("unexpected browser worker argument");
-        }
-        return Ok(Some(Command::FirstBrowserWorker));
-    }
     if op == "__copy-repair-browser-v2" {
         if args.next().is_some() {
             return Err("unexpected copy-repair browser worker argument");
         }
         return Ok(Some(Command::CopyRepairBrowserWorker));
-    }
-    #[cfg(test)]
-    if op == "__first-layout-sql-v9" {
-        if args.next().is_some() {
-            return Err("invalid internal worker");
-        }
-        return Ok(Some(Command::LayoutSqlWorker));
     }
     if let Some(format) = CheckFormat::from_worker_argument(op) {
         let error = match format {
@@ -284,33 +243,9 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::DiskWeb(image) => disk_web::serve(image)?,
         Command::DiskWebStorage(s) => disk_web::serve_storage(s)?,
         Command::DiskHealth(query) => return disk_health(query),
-        #[cfg(test)]
-        Command::RustAccountWorker => {
-            return Ok(fixed_worker_status(
-                sqlite_install::rust_account_worker().is_ok(),
-            ));
-        }
-        #[cfg(test)]
-        Command::RustVaultWriter => {
-            return Ok(fixed_worker_status(
-                sqlite_install::rust_vault_worker().is_ok(),
-            ));
-        }
-        #[cfg(test)]
-        Command::FirstBrowserWorker => {
-            return Ok(fixed_worker_status(
-                sqlite_install::exec_first_browser().is_ok(),
-            ));
-        }
         Command::CopyRepairBrowserWorker => {
             return Ok(fixed_worker_status(
                 volume_images::repair::authorization::browser_worker().is_ok(),
-            ));
-        }
-        #[cfg(test)]
-        Command::LayoutSqlWorker => {
-            return Ok(fixed_worker_status(
-                sqlite_install::layout_sql_worker().is_ok(),
             ));
         }
         Command::SealedWorker(fmt, digest) => {

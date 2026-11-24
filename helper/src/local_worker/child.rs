@@ -1,7 +1,7 @@
 //! Actual reaped private workers for offline provisioning and interactive diagnostics.
 use super::{bad, transport::Channel};
 use helper_linux_evidence::diagnostic_process::{
-    OfflineSql, prepare_account_sql_exec, prepare_import_one_exec, prepare_init_data_exec,
+    prepare_copy_repair_browser_exec, prepare_import_one_exec, prepare_init_data_exec,
     require_waitable_children,
 };
 use rustix::{
@@ -26,29 +26,19 @@ pub(crate) struct Worker {
     done: bool,
 }
 impl Worker {
-    pub(crate) fn spawn(
+    pub(crate) fn spawn_copy_repair_browser(
         exe: &File,
         peer: &File,
         order: &File,
-        mode: OfflineSql,
     ) -> io::Result<Self> {
         require_waitable_children()?;
-        let mut cmd = Command::new("/not-an-account-program"); // only pinned execveat in pre_exec
+        let mut cmd = Command::new("/not-a-copy-repair-browser"); // only pinned execveat in pre_exec
         cmd.env_clear();
-        if matches!(
-            mode,
-            OfflineSql::FirstBrowser | OfflineSql::CopyRepairBrowser
-        ) {
-            let null = helper_linux_evidence::diagnostic_process::null_device()?;
-            cmd.stdin(Stdio::from(null.try_clone()?))
-                .stdout(Stdio::from(null.try_clone()?))
-                .stderr(Stdio::from(null));
-        } else if matches!(mode, OfflineSql::FirstLayout) {
-            cmd.stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-        }
-        prepare_account_sql_exec(&mut cmd, exe, peer, order, mode)?;
+        let null = helper_linux_evidence::diagnostic_process::null_device()?;
+        cmd.stdin(Stdio::from(null.try_clone()?))
+            .stdout(Stdio::from(null.try_clone()?))
+            .stderr(Stdio::from(null));
+        prepare_copy_repair_browser_exec(&mut cmd, exe, peer, order)?;
         Self::spawn_prepared(&mut cmd)
     }
     pub(crate) fn spawn_import(
@@ -89,7 +79,7 @@ impl Worker {
         let Some(pid) = actual else {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(bad("invalid exact SQLite child PID"));
+            return Err(bad("invalid exact maintenance child PID"));
         };
         // This Child alone owns the still-waitable child PID; it cannot be
         // reused before wait. Hard failure here never transfers an FD.
@@ -139,7 +129,7 @@ impl Worker {
     pub(crate) fn finish(&mut self, channel: &Channel, until: Instant) -> io::Result<()> {
         loop {
             if Instant::now() >= until {
-                return Err(bad("original credential worker completion timed out"));
+                return Err(bad("original maintenance worker completion timed out"));
             }
             if let Some(status) = self.peek()? {
                 let read = self.child.wait()?;
@@ -149,7 +139,7 @@ impl Worker {
                 return if status == 0 && read.code() == Some(0) {
                     channel.eof()
                 } else {
-                    Err(bad("original credential worker did not exit normally"))
+                    Err(bad("original maintenance worker did not exit normally"))
                 };
             }
             thread::sleep(Duration::from_millis(20));

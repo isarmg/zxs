@@ -10,46 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 const TICKET: Duration = Duration::from_secs(90);
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum InstallPhase {
-    Resume,
-    Initialize,
-    Account,
-}
-#[cfg(test)]
-impl InstallPhase {
-    pub(crate) fn wire(self) -> u8 {
-        match self {
-            Self::Resume => 0,
-            Self::Initialize => 1,
-            Self::Account => 2,
-        }
-    }
-    pub(crate) fn from_wire(value: u8) -> Option<Self> {
-        match value {
-            0 => Some(Self::Resume),
-            1 => Some(Self::Initialize),
-            2 => Some(Self::Account),
-            _ => None,
-        }
-    }
-    fn name(self) -> &'static str {
-        match self {
-            Self::Resume => "resume",
-            Self::Initialize => "new",
-            Self::Account => "setup",
-        }
-    }
-}
 enum Purpose {
     Headless,
     HeadlessUnit(String),
-    #[cfg(test)]
-    Install {
-        phase: InstallPhase,
-        count: u8,
-    },
     CopyRepair {
         format: RepairFormat,
         bytes: u64,
@@ -116,10 +79,6 @@ impl Offer {
                 let page = match self.purpose {
                     Purpose::Headless => format!("headless\n1\n{ticket}"),
                     Purpose::HeadlessUnit(ref unit) => format!("headless\n1\n{ticket}\n{unit}"),
-                    #[cfg(test)]
-                    Purpose::Install { phase, count } => {
-                        format!("{}\n{count}\n{ticket}", phase.name())
-                    }
                     Purpose::CopyRepair { format, bytes } => {
                         format!("{}\n{bytes}\n{ticket}", format.panel_label())
                     }
@@ -133,26 +92,6 @@ impl Offer {
             ),
         }
     }
-}
-#[cfg(test)]
-pub(crate) fn serve_first(
-    listener: TcpListener,
-    phase: InstallPhase,
-    count: u8,
-    code: [u8; 32],
-    end: Instant,
-    check: impl Fn() -> io::Result<()>,
-) -> io::Result<bool> {
-    if !(1..=62).contains(&count) {
-        return Err(io::Error::other("invalid fixed installation panel scope"));
-    }
-    serve(
-        listener,
-        Purpose::Install { phase, count },
-        zeroize::Zeroizing::new(code),
-        end,
-        check,
-    )
 }
 pub(super) fn serve_headless(
     listener: TcpListener,
@@ -295,10 +234,7 @@ mod tests {
         let now = Instant::now();
         let token = "a".repeat(64);
         let mut offer = Offer {
-            purpose: Purpose::Install {
-                phase: InstallPhase::Initialize,
-                count: 2,
-            },
+            purpose: Purpose::Headless,
             ticket: Some((digest(token.as_bytes()), now + TICKET)),
             requested: false,
         };
@@ -330,56 +266,6 @@ mod tests {
         assert_eq!(
             offer
                 .route(post("/api/install/request", token.as_bytes()), now)
-                .0
-                .code,
-            403
-        );
-    }
-    #[test]
-    fn guided_account_is_a_separate_preview_but_only_hands_a_ticket_to_its_parent() {
-        assert_eq!(InstallPhase::from_wire(0), Some(InstallPhase::Resume));
-        assert_eq!(InstallPhase::from_wire(1), Some(InstallPhase::Initialize));
-        assert_eq!(InstallPhase::from_wire(2), Some(InstallPhase::Account));
-        assert_eq!(InstallPhase::from_wire(3), None);
-        assert_eq!(InstallPhase::Account.wire(), 2);
-
-        let now = Instant::now();
-        let mut offer = Offer {
-            purpose: Purpose::Install {
-                phase: InstallPhase::Account,
-                count: 2,
-            },
-            ticket: None,
-            requested: false,
-        };
-        let (preview, close) = offer.route(post("/api/install/preview", b""), now);
-        assert_eq!(preview.code, 200);
-        assert!(!close && !offer.requested);
-        let mut fields = preview.body.lines();
-        assert_eq!((fields.next(), fields.next()), (Some("setup"), Some("2")));
-        let ticket = fields.next().unwrap();
-        assert_eq!(fields.next(), None);
-        assert_eq!(
-            offer
-                .route(post("/api/install/request", b"account text"), now)
-                .0
-                .code,
-            400
-        );
-        assert_eq!(
-            offer
-                .route(post("/api/copy-repair/request", ticket.as_bytes()), now)
-                .0
-                .code,
-            400
-        );
-        assert!(!offer.requested);
-        let (reply, close) = offer.route(post("/api/install/request", ticket.as_bytes()), now);
-        assert_eq!(reply.code, 200);
-        assert!(close && offer.requested);
-        assert_eq!(
-            offer
-                .route(post("/api/install/request", ticket.as_bytes()), now)
                 .0
                 .code,
             403

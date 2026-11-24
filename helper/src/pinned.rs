@@ -274,10 +274,6 @@ impl Pinned {
         one.local = Some(Arc::clone(scope));
         Ok(one)
     }
-    #[cfg(test)]
-    pub(crate) fn require_local_root(scope: &DiscoveryView) -> io::Result<()> {
-        Self::open_guarded(Path::new("/"), Kind::Directory, true, Some(scope)).map(drop)
-    }
     fn open_guarded(
         path: &Path,
         kind: Kind,
@@ -382,10 +378,6 @@ impl Pinned {
     pub(crate) fn entity(&self) -> Entity {
         *self.chain.last().expect("root and leaf are present")
     }
-    #[cfg(test)]
-    pub(crate) fn visible_chain(&self) -> &[Entity] {
-        &self.chain
-    }
     /// Reject only a lexical overlap or a same/nested original visible in
     /// these walks; shared ancestors alone do not make siblings overlap.
     pub(crate) fn overlaps(&self, other: &Self) -> bool {
@@ -399,10 +391,6 @@ impl Pinned {
         self.fd.metadata()
     }
 
-    #[cfg(test)]
-    pub(crate) fn local_scope(&self) -> Option<&Arc<DiscoveryView>> {
-        self.local.as_ref()
-    }
     fn admission(&self) -> Option<&dyn DiscoveryAdmission> {
         self.local.as_deref().map(|v| v as &dyn DiscoveryAdmission)
     }
@@ -549,62 +537,6 @@ impl Pinned {
     }
 }
 
-/// The same mount admission is mandatory for every walk and held read. No
-/// methods expose the inner Pinned to a path opener lacking the live gate.
-#[cfg(test)]
-pub(crate) struct DiscoveryPin<'a> {
-    original: Pinned,
-    admit: &'a dyn DiscoveryAdmission,
-}
-#[cfg(test)]
-impl<'a> DiscoveryPin<'a> {
-    pub(crate) fn select(path: &Path, admit: &'a dyn DiscoveryAdmission) -> io::Result<Self> {
-        Ok(Self {
-            original: Pinned::open_guarded(path, Kind::StorageRoot, true, Some(admit))?,
-            admit,
-        })
-    }
-    pub(crate) fn require_named(&self) -> io::Result<Mount> {
-        let x = &self.original;
-        let named = Pinned::open_guarded(&x.path, x.kind, true, Some(self.admit))?;
-        self.admit.admit(&x.fd)?;
-        check_named_mount(&x.chain, x.mount()?, &named.chain, named.mount()?)
-    }
-    pub(crate) fn metadata(&self) -> io::Result<Metadata> {
-        self.admit.admit(&self.original.fd)?;
-        self.original.metadata()
-    }
-    pub(crate) fn magic(&self) -> io::Result<u32> {
-        self.admit.admit(&self.original.fd)?;
-        local_data_filesystem(&self.original.fd)
-    }
-    pub(crate) fn directory(&self) -> io::Result<File> {
-        let mount = self.require_named()?;
-        let f = File::from(openat(
-            &self.original.fd,
-            c".",
-            OFlags::RDONLY
-                | OFlags::DIRECTORY
-                | OFlags::NOFOLLOW
-                | OFlags::NOATIME
-                | OFlags::CLOEXEC,
-            Mode::empty(),
-        )?);
-        self.require_directory(&f, mount)?;
-        Ok(f)
-    }
-    pub(crate) fn require_directory(&self, f: &File, mount: Mount) -> io::Result<()> {
-        self.admit.admit(f)?;
-        if Entity::of(&f.metadata()?)? != self.original.entity()
-            || Mount::on(f)? != Some(mount)
-            || self.require_named()? != mount
-        {
-            return Err(invalid("the visible discovery directory or mount changed"));
-        }
-        Ok(())
-    }
-}
-
 pub(crate) fn same_mount_leaf(parent: &File, name: &OsStr) -> io::Result<File> {
     Ok(File::from(openat2(
         parent,
@@ -660,47 +592,6 @@ impl LocalDataFile {
     }
 }
 
-/// A fixed 101-byte SQLite claim, only below a separately authorized and
-/// held storage directory. Never a data/backup/health or caller-path reader.
-#[cfg(test)]
-pub(crate) fn sqlite_claim_reader(pin: &File, entity: Entity, mount: u64) -> io::Result<File> {
-    selected_claim_reader(pin, entity, mount, false)
-}
-
-#[cfg(test)]
-pub(crate) fn discovery_claim_reader(pin: &File, entity: Entity, mount: u64) -> io::Result<File> {
-    selected_claim_reader(pin, entity, mount, true)
-}
-
-#[cfg(test)]
-fn selected_claim_reader(
-    pin: &File,
-    entity: Entity,
-    mount: u64,
-    passive: bool,
-) -> io::Result<File> {
-    let m = pin.metadata()?;
-    if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH)
-        || !m.is_file()
-        || m.mode() & 0o7777 != 0o600
-        || m.nlink() != 1
-        || m.len() != 101
-        || Entity::of(&m)? != entity
-        || Mount::on(pin)?.is_none_or(|v| v.id != mount)
-    {
-        return Err(invalid("not an original SQLite enrollment marker"));
-    }
-    reopen_admitted_reader(
-        pin,
-        entity,
-        if passive {
-            ReaderBoundary::Mount(mount, MountRead::PassiveSource)
-        } else {
-            ReaderBoundary::Mount(mount, MountRead::SelectedControl)
-        },
-    )
-}
-
 /// Reopen the exact, already-admitted external import operand, never its name.
 pub(crate) fn external_import_reader(pin: &File, original: Entity, mount: u64) -> io::Result<File> {
     let meta = pin.metadata()?;
@@ -718,30 +609,6 @@ pub(crate) fn external_import_reader(pin: &File, original: Entity, mount: u64) -
         pin,
         original,
         ReaderBoundary::Mount(mount, MountRead::PassiveSource),
-    )
-}
-
-/// Only the root-owned nonsecret live configuration or bound record below a separately
-/// admitted instance root. The worker may update atime; no arbitrary path.
-#[cfg(test)]
-pub(crate) fn public_record_reader(pin: &File, mount: u64, length: u64) -> io::Result<File> {
-    let m = pin.metadata()?;
-    if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH)
-        || !m.is_file()
-        || m.uid() != 0
-        || m.mode() & 0o7777 != 0o444
-        || m.nlink() != 1
-        || length == 0
-        || length > 1 << 20
-        || m.len() != length
-        || Mount::on(pin)?.is_none_or(|v| v.id != mount)
-    {
-        return Err(invalid("not the selected root-owned public origin record"));
-    }
-    reopen_admitted_reader(
-        pin,
-        Entity::of(&m)?,
-        ReaderBoundary::Mount(mount, MountRead::PublicRecord),
     )
 }
 
@@ -798,10 +665,6 @@ pub(crate) fn installed_regular_reader(pin: &File) -> io::Result<File> {
 #[derive(Copy, Clone)]
 enum MountRead {
     PassiveSource,
-    #[cfg(test)]
-    SelectedControl,
-    #[cfg(test)]
-    PublicRecord,
 }
 #[derive(Copy, Clone)]
 enum ReaderBoundary {
@@ -822,10 +685,6 @@ impl ReaderBoundary {
         matches!(self, Self::Mount(_, MountRead::PassiveSource))
     }
     fn permits_atime(self) -> bool {
-        #[cfg(test)]
-        if matches!(self, Self::Mount(_, MountRead::PublicRecord)) {
-            return true;
-        }
         matches!(self, Self::InstalledRegular(_))
     }
 }
@@ -1129,10 +988,8 @@ mod tests {
         assert!(current.require_same_path().is_ok());
     }
     #[test]
-    fn reopening_a_pinned_public_object_does_not_open_its_replacement_by_name() {
-        use super::{
-            Entity, Kind, Mount, MountRead, Pinned, ReaderBoundary, reopen_admitted_reader,
-        };
+    fn reopening_the_pinned_import_file_does_not_open_its_replacement_by_name() {
+        use super::{Entity, Kind, Mount, Pinned, external_import_reader};
         use std::io::Read;
         let area = tempfile::tempdir().unwrap();
         let named = area.path().join("original");
@@ -1142,12 +999,7 @@ mod tests {
         let id = Mount::on(&old.fd).unwrap().unwrap().id;
         std::fs::rename(&named, retained).unwrap();
         std::os::unix::fs::symlink("does-not-exist", &named).unwrap();
-        let mut reopened = reopen_admitted_reader(
-            &old.fd,
-            old.entity(),
-            ReaderBoundary::Mount(id, MountRead::PublicRecord),
-        )
-        .unwrap();
+        let mut reopened = external_import_reader(&old.fd, old.entity(), id).unwrap();
         let mut b = Vec::new();
         reopened.read_to_end(&mut b).unwrap();
         assert_eq!(b, b"selected bytes");

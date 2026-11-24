@@ -20,7 +20,6 @@ MAX_HELPER = 64 << 20
 RUST_REV = "0ef1bc386059596dada8fb65b50425aab2ea637a"
 EXPECTED_HOST = "x86_64-unknown-linux-gnu"
 LOAD_PAGE = 4096  # Linux x86-64 ELF_EXEC_PAGESIZE
-SQLITE_CONFIG_SHA = "9523c1d40a68e848d7ab68b258828f7f5ccb38e6e63e740ed8369e93776fd29e"
 # Dynamic dependencies, search paths, audit, config, auxiliary and filter.
 NO_RUNTIME = {1, 15, 29, 0x6ffffefa, 0x6ffffefb, 0x6ffffefc, 0x7ffffffd, 0x7fffffff}
 
@@ -215,18 +214,13 @@ def config_path_is_present(path):
         return False
 
 
-def check_cargo_scope(source, device):
-    for i, parent in enumerate([source, *source.parents]):
+def check_cargo_scope(source):
+    for parent in (source, *source.parents):
         cfg = parent / ".cargo"
-        if i == 0:
-            owned_dir(cfg, device)
-            need(not config_path_is_present(cfg / "config")
-                 and digest(admitted_bytes(cfg / "config.toml", 4096)) == SQLITE_CONFIG_SHA,
-                 "only the tracked Helper SQLite build flags are allowed")
-        elif config_path_is_present(cfg):
-            need(stat.S_ISDIR(cfg.lstat().st_mode), "an ancestor .cargo is not an original directory")
+        if config_path_is_present(cfg):
+            need(stat.S_ISDIR(cfg.lstat().st_mode), "a .cargo path is not an original directory")
             need(not config_path_is_present(cfg / "config") and not config_path_is_present(cfg / "config.toml"),
-                 "an ancestor Cargo config would change this independent build")
+                 "source or ancestor Cargo config would change this independent build")
 
 
 def main():
@@ -253,7 +247,7 @@ def main():
     source = Path(__file__).resolve().parent
     device = source.stat().st_dev
     owned_dir(source, device)
-    check_cargo_scope(source, device)
+    check_cargo_scope(source)
     with kept_directory(source) as root, kept_directory("target", root, create=True) as target, \
          kept_directory("standalone", target, create=True) as output:
         try:
@@ -301,7 +295,7 @@ def compile_into(source, held, rustc, cargo, vendor, zxs, a):
             subprocess.run([cargo, "build", "--release", "--locked", "--offline", "--target", EXPECTED_HOST,
                             "--features", "embedded-zxs", "--bin", "helper"], cwd=source, env=env, check=True)
             layout()
-            check_cargo_scope(source, os.fstat(root).st_dev)
+            check_cargo_scope(source)
             product = work / "build" / EXPECTED_HOST / "release" / "helper"
             # Cargo may hardlink its compiled binary to deps. Snapshot actual
             # emitted bytes into our own singly linked release inode before approval.
