@@ -42,6 +42,25 @@ impl Principal {
     pub fn account(&self) -> &str {
         &self.account
     }
+
+    #[cfg(target_os = "linux")]
+    fn same_authority(&self, current: &Self) -> bool {
+        self.origin == current.origin && self.account == current.account
+    }
+}
+
+#[cfg(target_os = "linux")]
+// Scheme admission does not edit or weaken the exact prior local selection.
+struct SelectedWorkspace {
+    owner: Arc<()>,
+    saved: Principal,
+}
+
+#[cfg(target_os = "linux")]
+impl SelectedWorkspace {
+    fn matches(&self, owner: &Arc<()>, original: &Principal) -> bool {
+        Arc::ptr_eq(&self.owner, owner) && &self.saved == original
+    }
 }
 
 struct H2Channel {
@@ -216,26 +235,170 @@ impl Session {
         &self.channel.principal
     }
 
-    async fn request(
+    pub(crate) fn requests<F: Fn() -> Result<()>>(&self, before_wire: F) -> BasicRequests<'_, F> {
+        BasicRequests {
+            session: self,
+            before_wire,
+        }
+    }
+
+    pub async fn catalog(&self, after: Option<&Id>) -> Result<Catalog> {
+        self.requests(&|| Ok(())).catalog(after).await
+    }
+
+    pub async fn detail(&self, container: &Id) -> Result<Detail> {
+        self.requests(&|| Ok(())).detail(container).await
+    }
+
+    pub async fn selected_head(&self, container: &Id, branch: &Branch) -> Result<(Detail, Node)> {
+        self.requests(&|| Ok(()))
+            .selected_head(container, branch)
+            .await
+    }
+
+    pub async fn download(
         &self,
-        request: Request<()>,
-        upload: Option<(File, &Body)>,
-        before_send: impl FnOnce() -> Result<()>,
-    ) -> Result<Response<RecvStream>> {
-        self.channel
-            .request(request, &self.auth, upload, before_send)
+        container: &Id,
+        node: &Node,
+        destination: &mut impl Write,
+    ) -> Result<()> {
+        self.requests(&|| Ok(()))
+            .download(container, node, destination)
+            .await
+    }
+
+    pub async fn lookup(&self, intent: &Intent) -> Lookup {
+        self.requests(&|| Ok(()))
+            .lookup(intent, || Ok(()))
+            .await
+            .unwrap_or(Lookup::Unknown)
+    }
+}
+
+/// A verified, still unauthenticated channel for one selected existing workspace.
+/// It can be consumed once; neither this nor the authenticated form exposes raw HTTP.
+#[cfg(target_os = "linux")]
+pub struct ExistingBasicLogin {
+    channel: H2Channel,
+    original: SelectedWorkspace,
+}
+
+#[cfg(target_os = "linux")]
+pub struct ExistingBasicSession {
+    session: Session,
+    original: SelectedWorkspace,
+}
+
+#[cfg(target_os = "linux")]
+impl ExistingBasicLogin {
+    pub(crate) async fn begin(
+        original: &Principal,
+        owner: Arc<()>,
+        spelling: &str,
+        account: &str,
+    ) -> Result<Self> {
+        let origin = bound_origin(original, spelling, account)?;
+        let channel = H2Channel::connect(origin, account, |current| {
+            require_existing_basic_authority(original, current)
+        })
+        .await?;
+        Ok(Self {
+            channel,
+            original: SelectedWorkspace {
+                owner,
+                saved: original.clone(),
+            },
+        })
+    }
+
+    pub(crate) fn finish(
+        self,
+        owner: &Arc<()>,
+        saved: &Principal,
+        password: Zeroizing<String>,
+    ) -> Result<ExistingBasicSession> {
+        let auth = existing_basic_header(
+            &self.original,
+            &self.channel.principal,
+            owner,
+            saved,
+            &password,
+        )?;
+        Ok(ExistingBasicSession {
+            session: Session {
+                channel: self.channel,
+                auth,
+            },
+            original: self.original,
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl ExistingBasicSession {
+    pub fn principal(&self) -> &Principal {
+        &self.original.saved
+    }
+
+    pub(crate) fn belongs_to(&self, owner: &Arc<()>, saved: &Principal) -> bool {
+        self.original.matches(owner, saved) && saved.same_authority(&self.session.channel.principal)
+    }
+
+    pub(crate) fn requests<F: Fn() -> Result<()>>(&self, before_wire: F) -> BasicRequests<'_, F> {
+        self.session.requests(before_wire)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn require_existing_basic_authority(saved: &Principal, current: &Principal) -> Result<()> {
+    if !saved.same_authority(current) {
+        return Err(invalid(
+            "existing Basic login requires the original HTTPS authority and account",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn existing_basic_header(
+    original: &SelectedWorkspace,
+    verified: &Principal,
+    owner: &Arc<()>,
+    saved: &Principal,
+    password: &str,
+) -> Result<HeaderValue> {
+    if !original.matches(owner, saved) {
+        return Err(invalid(
+            "the verified Basic login belongs to a different original workspace",
+        ));
+    }
+    require_existing_basic_authority(saved, verified)?;
+    validate_password(password)?;
+    basic_header(saved.account(), password)
+}
+
+pub(crate) struct BasicRequests<'a, F> {
+    session: &'a Session,
+    before_wire: F,
+}
+
+impl<F: Fn() -> Result<()>> BasicRequests<'_, F> {
+    async fn request(&self, request: Request<()>) -> Result<Response<RecvStream>> {
+        self.session
+            .channel
+            .request(request, &self.session.auth, None, &self.before_wire)
             .await
     }
 
     async fn json<T: DeserializeOwned>(&self, request: Request<()>) -> Result<T> {
-        let response = self.request(request, None, || Ok(())).await?;
+        let response = self.request(request).await?;
         if response.status() != StatusCode::OK {
             return Err(invalid("R3 metadata request not confirmed"));
         }
         Ok(serde_json::from_slice(&collect_json(response).await?)?)
     }
 
-    pub async fn catalog(&self, after: Option<&Id>) -> Result<Catalog> {
+    pub(crate) async fn catalog(&self, after: Option<&Id>) -> Result<Catalog> {
         let mut request = r3::json_request(r3::ROOT.to_string())?;
         request
             .headers_mut()
@@ -271,7 +434,7 @@ impl Session {
         Ok(page)
     }
 
-    pub async fn detail(&self, container: &Id) -> Result<Detail> {
+    pub(crate) async fn detail(&self, container: &Id) -> Result<Detail> {
         let mut request = r3::json_request(format!("{}/{container}", r3::ROOT))?;
         request
             .headers_mut()
@@ -294,7 +457,11 @@ impl Session {
         Ok(detail)
     }
 
-    pub async fn selected_head(&self, container: &Id, branch: &Branch) -> Result<(Detail, Node)> {
+    pub(crate) async fn selected_head(
+        &self,
+        container: &Id,
+        branch: &Branch,
+    ) -> Result<(Detail, Node)> {
         let detail = self.detail(container).await?;
         let pinned = detail
             .heads
@@ -324,7 +491,7 @@ impl Session {
         Ok((detail, node.clone()))
     }
 
-    pub async fn download(
+    pub(crate) async fn download(
         &self,
         container: &Id,
         node: &Node,
@@ -339,7 +506,7 @@ impl Session {
             .header("accept", "application/octet-stream")
             .header("accept-encoding", "identity")
             .body(())?;
-        let response = self.request(request, None, || Ok(())).await?;
+        let response = self.request(request).await?;
         if response.status() != StatusCode::OK
             || extent(response.headers(), "application/octet-stream")? != node.length
             || single(response.headers(), "zxs-sha256").map(HeaderValue::as_bytes)
@@ -371,11 +538,15 @@ impl Session {
         Ok(())
     }
 
-    pub async fn lookup(&self, intent: &Intent) -> Lookup {
-        match intent.lookup() {
-            Ok(request) => self.resolve(intent, request, None, true, || Ok(())).await,
-            Err(_) => Lookup::Unknown,
-        }
+    pub(crate) async fn lookup(
+        &self,
+        intent: &Intent,
+        before_send: impl FnOnce() -> Result<()>,
+    ) -> Result<Lookup> {
+        let Ok(request) = intent.lookup() else {
+            return Ok(Lookup::Unknown);
+        };
+        self.resolve(intent, request, None, true, before_send).await
     }
 
     #[cfg(target_os = "linux")]
@@ -388,19 +559,14 @@ impl Session {
         let Ok(request) = intent.save() else {
             return Ok(Lookup::Unknown);
         };
-        let mut refused = None;
-        let reply = self
-            .resolve(intent, request, Some((file, &intent.body)), false, || {
-                if let Err(error) = before_send() {
-                    refused = Some(error);
-                    return Err(invalid("local authorization refused before sending"));
-                }
-                Ok(())
-            })
-            .await;
-        // An observed local refusal sent no POST. Do not treat it as a wire
-        // uncertainty or write another local phase on the detached custody.
-        refused.map_or(Ok(reply), Err)
+        self.resolve(
+            intent,
+            request,
+            Some((file, &intent.body)),
+            false,
+            before_send,
+        )
+        .await
     }
 
     async fn resolve(
@@ -410,11 +576,27 @@ impl Session {
         upload: Option<(File, &Body)>,
         readback: bool,
         before_send: impl FnOnce() -> Result<()>,
-    ) -> Lookup {
-        let Ok(response) = self.request(request, upload, before_send).await else {
-            return Lookup::Unknown;
+    ) -> Result<Lookup> {
+        let mut refused = None;
+        let reply = self
+            .session
+            .channel
+            .request(request, &self.session.auth, upload, || {
+                if let Err(error) = (self.before_wire)().and_then(|()| before_send()) {
+                    refused = Some(error);
+                    return Err(invalid("local Basic authorization refused before sending"));
+                }
+                Ok(())
+            })
+            .await;
+        // A checked local refusal sent no request. Transport uncertainty is unknown.
+        if let Some(error) = refused {
+            return Err(error);
+        }
+        let Ok(response) = reply else {
+            return Ok(Lookup::Unknown);
         };
-        decode_r3_reply(intent, response, readback).await
+        Ok(decode_r3_reply(intent, response, readback).await)
     }
 }
 
@@ -434,6 +616,18 @@ async fn decode_r3_reply(
         Ok(bytes) => r3::outcome(intent, status, &bytes, readback),
         Err(_) => Lookup::Unknown,
     }
+}
+
+#[cfg(target_os = "linux")]
+fn bound_origin(original: &Principal, spelling: &str, account: &str) -> Result<Origin> {
+    let origin = approved_origin(spelling)?;
+    validate_account(account)?;
+    if origin.2 != original.origin() || account != original.account() {
+        return Err(invalid(
+            "select the original workspace HTTPS authority and account before logging in",
+        ));
+    }
+    Ok(origin)
 }
 
 fn approved_origin(spelling: &str) -> Result<Origin> {
@@ -592,3 +786,7 @@ async fn send_complete(tx: &mut SendStream<Bytes>, file: File, expected: &Body) 
 #[cfg(test)]
 #[path = "../tests/unit/origin_cases.rs"]
 mod tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "../tests/unit/bound_basic_cases.rs"]
+mod basic_tests;

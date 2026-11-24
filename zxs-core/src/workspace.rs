@@ -2,10 +2,10 @@
 use crate::{
     Result, bundle, invalid,
     native::{self, Folder, Lease, Source, Stamp},
-    r3::{Body, Branch, DisplayName, Id, Intent, Lookup, Target},
+    r3::{Body, Branch, Catalog, Detail, DisplayName, Id, Intent, Lookup, Target},
     session::{
-        ByteWindow, PayloadError, PayloadSelection, PayloadSession, Principal, ReceiptSession,
-        Session,
+        BasicRequests, ByteWindow, ExistingBasicLogin, ExistingBasicSession, PayloadError,
+        PayloadSelection, PayloadSession, Principal, ReceiptSession, Session,
     },
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
@@ -74,8 +74,23 @@ pub struct Workspace {
     read_session_owner: Arc<()>,
 }
 
+#[derive(Clone, Copy)]
+enum BasicLane<'a> {
+    Legacy(&'a Session),
+    Existing(&'a ExistingBasicSession),
+}
+
+impl<'a> BasicLane<'a> {
+    fn requests<F: Fn() -> Result<()>>(self, before_wire: F) -> BasicRequests<'a, F> {
+        match self {
+            Self::Legacy(session) => session.requests(before_wire),
+            Self::Existing(session) => session.requests(before_wire),
+        }
+    }
+}
+
 enum ReceiptLane<'a> {
-    Basic(&'a Session),
+    Basic(BasicLane<'a>),
     Receipt(&'a ReceiptSession),
 }
 
@@ -273,12 +288,68 @@ impl Workspace {
         self.held_database()
     }
 
-    fn same_principal(&self, session: &Session) -> Result<()> {
+    fn validate_basic_lane(&self, lane: BasicLane<'_>) -> Result<()> {
         self.validate()?;
-        if session.principal() != &self.principal {
-            return Err(invalid("original account/trust changed"));
+        let same = match lane {
+            BasicLane::Legacy(session) => session.principal() == &self.principal,
+            BasicLane::Existing(session) => {
+                session.belongs_to(&self.read_session_owner, &self.principal)
+            }
+        };
+        if !same {
+            return Err(invalid(
+                "the Basic session does not match this original workspace",
+            ));
         }
         Ok(())
+    }
+
+    /// Obtain one verified channel before the shell asks for a password.
+    pub async fn begin_existing_basic(
+        &self,
+        spelling: &str,
+        account: &str,
+    ) -> Result<ExistingBasicLogin> {
+        self.validate()?;
+        let ready = ExistingBasicLogin::begin(
+            &self.principal,
+            Arc::clone(&self.read_session_owner),
+            spelling,
+            account,
+        )
+        .await?;
+        self.validate()?;
+        Ok(ready)
+    }
+
+    /// Consume this exact verified channel after the response to the password prompt.
+    pub fn finish_existing_basic(
+        &self,
+        ready: ExistingBasicLogin,
+        password: Zeroizing<String>,
+    ) -> Result<ExistingBasicSession> {
+        self.validate()?;
+        ready.finish(&self.read_session_owner, &self.principal, password)
+    }
+
+    pub async fn catalog_existing(
+        &self,
+        session: &ExistingBasicSession,
+        after: Option<&Id>,
+    ) -> Result<Catalog> {
+        let guard = || self.validate_basic_lane(BasicLane::Existing(session));
+        guard()?;
+        session.requests(&guard).catalog(after).await
+    }
+
+    pub async fn detail_existing(
+        &self,
+        session: &ExistingBasicSession,
+        container: &Id,
+    ) -> Result<Detail> {
+        let guard = || self.validate_basic_lane(BasicLane::Existing(session));
+        guard()?;
+        session.requests(&guard).detail(container).await
     }
 
     /// Explicit receipt-only authentication for this already-open workspace.
@@ -303,7 +374,7 @@ impl Workspace {
 
     fn validate_receipt_lane(&self, lane: &ReceiptLane<'_>) -> Result<()> {
         match lane {
-            ReceiptLane::Basic(session) => self.same_principal(session),
+            ReceiptLane::Basic(lane) => self.validate_basic_lane(*lane),
             ReceiptLane::Receipt(session) => {
                 self.validate()?;
                 if !session.belongs_to(&self.read_session_owner, &self.principal) {
@@ -468,7 +539,31 @@ impl Workspace {
         branch: &Branch,
         file: &Path,
     ) -> Result<Basis> {
-        self.same_principal(session)?;
+        self.checkout_using(BasicLane::Legacy(session), container, branch, file)
+            .await
+    }
+
+    pub async fn checkout_existing(
+        &mut self,
+        session: &ExistingBasicSession,
+        container: &Id,
+        branch: &Branch,
+        file: &Path,
+    ) -> Result<Basis> {
+        self.checkout_using(BasicLane::Existing(session), container, branch, file)
+            .await
+    }
+
+    async fn checkout_using(
+        &mut self,
+        lane: BasicLane<'_>,
+        container: &Id,
+        branch: &Branch,
+        file: &Path,
+    ) -> Result<Basis> {
+        let before_wire = || self.validate_basic_lane(lane);
+        before_wire()?;
+        let session = lane.requests(&before_wire);
         let path = self.normal_path(file)?.to_owned();
         if self.basis(file)?.is_some() || unresolved_path(&self.db, &path)? {
             return Err(invalid(
@@ -487,7 +582,7 @@ impl Workspace {
         let (detail, node) = session.selected_head(container, branch).await?;
         let mut staged = parent.unlinked()?;
         session.download(container, &node, &mut staged).await?;
-        self.held_database()?;
+        self.validate_basic_lane(lane)?;
         let basis = Basis {
             container: container.clone(),
             branch: branch.clone(),
@@ -706,7 +801,15 @@ impl Workspace {
 
     // Called when a shell connects. This loop can only send operation GETs, even after authoritative absence.
     pub async fn reconcile_on_open(&mut self, session: &Session) -> Result<Vec<Resolution>> {
-        self.reconcile_receipt_lane(ReceiptLane::Basic(session))
+        self.reconcile_receipt_lane(ReceiptLane::Basic(BasicLane::Legacy(session)))
+            .await
+    }
+
+    pub async fn reconcile_existing(
+        &mut self,
+        session: &ExistingBasicSession,
+    ) -> Result<Vec<Resolution>> {
+        self.reconcile_receipt_lane(ReceiptLane::Basic(BasicLane::Existing(session)))
             .await
     }
 
@@ -728,7 +831,16 @@ impl Workspace {
     }
 
     pub async fn lookup(&mut self, session: &Session, op: &Id) -> Result<Resolution> {
-        self.lookup_receipt_lane(&ReceiptLane::Basic(session), op)
+        self.lookup_receipt_lane(&ReceiptLane::Basic(BasicLane::Legacy(session)), op)
+            .await
+    }
+
+    pub async fn lookup_existing(
+        &mut self,
+        session: &ExistingBasicSession,
+        op: &Id,
+    ) -> Result<Resolution> {
+        self.lookup_receipt_lane(&ReceiptLane::Basic(BasicLane::Existing(session)), op)
             .await
     }
 
@@ -750,25 +862,28 @@ impl Workspace {
             return Err(invalid("the selected original record changed"));
         }
         // Readback is independent of body availability. No POST can follow from this method.
+        let recheck = || {
+            self.validate_receipt_lane(lane)?;
+            if self.original(op)?.0 != original {
+                return Err(invalid("the selected original changed before receipt GET"));
+            }
+            held_lease_at(&self.root, self.db_id, &lease)
+        };
         let reply = match prior_result {
             Some(sequence) => Lookup::Confirmed { sequence },
             None => match lane {
-                ReceiptLane::Basic(session) => session.lookup(&original.intent).await,
-                ReceiptLane::Receipt(session) => {
-                    session
-                        .lookup(&original.intent, || {
-                            self.validate_receipt_lane(lane)?;
-                            if self.original(op)?.0 != original {
-                                return Err(invalid(
-                                    "the selected original changed before receipt GET",
-                                ));
-                            }
-                            held_lease_at(&self.root, self.db_id, &lease)
-                        })
+                ReceiptLane::Basic(basic) => {
+                    basic
+                        .requests(&recheck)
+                        .lookup(&original.intent, || Ok(()))
                         .await?
                 }
+                ReceiptLane::Receipt(session) => session.lookup(&original.intent, recheck).await?,
             },
         };
+        if let ReceiptLane::Basic(basic) = lane {
+            self.validate_basic_lane(*basic)?;
+        }
         self.settle(&original, reply, &lease)
     }
 
@@ -778,10 +893,32 @@ impl Workspace {
         op: &Id,
         confirmed: bool,
     ) -> Result<Resolution> {
+        self.submit_using(BasicLane::Legacy(session), op, confirmed)
+            .await
+    }
+
+    pub async fn submit_existing(
+        &mut self,
+        session: &ExistingBasicSession,
+        op: &Id,
+        confirmed: bool,
+    ) -> Result<Resolution> {
+        self.submit_using(BasicLane::Existing(session), op, confirmed)
+            .await
+    }
+
+    async fn submit_using(
+        &mut self,
+        lane: BasicLane<'_>,
+        op: &Id,
+        confirmed: bool,
+    ) -> Result<Resolution> {
         if !confirmed {
             return Err(invalid("explicitly confirm this exact original SaveNode"));
         }
-        self.same_principal(session)?;
+        let before_wire = || self.validate_basic_lane(lane);
+        before_wire()?;
+        let session = lane.requests(&before_wire);
         let (initial, _, _) = self.original(op)?;
         let lease = self.hold_container(&initial.intent.container_id)?;
         let (original, phase, prior) = self.original(op)?;
@@ -796,7 +933,17 @@ impl Workspace {
                 "this original has a saved conflict; check its receipt without submitting",
             ));
         }
-        let receipt = session.lookup(&original.intent).await;
+        let receipt = session
+            .lookup(&original.intent, || {
+                if self.original(op)?.0 != original {
+                    return Err(invalid(
+                        "the selected original changed before submit preflight",
+                    ));
+                }
+                held_lease_at(&self.root, self.db_id, &lease)
+            })
+            .await?;
+        self.validate_basic_lane(lane)?;
         if receipt != Lookup::Absent {
             return self.settle(&original, receipt, &lease); // Not permission to send.
         }
@@ -817,10 +964,10 @@ impl Workspace {
         let reply = session
             .save_exact(&original.intent, file, || {
                 // H2 readiness may suspend; recheck all custody at the actual wire boundary.
-                self.same_principal(session)?;
                 self.check_attempt(&original, &source, &lease)
             })
             .await?;
+        self.validate_basic_lane(lane)?;
         self.settle(&original, reply, &lease)
     }
 

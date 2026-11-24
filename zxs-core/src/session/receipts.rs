@@ -1,7 +1,7 @@
 //! The opt-in Bearer capability has no catalogue, download, or mutation methods.
 use super::{
-    H2Channel, IDLE, Origin, Principal, approved_origin, basic_header, collect_bounded_json,
-    decode_r3_reply, single, validate_account, validate_password,
+    H2Channel, IDLE, Principal, SelectedWorkspace, basic_header, bound_origin,
+    collect_bounded_json, decode_r3_reply, single, validate_password,
 };
 use crate::{
     Result, invalid,
@@ -83,9 +83,7 @@ impl ReadPurpose {
         let allowed = match self {
             // Receipt recovery uses current native trust on the same endpoint.
             // The live TLS check is separate and always required.
-            Self::Receipt => {
-                saved.origin() == current.origin() && saved.account() == current.account()
-            }
+            Self::Receipt => saved.same_authority(current),
             Self::Payload => saved == current,
         };
         if !allowed {
@@ -143,18 +141,6 @@ impl ReadPurpose {
             ));
         }
         Ok(())
-    }
-}
-
-// Scheme admission does not edit or weaken the exact prior local selection.
-struct SelectedWorkspace {
-    owner: Arc<()>,
-    saved: Principal,
-}
-
-impl SelectedWorkspace {
-    fn matches(&self, owner: &Arc<()>, original: &Principal) -> bool {
-        Arc::ptr_eq(&self.owner, owner) && &self.saved == original
     }
 }
 
@@ -276,17 +262,6 @@ fn prompt_bound_basic(
     still_bound()?;
     validate_password(&password)?;
     construct(&password)
-}
-
-fn bound_origin(original: &Principal, spelling: &str, account: &str) -> Result<Origin> {
-    let origin = approved_origin(spelling)?;
-    validate_account(account)?;
-    if origin.2 != original.origin() || account != original.account() {
-        return Err(invalid(
-            "select the original workspace HTTPS authority and account before logging in",
-        ));
-    }
-    Ok(origin)
 }
 
 fn login_request() -> Result<Request<()>> {

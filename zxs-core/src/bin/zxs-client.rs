@@ -143,16 +143,19 @@ fn run() -> zxs_core::Result<()> {
         .enable_all()
         .build()?;
     runtime.block_on(async {
-        let password = Zeroizing::new(rpassword::prompt_password("ZXS 口令（不回显）：")?);
-        let remote = Session::connect(origin, account, password).await?;
         if verb == "init" && rest.is_empty() {
+            let password = Zeroizing::new(rpassword::prompt_password("ZXS 口令（不回显）：")?);
+            let remote = Session::connect(origin, account, password).await?;
             remote.catalog(None).await?; // Prove real authenticated read before enrolling one principal.
             Workspace::initialize(state, remote.principal())?;
             println!("已登记独立私用目录，不会自动提交。");
             return Ok(());
         }
-        let mut state = Workspace::open(state, remote.principal())?;
-        for prior in state.reconcile_on_open(&remote).await? {
+        let mut state = Workspace::open_local(state)?;
+        let ready = state.begin_existing_basic(origin, account).await?;
+        let password = Zeroizing::new(rpassword::prompt_password("ZXS 口令（不回显）：")?);
+        let remote = state.finish_existing_basic(ready, password)?;
+        for prior in state.reconcile_existing(&remote).await? {
             println!(
                 "原操作 {}: {:?}{}",
                 prior.operation,
@@ -168,19 +171,25 @@ fn run() -> zxs_core::Result<()> {
             ("reconcile", []) => (),
             ("list", []) => println!(
                 "{}",
-                serde_json::to_string_pretty(&remote.catalog(None).await?)?
+                serde_json::to_string_pretty(&state.catalog_existing(&remote, None).await?)?
             ),
             ("list", [after]) => println!(
                 "{}",
-                serde_json::to_string_pretty(&remote.catalog(Some(&Id::parse(after)?)).await?)?
+                serde_json::to_string_pretty(
+                    &state
+                        .catalog_existing(&remote, Some(&Id::parse(after)?))
+                        .await?
+                )?
             ),
             ("detail", [key]) => println!(
                 "{}",
-                serde_json::to_string_pretty(&remote.detail(&Id::parse(key)?).await?)?
+                serde_json::to_string_pretty(
+                    &state.detail_existing(&remote, &Id::parse(key)?).await?
+                )?
             ),
             ("checkout", [key, branch, file]) => {
                 let basis = state
-                    .checkout(
+                    .checkout_existing(
                         &remote,
                         &Id::parse(key)?,
                         &Branch::parse(branch)?,
@@ -190,7 +199,7 @@ fn run() -> zxs_core::Result<()> {
                 println!("已核验并另存为新文件；原节点 {}", basis.node);
             }
             ("status", [op]) => {
-                let result = state.lookup(&remote, &Id::parse(op)?).await?;
+                let result = state.lookup_existing(&remote, &Id::parse(op)?).await?;
                 println!("{:?}", result);
             }
             ("send", [op]) => {
@@ -203,7 +212,7 @@ fn run() -> zxs_core::Result<()> {
                 );
                 println!("{}", serde_json::to_string_pretty(&intent)?);
                 if ask(&format!("send {op}"))? {
-                    println!("{:?}", state.submit(&remote, &op, true).await?);
+                    println!("{:?}", state.submit_existing(&remote, &op, true).await?);
                 }
             }
             _ => return Err(usage()),
