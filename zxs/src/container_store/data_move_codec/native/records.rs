@@ -1,4 +1,6 @@
 //! One immutable INTENT and one native inactive-to-active interlock.
+#[path = "ready.rs"]
+mod ready;
 use super::super::super::{BYTES as ROUTE_BYTES, decode as decode_route};
 use super::super::{GUARD_BYTES, INTENT_BYTES};
 use super::{
@@ -103,9 +105,19 @@ impl BoundJournal {
             (pin(&directory, I)?, pin(&directory, PROOF)?)
         };
         require_pre_ready_files(&directory)?;
+        Self::bind((parent, directory), (record, sidecar), &candidate, source)
+    }
+
+    fn bind(
+        (parent, directory): (HeldDir, HeldDir),
+        (record, sidecar): (OpaquePin, OpaquePin),
+        candidate: &Intent,
+        source: &Source,
+    ) -> io::Result<Self> {
+        let raw = candidate.encode()?;
         let found = read_raw(&record, INTENT_BYTES)?;
         let original = Intent::decode(&found)?;
-        if original.value() != &candidate || found != raw {
+        if original.value() != candidate || found != raw {
             return Err(invalid(
                 "the immutable DATA move intent is not the same original",
             ));
@@ -126,7 +138,7 @@ impl BoundJournal {
             record,
             sidecar,
         };
-        journal.require()?;
+        journal.require_original()?;
         Ok(journal)
     }
 
@@ -143,9 +155,13 @@ impl BoundJournal {
     }
 
     fn require(&self) -> io::Result<()> {
+        require_pre_ready_files(&self.directory)?;
+        self.require_original()
+    }
+
+    fn require_original(&self) -> io::Result<()> {
         self.parent.require_named()?;
         self.directory.require_named()?;
-        require_pre_ready_files(&self.directory)?;
         self.sidecar.require(&self.directory, PROOF)?;
         self.record.require(&self.directory, I)?;
         if read_raw(&self.record, INTENT_BYTES)? != self.raw
@@ -300,8 +316,14 @@ impl<'held, 'scope> Pending<'held, 'scope> {
     }
 
     fn require_held(&self) -> io::Result<()> {
-        self.selected.require()?;
-        self.journal.require()?;
+        (self.selected.outer)()?;
+        require_pre_ready_files(&self.journal.directory)?;
+        self.require_bound()
+    }
+
+    fn require_bound(&self) -> io::Result<()> {
+        self.selected.require_local()?;
+        self.journal.require_original()?;
         self.route.require(self.selected)?;
         self.source.require_named()?;
         let original = self.journal.original.value();

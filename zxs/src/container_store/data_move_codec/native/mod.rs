@@ -1,4 +1,4 @@
-//! Native pre-READY evidence only. No worker, route write, DATA write or cleanup.
+//! Native DATA move evidence and private staging only; no worker, route switch or cleanup.
 mod records;
 mod source;
 
@@ -194,6 +194,10 @@ impl<'a> Selected<'a> {
 
     fn require(&self) -> io::Result<()> {
         (self.outer)()?;
+        self.require_local()
+    }
+
+    fn require_local(&self) -> io::Result<()> {
         self.roots.state.require_named()?;
         for lease in &self.leases {
             lease.require()?;

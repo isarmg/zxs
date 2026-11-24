@@ -1,4 +1,4 @@
-//! Bound metadata-only observation of the current source ledger and leaves.
+//! Bounded canonical ledger and held native leaf evidence. Only the caller may read raw bodies.
 use super::{
     Digest, ReadAccess, Scope, absent, digest, invalid, native_name,
     proof::{HEADER_BYTES, Header, LedgerHash, PROOF_BYTES_MAX, Row, Side, Stamp},
@@ -13,9 +13,10 @@ use std::{io, os::unix::fs::MetadataExt};
 const ACCESS: ReadAccess = ReadAccess::NoAtime;
 const MAX_LEDGER_BYTES: usize = 32 << 20;
 const MAX_TAGS: usize = 1 << 18;
+type DirectoryStamp = (u64, i64, i64, i64, i64);
 
 pub(super) struct Source {
-    original: HeldDir,
+    pub(super) original: HeldDir,
     pub(super) ledger: Digest,
     pub(super) count: u64,
     pub(super) bytes: Vec<u8>,
@@ -34,22 +35,18 @@ impl Source {
         let original = data
             .child_directory(&name)?
             .ok_or_else(|| invalid("the exact DATA move source is absent"))?;
-        let before = top_stamp(&original)?;
-        let (ledger, count, bytes) = metadata(&original, scope, token, live)?;
-        if before != top_stamp(&original)? {
-            return Err(invalid(
-                "the exact DATA move source changed during observation",
-            ));
-        }
-        original.require_named()?;
+        let mut evidence = walk(&original, scope, live, |receipt| {
+            Ok(Member::open(&original, receipt)?.row)
+        })?;
+        evidence.bind(Side::Source, scope, token, original.entity.inode)?;
         data.require_named()?;
-        live()?;
+        original.require_named()?;
         Ok(Self {
             original,
-            ledger,
-            count,
-            hash: digest(&bytes)?,
-            bytes,
+            ledger: evidence.ledger,
+            count: evidence.count,
+            hash: digest(&evidence.bytes)?,
+            bytes: evidence.bytes,
         })
     }
 
@@ -75,7 +72,7 @@ impl Source {
     }
 }
 
-fn top_stamp(at: &HeldDir) -> io::Result<(u64, i64, i64, i64, i64)> {
+fn top_stamp(at: &HeldDir) -> io::Result<DirectoryStamp> {
     let m = at.file.metadata()?;
     Ok((
         m.nlink(),
@@ -86,12 +83,38 @@ fn top_stamp(at: &HeldDir) -> io::Result<(u64, i64, i64, i64, i64)> {
     ))
 }
 
-fn metadata(
+pub(super) struct Evidence {
+    pub(super) ledger: Digest,
+    pub(super) count: u64,
+    pub(super) bytes: Vec<u8>,
+}
+
+impl Evidence {
+    pub(super) fn bind(
+        &mut self,
+        side: Side,
+        scope: Scope,
+        token: Digest,
+        inode: u64,
+    ) -> io::Result<()> {
+        self.bytes[..HEADER_BYTES].copy_from_slice(
+            &Header::new(side, scope, token, inode, self.count, self.ledger)?.encode()?,
+        );
+        Ok(())
+    }
+}
+
+/// Read only the bounded canonical history here. A caller may inspect one
+/// typed entry and return a witnessed row for that entry or its exact copy.
+pub(super) fn walk(
     at: &HeldDir,
     scope: Scope,
-    token: Digest,
     live: &dyn Fn() -> io::Result<()>,
-) -> io::Result<(Digest, u64, Vec<u8>)> {
+    mut visit: impl FnMut(&Receipt) -> io::Result<Row>,
+) -> io::Result<Evidence> {
+    live()?;
+    at.require_named()?;
+    let before = top_stamp(at)?;
     let maximum = usize::try_from(super::super::MAX_ROWS).map_err(|_| ledger_limit())?;
     let mut tags = MAX_TAGS;
     let state = replay_with(
@@ -111,67 +134,111 @@ fn metadata(
     let mut digest = LedgerHash::new(scope.container, count)?;
     let mut sequence: Vec<&Receipt> = state.receipts.values().collect();
     sequence.sort_unstable_by_key(|row| row.sequence);
-    let mut proof = vec![0; HEADER_BYTES];
+    let mut bytes = vec![0; HEADER_BYTES];
     for receipt in sequence {
         live()?;
         digest.push(receipt)?;
-        proof.extend_from_slice(&member(at, receipt)?.encode()?);
+        bytes.extend_from_slice(&visit(receipt)?.encode()?);
     }
-    let ledger = digest.finish()?;
-    proof[..HEADER_BYTES].copy_from_slice(
-        &Header::new(Side::Source, scope, token, at.entity.inode, count, ledger)?.encode()?,
-    );
-    if proof.len() > PROOF_BYTES_MAX {
+    if bytes.len() > PROOF_BYTES_MAX {
         return Err(ledger_limit());
     }
-    Ok((ledger, count, proof))
+    live()?;
+    if before != top_stamp(at)? {
+        return Err(invalid(
+            "the held DATA move tree changed during observation",
+        ));
+    }
+    at.require_named()?;
+    Ok(Evidence {
+        ledger: digest.finish()?,
+        count,
+        bytes,
+    })
 }
 
-fn member(at: &HeldDir, selected: &Receipt) -> io::Result<Row> {
-    let name = entry_leaf(selected.sequence, selected.mutation.request);
-    let directory = held_entry(at, &name)?;
-    let body = match &selected.change {
+pub(super) struct Member {
+    pub(super) directory: HeldDir,
+    receipt: OpaquePin,
+    pub(super) payload: Option<OpaquePin>,
+    pub(super) row: Row,
+}
+
+impl Member {
+    pub(super) fn open(at: &HeldDir, selected: &Receipt) -> io::Result<Self> {
+        let name = entry_leaf(selected.sequence, selected.mutation.request);
+        let directory = held_entry(at, &name)?;
+        let has_body = matches!(selected.change, Change::Save { .. });
+        directory.each_name(ACCESS, |leaf| match leaf {
+            b"receipt" => Ok(()),
+            b"payload" if has_body => Ok(()),
+            _ => Err(invalid("DATA move member has an unexpected descendant")),
+        })?;
+        let receipt = directory
+            .opaque_pin_with(c"receipt", ACCESS)?
+            .ok_or_else(|| invalid("the exact move receipt is absent"))?;
+        let canonical = codec::encode(selected)?;
+        if read_raw(&receipt, canonical.len())? != canonical {
+            return Err(invalid(
+                "the named DATA move receipt differs from canonical replay",
+            ));
+        }
+        let payload = if has_body {
+            directory.opaque_pin_with(c"payload", ACCESS)?
+        } else {
+            None
+        };
+        let row = qualified_row(&directory, selected, &receipt, payload.as_ref())?;
+        Ok(Self {
+            directory,
+            receipt,
+            payload,
+            row,
+        })
+    }
+
+    pub(super) fn require(&self) -> io::Result<()> {
+        require_members(&self.directory, &self.receipt, self.payload.as_ref())
+    }
+}
+
+pub(super) fn qualified_row(
+    directory: &HeldDir,
+    selected: &Receipt,
+    receipt: &OpaquePin,
+    payload: Option<&OpaquePin>,
+) -> io::Result<Row> {
+    let expected = match &selected.change {
         Change::Save { body, .. } => Some(body.length),
         _ => None,
     };
-    directory.each_name(ACCESS, |leaf| match leaf {
-        b"receipt" => Ok(()),
-        b"payload" if body.is_some() => Ok(()),
-        _ => Err(invalid("DATA move member has an unexpected descendant")),
-    })?;
-    let receipt = directory
-        .opaque_pin_with(c"receipt", ACCESS)?
-        .ok_or_else(|| invalid("the original move receipt is absent"))?;
-    let canonical = codec::encode(selected)?;
-    if read_raw(&receipt, canonical.len())? != canonical {
-        return Err(invalid(
-            "the named DATA move receipt differs from canonical replay",
-        ));
+    let payload_stamp = payload.map(stamp).transpose()?;
+    if payload_stamp.map(|p| p.len) != expected {
+        return Err(invalid("DATA move payload shape differs from its receipt"));
     }
-    let payload = if let Some(length) = body {
-        let pinned = directory
-            .opaque_pin_with(c"payload", ACCESS)?
-            .ok_or_else(|| invalid("the original move payload is absent"))?;
-        let typed = stamp(&pinned)?;
-        if typed.len != length {
-            return Err(invalid("DATA move source length differs from its receipt"));
-        }
-        pinned.require(&directory, c"payload")?;
-        Some(typed) // Deliberately no raw-body read here.
-    } else {
-        absent(&directory, c"payload")?;
-        None
-    };
-    let qualified = Row {
+    let row = Row {
         sequence: selected.sequence,
         operation: selected.mutation.request,
         dir_inode: directory.entity.inode,
-        receipt: stamp(&receipt)?,
-        payload,
+        receipt: stamp(receipt)?,
+        payload: payload_stamp,
     };
-    receipt.require(&directory, c"receipt")?;
-    directory.require_named()?;
-    Ok(qualified)
+    require_members(directory, receipt, payload)?;
+    Ok(row)
+}
+
+fn require_members(
+    directory: &HeldDir,
+    receipt: &OpaquePin,
+    payload: Option<&OpaquePin>,
+) -> io::Result<()> {
+    if let Some(pinned) = payload {
+        pinned.require(directory, c"payload")?;
+    } else {
+        absent(directory, c"payload")?;
+    }
+    receipt.require(directory, c"receipt")?;
+    directory.require_named()
 }
 
 fn stamp(pin: &OpaquePin) -> io::Result<Stamp> {

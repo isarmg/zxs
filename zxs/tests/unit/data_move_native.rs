@@ -407,3 +407,6 @@ fn replacement_of_the_exact_cr1_precedes_any_durable_vacancy_flush() {
     assert!(!f.marker(true).exists());
     f.intact();
 }
+
+#[path = "data_move_ready.rs"]
+mod ready_tests;
