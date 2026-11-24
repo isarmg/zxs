@@ -167,10 +167,34 @@ impl Ticket {
     }
 }
 
+enum RetainFailure {
+    Budget,
+    Custody(io::Error),
+}
+
+impl RetainFailure {
+    fn into_io(self) -> io::Error {
+        match self {
+            Self::Budget => io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                "name witness capacity exhausted",
+            ),
+            Self::Custody(error) => error,
+        }
+    }
+}
+
+impl From<io::Error> for RetainFailure {
+    fn from(error: io::Error) -> Self {
+        Self::Custody(error)
+    }
+}
+
 #[derive(Default)]
 pub(in crate::container_store) struct Names {
     prior: Option<View>,
     ready: Option<u64>,
+    limits: Limits,
     retention_failed: bool,
 }
 
@@ -185,6 +209,76 @@ impl Names {
 
     pub(in crate::container_store) fn invalidate(&mut self) {
         self.ready = None;
+    }
+
+    #[cfg(test)]
+    pub(in crate::container_store) fn limit_witnesses(&mut self, rows: usize, labels: usize) {
+        self.limits.rows = rows;
+        self.limits.labels = labels;
+        self.invalidate();
+    }
+
+    // Caller retains the same names guard from this check to confirmation.
+    // Only an already-authoritative fact we cannot retain carries a latch;
+    // a known budget refusal here leaves the previous certification intact.
+    pub(in crate::container_store) fn preflight(
+        &mut self,
+        id: Id,
+        token: [u8; 32],
+        label_bytes: usize,
+    ) -> io::Result<()> {
+        if self.retention_failed {
+            return Err(invalid(
+                "a confirmed name could not retain its native witness",
+            ));
+        }
+        let fits = match &self.prior {
+            Some(prior) => prior.fit(id, token, label_bytes, &self.limits),
+            None if self.limits.rows != 0 && label_bytes <= self.limits.labels => Ok(label_bytes),
+            None => Err(RetainFailure::Budget),
+        };
+        if matches!(fits, Err(RetainFailure::Custody(_))) {
+            self.invalidate();
+        }
+        fits.map(|_| ()).map_err(RetainFailure::into_io)
+    }
+
+    pub(in crate::container_store) fn preflight_fresh_recycle(
+        &mut self,
+        id: Id,
+        (token, source): ([u8; 32], &HeldDir),
+        prepared: Option<RecycleReceipt>,
+    ) -> io::Result<()> {
+        let previous = self.prior.as_ref().and_then(|view| view.rows.get(&id));
+        if previous.is_some_and(|row| matches!(row.place, Place::Recycled { .. })) {
+            self.invalidate();
+            return Err(invalid(
+                "a previously selected recycled container cannot be selected again",
+            ));
+        }
+        self.preflight(id, token, 0)?;
+        let live = Live::capture(source)?;
+        let mismatch = self
+            .prior
+            .as_ref()
+            .and_then(|view| view.rows.get(&id))
+            .is_some_and(|row| match &row.place {
+                Place::Active { at, .. } | Place::Reserved(Some(at)) => *at != live,
+                Place::Reserved(None) | Place::Recycled { .. } => false,
+            });
+        if mismatch {
+            self.invalidate();
+            return Err(invalid(
+                "recycle source differs from its retained native selection",
+            ));
+        }
+        if let Some(proof) = prepared {
+            if proof.mutation.container != id {
+                return Err(invalid("prepared recycle names a different container"));
+            }
+            proof.require_source(token, live.entity())?;
+        }
+        Ok(())
     }
 
     pub(in crate::container_store) fn admit(
@@ -230,13 +324,7 @@ impl Names {
             }));
         }
         self.invalidate();
-        let result = View::scan(
-            store,
-            system,
-            self.prior.as_ref(),
-            &Limits::default(),
-            || Ok(()),
-        );
+        let result = View::scan(store, system, self.prior.as_ref(), &self.limits, || Ok(()));
         match result {
             Ok(current) if store.name_clock.mark() == mark => {
                 let reusable = idle && mark.is_some() && !store.name_clock.busy();
@@ -280,13 +368,12 @@ impl Names {
         let fence = Fence::sample(store, system, Some(&required))?;
         // Do not silently forget any selected state already witnessed.
         if let Some(prior) = &self.prior {
-            let limits = Limits::default();
             for (&id, row) in &prior.rows {
                 let token = store
                     .routes
                     .get(id)?
                     .ok_or_else(|| invalid("a previously observed route is absent"))?;
-                observe(store, id, token, Some(row), &limits)?;
+                observe(store, id, token, Some(row), &self.limits)?;
             }
         }
         let available = store.vacant(except, label)?;
@@ -327,12 +414,16 @@ impl Names {
         receipt: RecycleReceipt,
         at: &HeldDir,
         token: [u8; 32],
-    ) {
+    ) -> io::Result<()> {
         self.invalidate();
         let known = self.prior.get_or_insert_with(View::partial);
-        if known.record_recycled(receipt, at, token).is_err() {
+        let outcome = known.record_recycled(receipt, at, token, &self.limits);
+        if outcome.is_err() {
+            // The selector is already authoritative, unlike a budget refusal
+            // before choosing. Never forget this gap or clean its old source.
             self.retention_failed = true;
         }
+        outcome.map_err(RetainFailure::into_io)
     }
 
     pub(in crate::container_store) fn confirm(
@@ -349,7 +440,10 @@ impl Names {
         let known = self.prior.get_or_insert_with(View::partial);
         // The reply is already durable. Keep that exact history even after
         // an unindexed fallback; a later lost child is not a reservation.
-        if known.record(receipt, original, ticket.certified()).is_err() {
+        if known
+            .record(receipt, original, ticket.certified(), &self.limits)
+            .is_err()
+        {
             self.retention_failed = true;
             return;
         }
@@ -364,19 +458,47 @@ impl Names {
 }
 
 impl View {
+    fn fit(
+        &self,
+        id: Id,
+        token: [u8; 32],
+        label_bytes: usize,
+        limits: &Limits,
+    ) -> Result<usize, RetainFailure> {
+        let previous = self.rows.get(&id);
+        if previous.is_some_and(|row| row.token != token) {
+            return Err(invalid("name route differs from its retained token").into());
+        }
+        if previous.is_none() && self.rows.len() >= limits.rows {
+            return Err(RetainFailure::Budget);
+        }
+        let old = match previous.map(|row| &row.place) {
+            Some(Place::Active { name, .. }) => name.len(),
+            _ => 0,
+        };
+        self.label_bytes
+            .checked_sub(old)
+            .ok_or_else(|| invalid("retained name label accounting changed"))?
+            .checked_add(label_bytes)
+            .filter(|&total| total <= limits.labels)
+            .ok_or(RetainFailure::Budget)
+    }
+
     fn record(
         &mut self,
         receipt: &Receipt,
         (directory, token): (&HeldDir, [u8; 32]),
         certified: bool,
-    ) -> io::Result<()> {
+        limits: &Limits,
+    ) -> Result<(), RetainFailure> {
         let id = receipt.mutation.container;
         let name = active_label(receipt).ok_or_else(|| invalid("not a display-name receipt"))?;
+        let label_bytes = self.fit(id, token, name.len(), limits)?;
         let anchor = Anchor::new(receipt)?;
         let at = Live::capture(directory)?;
         let old = self.rows.get(&id);
         let (prior_ledger, old_label) = match old {
-            Some(row) if row.token == token => match &row.place {
+            Some(row) => match &row.place {
                 Place::Active {
                     name,
                     at: prior,
@@ -390,13 +512,12 @@ impl View {
                 }
                 Place::Reserved(original) if original.is_none_or(|held| held == at) => (None, None),
                 _ => {
-                    return Err(invalid(
-                        "confirmed name differs from its retained disposition",
-                    ));
+                    return Err(
+                        invalid("confirmed name differs from its retained disposition").into(),
+                    );
                 }
             },
-            None if self.rows.len() < Limits::default().rows => (None, None),
-            _ => return Err(capacity()),
+            None => (None, None),
         };
         let ledger = match (prior_ledger, receipt.sequence) {
             (Some(prior), _) => Some(prior),
@@ -409,15 +530,10 @@ impl View {
                 })
             }
             (None, _) if !certified => None,
-            (None, _) => return Err(invalid("new indexed name has no first sequence")),
+            (None, _) => return Err(invalid("new indexed name has no first sequence").into()),
         };
-        let label_bytes = self.label_bytes - old_label.as_ref().map_or(0, |value| value.len());
-        let label_bytes = label_bytes
-            .checked_add(name.len())
-            .filter(|&total| total <= Limits::default().labels)
-            .ok_or_else(capacity)?;
         if certified && !self.vacant(id, name) {
-            return Err(invalid("confirmed name conflicts with retained name map"));
+            return Err(invalid("confirmed name conflicts with retained name map").into());
         }
         if let Some(previous) = old_label
             && self.names.get(previous.as_ref()) == Some(&id)
@@ -447,15 +563,11 @@ impl View {
         receipt: RecycleReceipt,
         directory: &HeldDir,
         token: [u8; 32],
-    ) -> io::Result<()> {
+        limits: &Limits,
+    ) -> Result<(), RetainFailure> {
         let id = receipt.mutation.container;
-        let old = self.rows.get(&id);
-        let previous = old.map(|row| &row.place);
-        if old.is_some_and(|row| row.token != token)
-            || previous.is_none() && self.rows.len() >= Limits::default().rows
-        {
-            return Err(capacity());
-        }
+        let label_bytes = self.fit(id, token, 0, limits)?;
+        let previous = self.rows.get(&id).map(|row| &row.place);
         let place = Place::Recycled {
             receipt,
             at: Live::capture(directory)?,
@@ -464,14 +576,14 @@ impl View {
         };
         if let Some(previous) = previous {
             place.require_progress(previous, token)?;
-            if let Place::Active { name, .. } = previous {
-                self.label_bytes -= name.len();
-                if self.names.get(name.as_ref()) == Some(&id) {
-                    self.names.remove(name.as_ref());
-                }
+            if let Place::Active { name, .. } = previous
+                && self.names.get(name.as_ref()) == Some(&id)
+            {
+                self.names.remove(name.as_ref());
             }
         }
         self.rows.insert(id, Row { token, place });
+        self.label_bytes = label_bytes;
         Ok(())
     }
 }

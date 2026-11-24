@@ -672,6 +672,9 @@ impl Store {
                 authorize()?;
                 return Err(Conflict::AlreadyExists.into());
             };
+            if self.archive.is_some() {
+                guard.preflight(receipt.mutation.container, volume.token, label.len())?;
+            }
             guard.invalidate(); // Keep a prior witness; clear its fast grant before any write.
             Some((guard, ticket))
         } else {
@@ -881,6 +884,17 @@ impl Store {
         if state.sequence != expected_sequence {
             return Err(Conflict::SequenceChanged(state.sequence).into());
         }
+        // Hold the exact DATA child across the copy and repeat both custody
+        // and capacity at selection. A missing prior R can never select a new O.
+        let source = self.name_observed(
+            volume
+                .held_container(mutation.container)
+                .and_then(|at| at.ok_or_else(|| invalid("original recycle source is absent"))),
+        )?;
+        self.names
+            .lock()
+            .map_err(|_| invalid("container name selection unavailable"))?
+            .preflight_fresh_recycle(mutation.container, (volume.token, &source), None)?;
         // Keep this guard until after both stages drop, and after source cleanup.
         let _namespace_activity = self.name_background()?;
         let mut incoming = self.flat_stage_at(archive.staging()?)?;
@@ -897,6 +911,11 @@ impl Store {
                 .names
                 .lock()
                 .map_err(|_| invalid("container name selection unavailable"))?;
+            names.preflight_fresh_recycle(
+                mutation.container,
+                (volume.token, &source),
+                Some(done),
+            )?;
             archive.choose(&prepared, &mut selector, || {
                 volume.require_named()?;
                 let token = self
@@ -904,9 +923,16 @@ impl Store {
                     .get(mutation.container)?
                     .ok_or_else(|| invalid("selected recycle record has no original DATA route"))?;
                 done.require_data(token)?;
+                source.require_named()?;
+                done.require_source(token, source.entity)?;
                 authorize()
             })?;
-            names.recycled(done, &prepared.at, volume.token);
+            if let Err(error) = names.recycled(done, &prepared.at, volume.token) {
+                return Err(Error::CleanupPending {
+                    receipt: Box::new(done),
+                    error,
+                });
+            }
         }
         if let Err(error) = archive.retire(
             done,
@@ -942,9 +968,10 @@ impl Store {
         done.require_data(token)?;
         // Explicit replay of a previously selected cut is just as final for
         // names as a fresh selector, even in a newly reopened Store.
-        if let Ok(mut names) = self.names.lock() {
-            names.recycled(done, at, token);
-        }
+        self.names
+            .lock()
+            .map_err(|_| invalid("container name selection unavailable"))?
+            .recycled(done, at, token)?;
         let known = self.name_observed(read_state(at, id))?;
         archive.require_selected(done, &known)?;
         if let Some(volume) = self.enrolled(token) {

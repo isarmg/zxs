@@ -891,6 +891,18 @@ fn durably_recycled_but_not_retired_cannot_revive_after_selector_loss() {
     ));
     assert_eq!(fs::read(f.entry(ONE, 1, 11).join("payload")).unwrap(), RAW);
     fs::rename(&selector, f.temp.0.join("old_selector")).unwrap();
+    let arrivals = f.recycle_scratch("recycle").join("containers");
+    assert_eq!(fs::read_dir(&arrivals).unwrap().count(), 1);
+    let another = op(ONE, 19);
+    let Err(super::super::Error::Io(error)) = f.store.move_to_recycle(another, 1, || Ok(())) else {
+        panic!("an observed selected recycle cannot be replaced with a new delete");
+    };
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("cannot be selected again"));
+    assert_eq!(fs::read_dir(&arrivals).unwrap().count(), 1);
+    assert!(!selector.exists());
+    assert!(f.store.operation_receipt(another).unwrap().is_none());
+    assert_eq!(fs::read(f.entry(ONE, 1, 11).join("payload")).unwrap(), RAW);
     assert!(
         f.store
             .change(
@@ -983,6 +995,161 @@ fn reopened_explicit_recycle_replay_retains_the_already_selected_cut_before_clea
             )
             .is_err()
     );
+    assert!(!f.entry(ONE, 2, 13).exists());
+    assert_eq!(fs::read(f.entry(ONE, 1, 11).join("payload")).unwrap(), RAW);
+}
+
+fn cap(f: &Fixture, rows: usize, labels: usize) {
+    f.store.names.lock().unwrap().limit_witnesses(rows, labels);
+}
+
+fn change_name(
+    f: &Fixture,
+    id: Id,
+    request: u8,
+    expected: u64,
+    name: &str,
+) -> Result<Receipt, super::super::Error> {
+    f.store.change(
+        op(id, request),
+        Change::Rename {
+            expected_sequence: expected,
+            name: name.into(),
+        },
+        || Ok(()),
+    )
+}
+
+fn budget(error: super::super::Error) {
+    let super::super::Error::Io(error) = error else {
+        panic!("expected a name budget refusal")
+    };
+    assert_eq!(error.kind(), io::ErrorKind::FileTooLarge);
+    assert_eq!(error.to_string(), "name witness capacity exhausted");
+}
+
+#[test]
+fn full_name_rows_refuse_new_route_without_poisoning_known_rename_or_recycle() {
+    let f = Fixture::open(true);
+    cap(&f, 1, 32);
+    f.save(ONE, "Known");
+    budget(
+        f.store
+            .save(op(TWO, 12), first("Other"), RAW, || Ok(()))
+            .unwrap_err(),
+    );
+    assert_eq!(f.store.routes.get(TWO).unwrap(), None);
+    assert!(!f.data(TWO).exists());
+    assert!(f.store.operation_receipt(op(TWO, 12)).unwrap().is_none());
+
+    change_name(&f, ONE, 13, 1, "Known again").unwrap();
+    assert!(f.entry(ONE, 2, 13).is_dir());
+    f.store.move_to_recycle(op(ONE, 14), 2, || Ok(())).unwrap();
+    assert!(
+        f.system
+            .path
+            .join("container-moves")
+            .join(hex(ONE))
+            .is_file()
+    );
+    assert!(!f.data(ONE).exists());
+}
+
+#[test]
+fn name_preflight_counts_net_labels_and_does_not_call_wrong_token_capacity() {
+    let f = Fixture::open(true);
+    cap(&f, 1, 5);
+    f.save(ONE, "Old");
+    let wrong = f
+        .store
+        .names
+        .lock()
+        .unwrap()
+        .preflight(ONE, [0xaa; 32], 99)
+        .unwrap_err();
+    assert_eq!(wrong.kind(), io::ErrorKind::InvalidData);
+    assert!(wrong.to_string().contains("retained token"));
+
+    budget(change_name(&f, ONE, 12, 1, "Longer").unwrap_err());
+    assert!(!f.entry(ONE, 2, 12).exists());
+    assert!(f.store.operation_receipt(op(ONE, 12)).unwrap().is_none());
+    assert_eq!(
+        f.store.detail_page(ONE, None, None).unwrap().unwrap().name,
+        "Old"
+    );
+
+    let next = change_name(&f, ONE, 13, 1, "exact").unwrap();
+    assert_eq!(next.sequence, 2);
+    assert_eq!(
+        f.store.detail_page(ONE, None, None).unwrap().unwrap().name,
+        "exact"
+    );
+}
+
+#[test]
+fn fresh_untracked_recycle_at_capacity_never_prepares_or_selects_r() {
+    let f = Fixture::open(true);
+    f.save(ONE, "One");
+    f.save(TWO, "Two");
+    let f = f.reopen();
+    cap(&f, 1, 64);
+    // Both genuine CR1 routes exceed this miniature complete view. The
+    // successful exact fallback records only this actually confirmed CID.
+    change_name(&f, ONE, 12, 1, "Changed").unwrap();
+    let archived = f.recycle_scratch("recycle").join("containers");
+    assert_eq!(fs::read_dir(&archived).unwrap().count(), 0);
+    budget(
+        f.store
+            .move_to_recycle(op(TWO, 13), 1, || Ok(()))
+            .unwrap_err(),
+    );
+    assert_eq!(fs::read_dir(&archived).unwrap().count(), 0);
+    assert!(
+        !f.system
+            .path
+            .join("container-moves")
+            .join(hex(TWO))
+            .exists()
+    );
+    assert_eq!(fs::read(f.entry(TWO, 1, 11).join("payload")).unwrap(), RAW);
+    assert!(f.store.operation_receipt(op(TWO, 13)).unwrap().is_none());
+    change_name(&f, ONE, 14, 2, "Still works").unwrap();
+}
+
+#[test]
+fn unretained_already_selected_r_returns_exact_receipt_without_cleaning_or_reviving_source() {
+    let f = Fixture::open(true);
+    f.save(ONE, "Before recycle");
+    let delete = op(ONE, 12);
+    let selector = f.system.path.join("container-moves").join(hex(ONE));
+    let Err(super::super::Error::CleanupPending { receipt: old, .. }) =
+        f.store.move_to_recycle(delete, 1, || {
+            if selector.exists() {
+                Err(io::ErrorKind::PermissionDenied.into())
+            } else {
+                Ok(())
+            }
+        })
+    else {
+        panic!("fixture must leave a durable selector with cleanup still pending");
+    };
+    let f = f.reopen();
+    cap(&f, 0, 64);
+    let Err(super::super::Error::CleanupPending { receipt, error }) =
+        f.store.move_to_recycle(delete, 1, || Ok(()))
+    else {
+        panic!("a witnessed committed recycle stays committed and does not retire here");
+    };
+    assert_eq!(receipt, old);
+    assert_eq!(error.kind(), io::ErrorKind::FileTooLarge);
+    assert_eq!(fs::read(f.entry(ONE, 1, 11).join("payload")).unwrap(), RAW);
+    assert!(selector.is_file());
+
+    // Restoring capacity cannot repair a known selected fact that was not
+    // retained. Even if the surviving DATA masquerades as active, refuse.
+    cap(&f, 3, 64);
+    fs::rename(&selector, f.temp.0.join("preserved_selector")).unwrap();
+    assert!(change_name(&f, ONE, 13, 1, "Do not revive").is_err());
     assert!(!f.entry(ONE, 2, 13).exists());
     assert_eq!(fs::read(f.entry(ONE, 1, 11).join("payload")).unwrap(), RAW);
 }
