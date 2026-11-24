@@ -87,6 +87,8 @@ public final class OrdinaryFileStageTest {
         try {
             RemoteSaveJournal.prepareStaged(context(), plan, result);
             assertEquals(save, RemoteSaveJournal.reopen(context(), authority, result.id()).save());
+            assertThrows(IOException.class, () -> RemoteSaveJournal.discardUnboundStage(context(), result));
+            assertTrue(Files.exists(path));
             assertTrue(RemoteSaveJournal.plans(context(), authority, null).rows().contains(plan));
             try (var held = RemoteSaveJournal.beginWithBody(context(), plan)) {
                 assertArrayEquals(source.original, held.readAllBytes());
@@ -99,6 +101,32 @@ public final class OrdinaryFileStageTest {
             assertEquals(plan, RemoteSaveJournal.attempted(context(), authority, result.id()));
         } finally {
             Files.deleteIfExists(path);
+        }
+    }
+
+    @Test public void unchangedReplacementPublishesNothing() throws Exception {
+        var before = names();
+        var source = new Source();
+        String digest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(source.original));
+        var original = new OrdinaryFileStage.Baseline(source.original.length, digest);
+        assertThrows(OrdinaryFileStage.Unchanged.class, () -> OrdinaryFileStage.stage(context(),
+                OrdinaryFileStage.newId(), source, source.cancel, original));
+        assertEquals(before, names());
+    }
+
+    @Test public void unboundCancellationDiscardsOnlyItsOwnedBody() throws Exception {
+        var source = new Source();
+        var first = OrdinaryFileStage.stage(context(), OrdinaryFileStage.newId(), source, source.cancel);
+        var second = OrdinaryFileStage.stage(context(), OrdinaryFileStage.newId(), source, source.cancel);
+        try {
+            source.cancel.cancel();
+            assertThrows(OperationCanceledException.class, source.cancel::throwIfCanceled);
+            RemoteSaveJournal.discardUnboundStage(context(), first);
+            assertTrue(!names().contains(first.id() + ".body"));
+            assertTrue(names().contains(second.id() + ".body"));
+        } finally {
+            Files.deleteIfExists(new File(store(), first.id() + ".body").toPath());
+            Files.deleteIfExists(new File(store(), second.id() + ".body").toPath());
         }
     }
 

@@ -48,6 +48,11 @@ public final class RemoteContainerReadTest {
         byte[] edited = bytes("修改后的全文");
         assertFalse(selection.differs(ByteBuffer.wrap(BODY)));
         assertTrue(selection.differs(ByteBuffer.wrap(edited)));
+        var full = selection.changedFull(OPERATION, OTHER, null, 4_294_967_296L, "66".repeat(32));
+        assertEquals(4_294_967_296L, full.save().length());
+        assertEquals(new RemoteSaveContract.BranchHead("main", NODE), full.save().target());
+        assertThrows(IllegalArgumentException.class, () ->
+                selection.changedFull(OPERATION, OTHER, null, BODY.length, DIGEST));
         var plan = selection.changedMain(OPERATION, OTHER, edited);
         assertEquals(peer.authority(), plan.authority());
         assertEquals(CONTAINER, plan.save().container());

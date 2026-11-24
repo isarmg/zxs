@@ -27,6 +27,11 @@ final class OrdinaryFileStage {
     private static final String STORE = "ordinary-bodies";
 
     record Staged(String id, long length, String sha256) {}
+    record Baseline(long length, String sha256) {}
+
+    static final class Unchanged extends IOException {
+        Unchanged() { super("The replacement has the same complete content as its original node"); }
+    }
 
     static final class Unconfirmed extends IOException {
         private final transient Staged original;
@@ -56,6 +61,11 @@ final class OrdinaryFileStage {
 
     static synchronized Staged stage(Context context, String id, Source source, CancellationSignal cancel)
             throws IOException {
+        return stage(context, id, source, cancel, null);
+    }
+
+    static synchronized Staged stage(Context context, String id, Source source, CancellationSignal cancel,
+                                     Baseline baseline) throws IOException {
         require(id != null && id.matches("[0-9a-f]{32}"));
         var path = new File(context.getNoBackupFilesDir(), STORE);
         int uid = Process.myUid();
@@ -73,7 +83,7 @@ final class OrdinaryFileStage {
                 require(store.original.st_dev == parent.original.st_dev);
                 parent.sync();
                 long available = new StatFs(path.getPath()).getAvailableBytes();
-                var result = publish(store, id, source, cancel, available, publication);
+                var result = publish(store, id, source, cancel, available, publication, baseline);
                 parent.check();
                 return result;
             }
@@ -97,6 +107,24 @@ final class OrdinaryFileStage {
     static InputStream openBody(Context context, Staged expected) throws IOException {
         return new ParcelFileDescriptor.AutoCloseInputStream(
                 openVerified(context, expected, new CancellationSignal()));
+    }
+
+    static synchronized void discardUnbound(Context context, Staged expected) throws IOException {
+        // The journal holds its process-wide lock and has confirmed no binding or attempt.
+        try (var held = openVerified(context, expected, new CancellationSignal())) {
+            var path = new File(context.getNoBackupFilesDir(), STORE);
+            try (var store = new LocalWorkspaceStore.Directory(path, Process.myUid(), true);
+                 var names = store.openNames()) {
+                var body = new File(path, expected.id() + ".body");
+                var original = Os.fstat(held.getFileDescriptor());
+                store.check();
+                checkFile(Os.lstat(body.getPath()), original, store, expected.length(), 1);
+                names.deleteFile(body.toPath().getFileName());
+                store.sync();
+            } catch (ErrnoException failure) {
+                throw failure.rethrowAsIOException();
+            }
+        }
     }
 
     private static synchronized ParcelFileDescriptor openVerified(Context context, Staged expected,
@@ -151,7 +179,7 @@ final class OrdinaryFileStage {
     }
 
     private static Staged publish(LocalWorkspaceStore.Directory store, String id, Source source,
-                                  CancellationSignal cancel, long available, Publication publication)
+                                  CancellationSignal cancel, long available, Publication publication, Baseline baseline)
             throws ErrnoException, IOException {
         long length = source.size();
         require(length >= 0 && length <= available);
@@ -176,6 +204,10 @@ final class OrdinaryFileStage {
                 source.checkEnd();
                 source.validate();
                 byte[] expected = digest.digest();
+                String sha256 = HexFormat.of().formatHex(expected);
+                if (baseline != null && baseline.length() == length && baseline.sha256().equals(sha256)) {
+                    throw new Unchanged();
+                }
                 Os.fsync(out.fd);
                 checkFile(Os.fstat(out.fd), original, store, length, 1);
                 verifyBytes(out.fd, bytes, length, expected, cancel);
@@ -184,7 +216,7 @@ final class OrdinaryFileStage {
                 cancel.throwIfCanceled();
                 store.check();
                 checkFile(Os.lstat(pending.getPath()), original, store, length, 1);
-                var completed = new Staged(id, length, HexFormat.of().formatHex(expected));
+                var completed = new Staged(id, length, sha256);
                 Os.link(pending.getPath(), body.getPath());
                 publication.evidence = completed;
             } finally {

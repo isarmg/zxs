@@ -3,6 +3,9 @@ package org.zipworkspace.preview;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.CancellationSignal;
 import android.graphics.Insets;
 import android.os.Bundle;
 import android.text.InputFilter;
@@ -33,10 +36,15 @@ import java.util.regex.Pattern;
 
 /** Explicit first whole-text save and original-operation recovery. */
 public final class RemoteSaveActivity extends Activity {
+    private static final int PICK_ORDINARY = 941;
     private static final Pattern OPERATION = Pattern.compile("[0-9a-f]{32}");
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private EditText origin, account, password, name, body, operation;
-    private Button create, recover, chooseLocal, browse, clearEdit, nextEdit;
+    private Button create, recover, chooseLocal, browse, clearEdit, nextEdit, importFile;
+    private record ImportChoice(RemoteSaveJournal.Authority authority, RemoteContainerRead.Selection existing) {}
+    private ImportChoice pickerChoice;
+    private Uri pickedForImport;
+    private CancellationSignal importCancellation;
     private TextView status;
     private Future<?> pending;
     private AlertDialog decision;
@@ -83,6 +91,7 @@ public final class RemoteSaveActivity extends Activity {
         body = field(form, "全文", InputType.TYPE_TEXT_FLAG_MULTI_LINE, PlainText.LIMIT, false);
         body.setMinLines(6);
         create = button(form, "提交新文件…", this::firstDecision);
+        importFile = button(form, "选择完整文件…", () -> pickOrdinary(selectedFile));
         if (saved != null) {
             operation.setText(saved.getString("operation", ""));
             lockedNew = saved.getBoolean("original_frozen");
@@ -129,6 +138,143 @@ public final class RemoteSaveActivity extends Activity {
     @Override public Object onRetainNonConfigurationInstance() {
         return new InMemoryDraft(selectedFile, origin.getText().toString(), account.getText().toString(),
                 name.getText().toString(), body.getText().toString(), bodyRetained, originalConfirmed);
+    }
+
+    private RemoteSaveJournal.Authority enteredAuthority() {
+        var selected = RemoteH2Exchange.Origin.parse(origin.getText().toString());
+        return new RemoteSaveJournal.Authority(selected.identity(), account.getText().toString());
+    }
+
+    private void pickOrdinary(RemoteContainerRead.Selection existing) {
+        if (!live || running || lockedNew || pickerChoice != null) return;
+        if (hasUnsavedEditor()) {
+            status.setText("请先处理或清空正在编辑的内容。");
+            return;
+        }
+        try {
+            var authority = enteredAuthority();
+            if (existing != null && !existing.authority().equals(authority)) {
+                throw new IllegalArgumentException("changed authority");
+            }
+            pickerChoice = new ImportChoice(authority, existing);
+            startActivityForResult(PickedDocument.picker(), PICK_ORDINARY);
+        } catch (IllegalArgumentException | android.content.ActivityNotFoundException unavailable) {
+            pickerChoice = null;
+            status.setText("无法打开文件选择器。请检查原服务器和账号。");
+        }
+    }
+
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request != PICK_ORDINARY || pickerChoice == null) return;
+        if (result != RESULT_OK) {
+            pickerChoice = null;
+            showControls();
+            status.setText("没有选择文件。");
+            return;
+        }
+        try {
+            pickedForImport = PickedDocument.single(data);
+        } catch (IOException | RuntimeException unavailable) {
+            pickerChoice = null;
+            showControls();
+            status.setText("无法取得所选文件的只读访问权。");
+        }
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (pickerChoice != null && pickedForImport != null) {
+            var exact = pickerChoice;
+            var uri = pickedForImport;
+            pickerChoice = null;
+            pickedForImport = null;
+            stageOrdinary(exact, uri);
+        }
+    }
+
+    private void stageOrdinary(ImportChoice exact, Uri uri) {
+        if (!live || running || lockedNew) return;
+        try {
+            if (!exact.authority().equals(enteredAuthority())) {
+                status.setText("服务器或账号已改变。请重新选择文件。");
+                showControls();
+                return;
+            }
+        } catch (IllegalArgumentException changed) {
+            status.setText("服务器或账号已改变。请重新选择文件。");
+            showControls();
+            return;
+        }
+        Context context = getApplicationContext();
+        var cancel = new CancellationSignal();
+        importCancellation = cancel;
+        String id = OrdinaryFileStage.newId();
+        int current = beginTask();
+        operation.setText(id);
+        status.setText("正在读取所选的完整文件；尚未发送。\n原操作号：" + id);
+        pending = worker.submit(() -> {
+            RemoteSaveJournal.Plan plan = null;
+            boolean sameBody = false;
+            OrdinaryFileStage.Staged frozenBody = null;
+            boolean bindStarted = false;
+            try (var document = PickedDocument.openOrdinary(context, uri, cancel)) {
+                // Validate the prospective first name before allocating private disk space.
+                var initial = exact.existing() == null ? new RemoteSaveContract.FirstMain(document.title) : null;
+                var revision = exact.existing() == null ? null : exact.existing().revision();
+                var limit = BigInteger.valueOf(Long.MAX_VALUE);
+                var before = revision == null || revision.length().compareTo(limit) > 0 ? null
+                        : new OrdinaryFileStage.Baseline(revision.length().longValueExact(), revision.sha256());
+                OrdinaryFileStage.Staged stage;
+                try {
+                    stage = document.stageOrdinary(context, id, cancel, before);
+                } catch (OrdinaryFileStage.Unconfirmed possible) {
+                    stage = OrdinaryFileStage.reopen(context, possible.original(), cancel);
+                }
+                frozenBody = stage;
+                cancel.throwIfCanceled();
+                var save = exact.existing() == null
+                        ? new RemoteSaveContract.Save(id(), id, id(), BigInteger.ZERO,
+                                initial, stage.length(), stage.sha256())
+                        : exact.existing().changedFull(id, id(), exact.existing().historical() ? id() : null,
+                                stage.length(), stage.sha256()).save();
+                var candidate = new RemoteSaveJournal.Plan(exact.authority(), save);
+                bindStarted = true;
+                RemoteSaveJournal.prepareStaged(context, candidate, stage);
+                plan = candidate;
+            } catch (OrdinaryFileStage.Unchanged original) {
+                sameBody = true;
+            } catch (IOException | RuntimeException unavailable) {
+                if (frozenBody != null && !bindStarted) {
+                    // Only a definite local refusal can discard this exact stage.
+                    // An uncertain bind keeps its original operation available.
+                    boolean interrupted = Thread.interrupted();
+                    try { RemoteSaveJournal.discardUnboundStage(context, frozenBody); }
+                    catch (IOException | RuntimeException uncertain) { /* Keep the original ID. */ }
+                    finally { if (interrupted) Thread.currentThread().interrupt(); }
+                }
+            }
+            var staged = plan;
+            boolean unchanged = sameBody;
+            runOnUiThread(() -> {
+                if (!live || epoch != current || isFinishing() || isDestroyed()) return;
+                importCancellation = null;
+                pending = null;
+                running = false;
+                if (unchanged) {
+                    status.setText("所选完整文件与原节点内容相同。没有新增版本。");
+                } else if (staged == null) {
+                    status.setText("无法暂存选定文件。没有发送。\n原操作号：" + id);
+                } else {
+                    lockedNew = true;
+                    lockedOperation = staged.save().operation();
+                    bodyRetained = true;
+                    operation.setText(lockedOperation);
+                    status.setText("完整文件已留在本机，尚未发送。检查地址和账号，输入密码后查看原提交。\n" + lockedOperation);
+                }
+                showControls();
+            });
+        });
     }
 
     private void firstDecision() {
@@ -267,32 +413,49 @@ public final class RemoteSaveActivity extends Activity {
                 if (dialog == decision) browseHistory(exactPeer, choice, null);
             });
         }
-        if (supported) {
-            builder.setPositiveButton("读取并编辑", (dialog, which) -> {
-                if (dialog != decision || !owns(exactPeer)) return;
-                readRemote(exactPeer, () -> {
-                    byte[] raw = choice.readExact(exactPeer);
-                    try {
-                        String content = StandardCharsets.UTF_8.newDecoder()
-                                .decode(java.nio.ByteBuffer.wrap(raw)).toString();
-                        if (PlainText.scanPages(content, () -> {}, null) < 0)
-                            throw new IOException("not editable text");
-                        return content;
-                    } finally {
-                        Arrays.fill(raw, (byte) 0);
-                    }
-                }, content -> {
-                    selectedFile = choice;
-                    name.setText(choice.item().name());
-                    body.setText(content);
-                    status.setText((choice.historical() ? "已打开历史节点。提交修改会建立新分支。"
-                            : "已打开原节点。修改后可提交到 " + choice.branch() + "。") + "\n" + rev.node());
-                    showControls();
-                    releasePeer(exactPeer);
-                });
-            });
-        }
+        builder.setPositiveButton(supported ? "选择操作…" : "用本机完整文件替换…", (dialog, which) -> {
+            if (dialog != decision || !owns(exactPeer)) return;
+            if (!supported) {
+                releasePeer(exactPeer);
+                pickOrdinary(choice);
+                return;
+            }
+            var actions = new AlertDialog.Builder(this).setTitle("对原节点操作")
+                    .setItems(new String[] {"读取并编辑文本", "用本机完整文件替换"}, (actionDialog, index) -> {
+                        if (actionDialog != decision || !owns(exactPeer)) return;
+                        if (index == 0) editDownload(exactPeer, choice);
+                        else {
+                            releasePeer(exactPeer);
+                            pickOrdinary(choice);
+                        }
+                    }).setNegativeButton("取消", null).create();
+            showPeerDialog(actions, exactPeer);
+        });
         showPeerDialog(builder.create(), exactPeer);
+    }
+
+    private void editDownload(RemoteH2Exchange exactPeer, RemoteContainerRead.Selection choice) {
+        var rev = choice.revision();
+        readRemote(exactPeer, () -> {
+            byte[] raw = choice.readExact(exactPeer);
+            try {
+                String content = StandardCharsets.UTF_8.newDecoder()
+                        .decode(java.nio.ByteBuffer.wrap(raw)).toString();
+                if (PlainText.scanPages(content, () -> {}, null) < 0)
+                    throw new IOException("not editable text");
+                return content;
+            } finally {
+                Arrays.fill(raw, (byte) 0);
+            }
+        }, content -> {
+            selectedFile = choice;
+            name.setText(choice.item().name());
+            body.setText(content);
+            status.setText((choice.historical() ? "已打开历史节点。提交修改会建立新分支。"
+                    : "已打开原节点。修改后可提交到 " + choice.branch() + "。") + "\n" + rev.node());
+            showControls();
+            releasePeer(exactPeer);
+        });
     }
 
     private void browseHistory(RemoteH2Exchange exactPeer, RemoteContainerRead.Selection anchor,
@@ -639,6 +802,7 @@ public final class RemoteSaveActivity extends Activity {
         create.setEnabled(!running && !lockedNew);
         create.setText(selectedFile == null ? "提交新文件…" : selectedFile.historical()
                 ? "提交完整修改到新分支…" : "提交完整修改…");
+        importFile.setEnabled(!running && !lockedNew && pickerChoice == null);
         browse.setEnabled(!running && !lockedNew && selectedFile == null);
         clearEdit.setVisibility(selectedFile == null ? View.GONE : View.VISIBLE);
         clearEdit.setEnabled(!running && !lockedNew);
@@ -663,6 +827,8 @@ public final class RemoteSaveActivity extends Activity {
         live = false;
         epoch++;
         if (peer != null) releasePeer(peer);
+        if (importCancellation != null) importCancellation.cancel();
+        importCancellation = null;
         if (pending != null) {
             pending.cancel(true);
             status.setText("界面已离开。若已发出提交，请用原操作号重查。");

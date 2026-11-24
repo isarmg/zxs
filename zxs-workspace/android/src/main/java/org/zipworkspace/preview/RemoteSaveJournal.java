@@ -122,6 +122,31 @@ final class RemoteSaveJournal {
         }
     }
 
+    static synchronized void discardUnboundStage(Context context, OrdinaryFileStage.Staged stage)
+            throws IOException {
+        need(stage != null);
+        String op = stage.id();
+        // Include interrupted journal names: ambiguity means retaining the body.
+        inStore(context, true, (home, local, target) -> {
+            for (String suffix : List.of(".plan", ".save", ".attempt", ".receipt")) {
+                String finalName = nameFor(op, suffix);
+                for (String leaf : List.of(finalName, stageName(finalName))) {
+                    try {
+                        Os.lstat(new File(target.path, leaf).getPath());
+                        throw new IOException("Original operation may already refer to this body");
+                    } catch (ErrnoException absent) {
+                        if (absent.errno != OsConstants.ENOENT) throw absent;
+                    }
+                }
+            }
+            home.check();
+            local.check();
+            target.check();
+            OrdinaryFileStage.discardUnbound(context, stage);
+            return null;
+        });
+    }
+
     record Plan(Authority authority, RemoteSaveContract.Save save) {}
     record Page(List<Plan> rows, String next) {}
 

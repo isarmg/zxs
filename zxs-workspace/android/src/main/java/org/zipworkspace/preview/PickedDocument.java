@@ -57,7 +57,8 @@ final class PickedDocument implements AutoCloseable {
         }
     }
 
-    OrdinaryFileStage.Staged stageOrdinary(Context ctx, String id, CancellationSignal cancel) throws IOException {
+    OrdinaryFileStage.Staged stageOrdinary(Context ctx, String id, CancellationSignal cancel,
+                                          OrdinaryFileStage.Baseline baseline) throws IOException {
         if (index != null) throw new IOException("Select an ordinary file to stage");
         OrdinaryFileStage.Staged completed = null;
         try (ParcelFileDescriptor lease = borrow()) {
@@ -69,7 +70,7 @@ final class PickedDocument implements AutoCloseable {
                     reader.fill(offset, bytes, count);
                 }
                 @Override public void checkEnd() throws IOException { reader.checkEnd(); }
-            }, cancel);
+            }, cancel, baseline);
         } catch (IOException | RuntimeException failure) {
             if (completed != null) throw new OrdinaryFileStage.Unconfirmed(completed, failure);
             throw failure;

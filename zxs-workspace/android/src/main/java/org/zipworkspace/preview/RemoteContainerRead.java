@@ -69,9 +69,14 @@ final class RemoteContainerRead {
 
         RemoteSaveJournal.Plan changedMain(String operation, String node, String newBranch, byte[] bytes) {
             String digest = ArchiveIndex.hex(ArchiveIndex.sha256().digest(bytes));
-            if (bytes.length > PlainText.LIMIT || (BigInteger.valueOf(bytes.length).equals(revision.length())
-                    && digest.equals(revision.sha256()))) {
-                throw new IllegalArgumentException("no changed bounded body");
+            if (bytes.length > PlainText.LIMIT) throw new IllegalArgumentException("text body too large");
+            return changedFull(operation, node, newBranch, bytes.length, digest);
+        }
+
+        RemoteSaveJournal.Plan changedFull(String operation, String node, String newBranch, long length,
+                                           String digest) {
+            if (BigInteger.valueOf(length).equals(revision.length()) && revision.sha256().equals(digest)) {
+                throw new IllegalArgumentException("unchanged original body");
             }
             if (historical() != (newBranch != null) || (historical() && !"main".equals(branch))) {
                 throw new IllegalArgumentException("exact branch choice is required");
@@ -80,7 +85,7 @@ final class RemoteContainerRead {
                     ? new RemoteSaveContract.HistoricalMain(newBranch, revision.node())
                     : new RemoteSaveContract.BranchHead(branch, revision.node());
             var save = new RemoteSaveContract.Save(item.container(), operation, node, item.sequence(),
-                    target, bytes.length, digest);
+                    target, length, digest);
             return new RemoteSaveJournal.Plan(authority, save);
         }
 
