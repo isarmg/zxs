@@ -147,6 +147,58 @@ class MacNodePublication(unittest.TestCase):
             self.publish(output, b"new", begin_publication=occupy)
         self.assertEqual((self.root / "occupied.txt").read_bytes(), b"existing")
 
+    @contextmanager
+    def synthetic_provenance_for_byte_and_rename_tests(self):
+        # Test-only seam. Keep real APFS file guards and native exclusive rename.
+        # No test using this seam may attest that the system returned an origin.
+        phase, witness = [], object()
+
+        @contextmanager
+        def isolated_url(url):
+            self.assertEqual(url, _ORIGIN + _TARGET)
+            yield url
+
+        def simulate_mark(path, fd, url):
+            self.assertEqual(url, _ORIGIN + _TARGET)
+            self.assertEqual(os.fstat(fd).st_size, 0)
+            phase.append(("mark", path.name, os.fstat(fd).st_ino))
+            return witness
+
+        def simulate_verify(path, fd, url):
+            self.assertEqual(url, _ORIGIN + _TARGET)
+            self.assertEqual(os.fstat(fd).st_ino, phase[0][2])
+            phase.append(("verify", path.name, os.fstat(fd).st_ino))
+            return witness
+
+        fixture = SimpleNamespace(url=isolated_url, mark=simulate_mark, verify=simulate_verify)
+        with patch.object(export, "_download_quarantine", return_value=fixture):
+            yield phase
+
+    def test_synthetic_provenance_wrong_body_never_reaches_publication(self):
+        with self.synthetic_provenance_for_byte_and_rename_tests() as phase, export.MacNodeOutput(
+                self.root, "bad-synthetic.txt") as output, patch.object(export, "rename_new_at") as rename:
+            def not_ready():
+                self.fail("digest mismatch must not allow publication")
+            with self.assertRaisesRegex(Rejected, "node GET bytes disagreed with the selected SHA-256"):
+                self.publish(output, b"bad", digest=sha256(b"one").hexdigest(), begin_publication=not_ready)
+            rename.assert_not_called()
+            self.assertFalse(output.path.exists())
+            self.assertEqual([step[0] for step in phase], ["mark"])
+
+    def test_synthetic_provenance_late_collision_keeps_both_original_files(self):
+        def occupy():
+            with (self.root / "occupied-synthetic.txt").open("xb") as winner:
+                winner.write(b"existing")
+
+        with self.synthetic_provenance_for_byte_and_rename_tests() as phase, export.MacNodeOutput(
+                self.root, "occupied-synthetic.txt") as output:
+            stage = self.root / output._stage
+            with self.assertRaisesRegex(Rejected, "没有覆盖"):
+                self.publish(output, b"new", begin_publication=occupy)
+            self.assertEqual(output.path.read_bytes(), b"existing")
+            self.assertEqual(stage.read_bytes(), b"new")
+            self.assertEqual([step[0] for step in phase], ["mark", "verify"])
+
     def test_last_callback_cannot_publish_a_replaced_stage(self):
         with export.MacNodeOutput(self.root, "never.txt") as output:
             stage, original = self.root / output._stage, self.root / "held-original.partial"
