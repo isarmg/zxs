@@ -15,7 +15,7 @@ work="$(mktemp -d -- "${RUNNER_TEMP:?}/zxs-core-installed-h2.XXXXXXXX")"
 cd "$work"
 mkdir old new service rust home cargo old-target new-target helper-target tmp seed
 old=1bc616dc07001b0a0b2d807ca756a078fbdb3904
-new=5c7815f1bb9241b2bbea3f59daf512694661e8fc
+new=b2958a6d1fbcdb6d61c31a79fa1c648e6b0fdbe5
 service=5c7815f1bb9241b2bbea3f59daf512694661e8fc
 git_env=(env -i PATH=/usr/bin:/bin LC_ALL=C HOME="$work/home" GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0)
 "${git_env[@]}" git init --quiet --bare source.git
@@ -29,7 +29,7 @@ git --git-dir=source.git archive "$new" zxs-core | tar -xf - -C new --no-same-ow
 git --git-dir=source.git archive "$service" zxs helper | tar -xf - -C service --no-same-owner --no-same-permissions
 cat <<'PINS' | sha256sum -c -
 5f646a89312e230181634fc82ec7e5ce82f2b42db134f49b19e9c9c56f53079a  old/zxs-core/Cargo.lock
-5f646a89312e230181634fc82ec7e5ce82f2b42db134f49b19e9c9c56f53079a  new/zxs-core/Cargo.lock
+0f556d1419f7443de085ea92d5642f1c9b59674b80714cc2513b85fe4596393b  new/zxs-core/Cargo.lock
 2b898fbfa5a396d4291c7b9c7e7b1439e5c8434835e24711622324c8b4f05fe4  service/zxs/Cargo.lock
 9dea3e14264ad491146cc648e01184a152209aa262ab3970ef441b0bfa36475d  service/helper/Cargo.lock
 PINS
