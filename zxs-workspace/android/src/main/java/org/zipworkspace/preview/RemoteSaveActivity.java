@@ -16,6 +16,8 @@ import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 
 import java.io.IOException;
 import java.math.BigInteger;
@@ -26,6 +28,7 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
 
 /** Explicit first whole-text save and original-operation recovery. */
@@ -33,12 +36,15 @@ public final class RemoteSaveActivity extends Activity {
     private static final Pattern OPERATION = Pattern.compile("[0-9a-f]{32}");
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private EditText origin, account, password, name, body, operation;
-    private Button create, recover, chooseLocal;
+    private Button create, recover, chooseLocal, browse, clearEdit, nextEdit;
     private TextView status;
     private Future<?> pending;
     private AlertDialog decision;
     private RemoteH2Exchange peer;
-    private boolean running, live, lockedNew;
+    private RemoteContainerRead.Selection selectedFile;
+    private final OnBackInvokedCallback leave = this::requestExit;
+    private boolean running, live, lockedNew, bodyRetained, originalConfirmed;
+    private String lockedOperation;
     private int epoch;
 
     @Override protected void onCreate(Bundle saved) {
@@ -70,6 +76,9 @@ public final class RemoteSaveActivity extends Activity {
         operation = field(form, "原操作号", InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD, 32, true);
         chooseLocal = button(form, "从本机选择原操作…", () -> listLocal(null));
         recover = button(form, "查看原提交…", this::loadOriginal);
+        browse = button(form, "浏览已有远程文件…", this::beginBrowse);
+        clearEdit = button(form, "关闭本次文件编辑…", this::clearEdited);
+        nextEdit = button(form, "开始另一个操作", this::resetAfterConfirmed);
         name = field(form, "新文件名", InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS, 255, true);
         body = field(form, "全文", InputType.TYPE_TEXT_FLAG_MULTI_LINE, PlainText.LIMIT, false);
         body.setMinLines(6);
@@ -77,8 +86,20 @@ public final class RemoteSaveActivity extends Activity {
         if (saved != null) {
             operation.setText(saved.getString("operation", ""));
             lockedNew = saved.getBoolean("original_frozen");
+            lockedOperation = saved.getString("locked_operation");
+        }
+        Object retained = getLastNonConfigurationInstance();
+        if (retained instanceof InMemoryDraft draft) {
+            selectedFile = draft.selected();
+            bodyRetained = draft.bodyRetained();
+            originalConfirmed = draft.originalConfirmed();
+            origin.setText(draft.origin());
+            account.setText(draft.account());
+            name.setText(draft.name());
+            body.setText(draft.text());
         }
         setContentView(scroll);
+        getOnBackInvokedDispatcher().registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, leave);
         showControls();
     }
 
@@ -102,22 +123,35 @@ public final class RemoteSaveActivity extends Activity {
         return button;
     }
 
+    private record InMemoryDraft(RemoteContainerRead.Selection selected, String origin, String account,
+                                 String name, String text, boolean bodyRetained, boolean originalConfirmed) {}
+
+    @Override public Object onRetainNonConfigurationInstance() {
+        return new InMemoryDraft(selectedFile, origin.getText().toString(), account.getText().toString(),
+                name.getText().toString(), body.getText().toString(), bodyRetained, originalConfirmed);
+    }
+
     private void firstDecision() {
         if (!live || running || decision != null || lockedNew) return;
         byte[] raw;
         RemoteSaveContract.Save save;
         try {
-            var target = new RemoteSaveContract.FirstMain(name.getText().toString());
             String text = body.getText().toString();
             if (PlainText.scanPages(text, () -> {}, null) < 0) throw new IOException("unsupported text");
             var encoded = StandardCharsets.UTF_8.newEncoder().encode(CharBuffer.wrap(text));
             if (encoded.remaining() > PlainText.LIMIT) throw new IOException("too long");
             raw = new byte[encoded.remaining()];
             encoded.get(raw);
-            save = new RemoteSaveContract.Save(id(), id(), id(), BigInteger.ZERO, target, raw.length,
-                    ArchiveIndex.hex(ArchiveIndex.sha256().digest(raw)));
+            if (selectedFile == null) {
+                var target = new RemoteSaveContract.FirstMain(name.getText().toString());
+                save = new RemoteSaveContract.Save(id(), id(), id(), BigInteger.ZERO, target, raw.length,
+                        ArchiveIndex.hex(ArchiveIndex.sha256().digest(raw)));
+            } else {
+                save = selectedFile.changedMain(id(), id(), raw).save();
+            }
         } catch (IllegalArgumentException | IOException invalid) {
-            status.setText("请检查文件名、文本格式和长度。");
+            status.setText(selectedFile == null ? "请检查文件名、文本格式和长度。"
+                    : "需要修改原文件；请检查文本格式和长度。");
             return;
         }
 
@@ -127,6 +161,12 @@ public final class RemoteSaveActivity extends Activity {
             Arrays.fill(raw, (byte) 0);
             return;
         }
+        if (selectedFile != null && !selectedFile.authority().equals(exactPeer.authority())) {
+            releasePeer(exactPeer);
+            Arrays.fill(raw, (byte) 0);
+            status.setText("请使用选定文件的原地址和账号。未提交。");
+            return;
+        }
         var plan = new RemoteSaveJournal.Plan(exactPeer.authority(), save);
         decision = new AlertDialog.Builder(this).setTitle("确认提交完整文件")
                 .setMessage(summary(selected, plan))
@@ -134,6 +174,7 @@ public final class RemoteSaveActivity extends Activity {
                 .setPositiveButton("提交一次", (dialog, which) -> {
                     if (!owns(exactPeer) || lockedNew) return;
                     lockedNew = true;
+                    lockedOperation = save.operation();
                     operation.setText(save.operation());
                     status.setText("正在准备并提交：\n" + save.operation());
                     runOperation(plan, exactPeer, RemoteSaveSubmit.Mode.FIRST_SEND, raw.clone());
@@ -144,6 +185,175 @@ public final class RemoteSaveActivity extends Activity {
             if (!running) releasePeer(exactPeer);
         });
         decision.show();
+    }
+
+    private void beginBrowse() {
+        if (!live || running || decision != null || lockedNew || selectedFile != null) return;
+        if (body.length() != 0 || name.length() != 0) {
+            status.setText("请先处理或清空新建文件的正文和名称，再打开已有文件。");
+            return;
+        }
+        var exactPeer = takePeer(origin.getText().toString());
+        if (exactPeer != null) browsePage(exactPeer, null);
+    }
+
+    private void browsePage(RemoteH2Exchange exactPeer, String after) {
+        readRemote(exactPeer, () -> RemoteContainerRead.catalog(exactPeer, exactPeer.authority(), after),
+                page -> showRemotePage(exactPeer, page));
+    }
+
+    private void showRemotePage(RemoteH2Exchange exactPeer, RemoteContainerRead.Catalog page) {
+        if (page.items().isEmpty()) {
+            status.setText("当前没有可选的远程文件。");
+            releasePeer(exactPeer);
+            return;
+        }
+        var rows = page.items();
+        String[] names = new String[rows.size()];
+        for (int index = 0; index < rows.size(); index++) {
+            var item = rows.get(index);
+            names[index] = item.name() + "\n" + item.container() + " · " + item.sequence();
+        }
+        var builder = new AlertDialog.Builder(this).setTitle("选择已有远程文件")
+                .setItems(names, (dialog, index) -> {
+                    if (dialog != decision || !owns(exactPeer)) return;
+                    readRemote(exactPeer, () ->
+                            RemoteContainerRead.selectMain(exactPeer, exactPeer.authority(), rows.get(index)),
+                            selected -> confirmDownload(exactPeer, selected));
+                }).setNegativeButton("取消", null);
+        if (page.next() != null) {
+            builder.setNeutralButton("下一页", (dialog, which) -> {
+                if (dialog == decision) browsePage(exactPeer, page.next());
+            });
+        }
+        showPeerDialog(builder.create(), exactPeer);
+    }
+
+    private void confirmDownload(RemoteH2Exchange exactPeer, RemoteContainerRead.Selection choice) {
+        if (choice.revision().length().compareTo(BigInteger.valueOf(PlainText.LIMIT)) > 0) {
+            status.setText("该文件超过当前的全文编辑上限。未下载。");
+            releasePeer(exactPeer);
+            return;
+        }
+        var confirm = new AlertDialog.Builder(this).setTitle("读取此原节点并编辑？")
+                .setMessage(choice.item().name() + "\nmain · " + choice.revision().node()
+                        + "\n" + choice.revision().length() + " 字节")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("读取并编辑", (dialog, which) -> {
+                    if (dialog != decision || !owns(exactPeer)) return;
+                    readRemote(exactPeer, () -> {
+                        byte[] raw = choice.readExact(exactPeer);
+                        try {
+                            String content = StandardCharsets.UTF_8.newDecoder()
+                                    .decode(java.nio.ByteBuffer.wrap(raw)).toString();
+                            if (PlainText.scanPages(content, () -> {}, null) < 0)
+                                throw new IOException("not editable text");
+                            return content;
+                        } finally {
+                            Arrays.fill(raw, (byte) 0);
+                        }
+                    }, content -> {
+                        selectedFile = choice;
+                        name.setText(choice.item().name());
+                        body.setText(content);
+                        status.setText("已打开原节点。修改后可提交到 main。\n" + choice.revision().node());
+                        showControls();
+                        releasePeer(exactPeer);
+                    });
+                }).create();
+        showPeerDialog(confirm, exactPeer);
+    }
+
+    private void showPeerDialog(AlertDialog chooser, RemoteH2Exchange exactPeer) {
+        decision = chooser;
+        chooser.setOnDismissListener(dialog -> {
+            if (decision == chooser) {
+                decision = null;
+                if (!running) releasePeer(exactPeer);
+            }
+        });
+        chooser.show();
+    }
+
+    @FunctionalInterface
+    private interface Reading<T> { T read() throws IOException; }
+
+    private <T> void readRemote(RemoteH2Exchange exactPeer, Reading<T> reading, Consumer<T> done) {
+        if (!owns(exactPeer) || running) return;
+        int current = beginTask();
+        pending = worker.submit(() -> {
+            T value;
+            try { value = reading.read(); }
+            catch (IOException | RuntimeException invalid) { value = null; }
+            T delivered = value;
+            runOnUiThread(() -> {
+                if (!finishTask(current, exactPeer)) return;
+                if (delivered == null) {
+                    status.setText("无法读取所选原文件。没有发送正文。");
+                    releasePeer(exactPeer);
+                } else {
+                    done.accept(delivered);
+                }
+            });
+        });
+    }
+
+    private void clearEdited() {
+        if (!live || running || decision != null || lockedNew || selectedFile == null) return;
+        if (hasUnsavedEditor()) confirmDiscard("关闭文件编辑？", this::clearEditor);
+        else clearEditor();
+    }
+
+    private void requestExit() {
+        if (!live || decision != null || isFinishing()) return;
+        if (hasUnsavedEditor()) confirmDiscard("离开文件编辑？", this::finish);
+        else finish();
+    }
+
+    private void confirmDiscard(String title, Runnable confirmAction) {
+        var confirm = new AlertDialog.Builder(this).setTitle(title)
+                .setMessage("尚未留在本机的编辑不会保存。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("离开", (dialog, which) -> {
+                    if (live && dialog == decision) confirmAction.run();
+                }).create();
+        decision = confirm;
+        confirm.setOnDismissListener(dialog -> { if (decision == confirm) decision = null; });
+        confirm.show();
+    }
+
+    private boolean hasUnsavedEditor() {
+        if (bodyRetained) return false;
+        if (selectedFile == null) return body.length() != 0 || name.length() != 0;
+        String text = body.getText().toString();
+        try {
+            var encoded = StandardCharsets.UTF_8.newEncoder().encode(CharBuffer.wrap(text));
+            return selectedFile.differs(encoded);
+        } catch (IOException invalid) {
+            return true;
+        }
+    }
+
+    private void clearEditor() {
+        selectedFile = null;
+        name.setText("");
+        body.setText("");
+        status.setText("已关闭。未提交。");
+        showControls();
+    }
+
+    private void resetAfterConfirmed() {
+        if (!live || running || decision != null || !originalConfirmed) return;
+        // The synchronized durable original receipt remains in the journal and
+        // the operation field. Starting anew cannot reuse the old baseline.
+        selectedFile = null;
+        lockedNew = false;
+        lockedOperation = null;
+        bodyRetained = false;
+        originalConfirmed = false;
+        name.setText("");
+        body.setText("");
+        showControls();
     }
 
     private void listLocal(String after) {
@@ -281,9 +491,11 @@ public final class RemoteSaveActivity extends Activity {
         Context context = getApplicationContext();
         pending = worker.submit(() -> {
             RemoteSaveSubmit.Result result;
+            boolean preparedHere = false;
             try {
                 if (firstBody != null) {
                     RemoteSaveJournal.prepare(context, plan.authority(), plan.save(), firstBody);
+                    preparedHere = true;
                 }
                 result = RemoteSaveSubmit.execute(context, plan, mode, exactPeer);
             } catch (IOException | RuntimeException refused) {
@@ -293,9 +505,15 @@ public final class RemoteSaveActivity extends Activity {
                 exactPeer.close();
             }
             var delivered = result;
+            boolean leftOnDisk = preparedHere;
             runOnUiThread(() -> {
                 if (!finishTask(current, exactPeer)) return;
                 releasePeer(exactPeer);
+                if (plan.save().operation().equals(lockedOperation)) {
+                    bodyRetained |= leftOnDisk || delivered.status() == RemoteSaveSubmit.Status.CONFIRMED;
+                    originalConfirmed |= delivered.status() == RemoteSaveSubmit.Status.CONFIRMED;
+                    showControls();
+                }
                 status.setText(resultText(delivered) + "\n" + plan.save().operation());
             });
         });
@@ -365,7 +583,13 @@ public final class RemoteSaveActivity extends Activity {
 
     private void showControls() {
         create.setEnabled(!running && !lockedNew);
-        name.setEnabled(!running && !lockedNew);
+        create.setText(selectedFile == null ? "提交新文件…" : "提交完整修改…");
+        browse.setEnabled(!running && !lockedNew && selectedFile == null);
+        clearEdit.setVisibility(selectedFile == null ? View.GONE : View.VISIBLE);
+        clearEdit.setEnabled(!running && !lockedNew);
+        nextEdit.setVisibility(originalConfirmed ? View.VISIBLE : View.GONE);
+        nextEdit.setEnabled(!running && originalConfirmed);
+        name.setEnabled(!running && !lockedNew && selectedFile == null);
         body.setEnabled(!running && !lockedNew);
         chooseLocal.setEnabled(!running);
         recover.setEnabled(!running);
@@ -397,6 +621,7 @@ public final class RemoteSaveActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(leave);
         worker.shutdownNow();
         super.onDestroy();
     }
@@ -406,6 +631,7 @@ public final class RemoteSaveActivity extends Activity {
         String retained = operation.getText().toString();
         if (OPERATION.matcher(retained).matches()) output.putString("operation", retained);
         output.putBoolean("original_frozen", lockedNew);
+        output.putString("locked_operation", lockedOperation);
     }
 
     private static String id() { return UUID.randomUUID().toString().replace("-", ""); }

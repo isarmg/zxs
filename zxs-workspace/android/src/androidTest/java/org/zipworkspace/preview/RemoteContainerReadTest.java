@@ -4,11 +4,14 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.math.BigInteger;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 
@@ -33,6 +36,24 @@ public final class RemoteContainerReadTest {
         assertArrayEquals(BODY, selection.readExact(peer));
         assertEquals(3, peer.metadataReads);
         assertEquals(1, peer.bodyReads);
+    }
+
+    @Test
+    public void editedBodyAppendsOnlyToTheExactSelectedMainHead() throws Exception {
+        var peer = new Fake();
+        var row = RemoteContainerRead.catalog(peer, peer.authority, null).items().get(0);
+        var selection = RemoteContainerRead.selectMain(peer, peer.authority, row);
+        assertThrows(IllegalArgumentException.class, () -> selection.changedMain(OPERATION, OTHER, BODY));
+        byte[] edited = bytes("修改后的全文");
+        assertFalse(selection.differs(ByteBuffer.wrap(BODY)));
+        assertTrue(selection.differs(ByteBuffer.wrap(edited)));
+        var plan = selection.changedMain(OPERATION, OTHER, edited);
+        assertEquals(peer.authority(), plan.authority());
+        assertEquals(CONTAINER, plan.save().container());
+        assertEquals(BigInteger.TWO, plan.save().baseSequence());
+        assertEquals(new RemoteSaveContract.BranchHead("main", NODE), plan.save().target());
+        assertEquals(edited.length, plan.save().length());
+        assertEquals(ArchiveIndex.hex(ArchiveIndex.sha256().digest(edited)), plan.save().sha256());
     }
 
     @Test

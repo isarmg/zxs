@@ -46,6 +46,24 @@ final class RemoteContainerRead {
     record Revision(String node, String parent, BigInteger sequence, BigInteger length, String sha256) {}
 
     record Selection(RemoteSaveJournal.Authority authority, Item item, Revision revision) {
+        boolean differs(ByteBuffer bytes) {
+            if (!revision.length().equals(BigInteger.valueOf(bytes.remaining()))) return true;
+            var digest = ArchiveIndex.sha256();
+            digest.update(bytes.duplicate());
+            return !revision.sha256().equals(ArchiveIndex.hex(digest.digest()));
+        }
+
+        RemoteSaveJournal.Plan changedMain(String operation, String node, byte[] bytes) {
+            String digest = ArchiveIndex.hex(ArchiveIndex.sha256().digest(bytes));
+            if (bytes.length > PlainText.LIMIT || (BigInteger.valueOf(bytes.length).equals(revision.length())
+                    && digest.equals(revision.sha256()))) {
+                throw new IllegalArgumentException("no changed bounded body");
+            }
+            var save = new RemoteSaveContract.Save(item.container(), operation, node, item.sequence(),
+                    new RemoteSaveContract.BranchHead("main", revision.node()), bytes.length, digest);
+            return new RemoteSaveJournal.Plan(authority, save);
+        }
+
         byte[] readExact(Reader peer) throws IOException {
             require(authority.equals(peer.authority()) && revision.length().compareTo(
                     BigInteger.valueOf(PlainText.LIMIT)) <= 0);
