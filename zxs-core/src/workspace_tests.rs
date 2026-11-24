@@ -410,3 +410,135 @@ fn resumable_limit_and_early_custody_never_strand_an_unreadable_pending_record()
     assert_eq!(ws.pending().unwrap(), [] as [Id; 0]);
     assert_eq!(fs::read(normal).unwrap(), b"synthetic b");
 }
+
+#[test]
+#[ignore = "requires newly allocated unprivileged ext4 fixture scratch"]
+fn archived_late_receipt_is_history_only_even_after_another_original_owns_the_container() {
+    use super::conflicts::{ARCHIVED, latest_generation, stamp_checkout};
+
+    let (mut ws, state, old, spare) = scratch_workspace("archive-fresh-checkout");
+    let reviewed = ws
+        .review(&old, Some(DisplayName::parse("file").unwrap()))
+        .unwrap();
+    let first = ws.prepare(&reviewed, true).unwrap().unwrap();
+    let lease = ws.hold_container(&first.container_id).unwrap();
+    let base_original = ws.original(&first.operation_id).unwrap().0;
+    ws.settle(&base_original, Lookup::Confirmed { sequence: 1 }, &lease)
+        .unwrap();
+    drop(lease);
+    let old_basis = ws.basis(&old).unwrap().unwrap();
+    let raw = serde_json::to_string(&old_basis).unwrap();
+    ws.db
+        .execute(
+            "INSERT INTO basis VALUES(?1,?2)",
+            (spare.to_str().unwrap(), &raw),
+        )
+        .unwrap();
+    let previous_review = ws.review(&spare, None).unwrap();
+    fs::write(&old, b"frozen old conflict").unwrap();
+    let edited = ws.review(&old, None).unwrap();
+    let intent = ws.prepare(&edited, true).unwrap().unwrap();
+    let op = &intent.operation_id;
+    let seal = state.join(payload(op));
+    assert!(ws.review_conflict_archive(op).is_err());
+    let lease = ws.hold_container(&intent.container_id).unwrap();
+    let original = ws.original(op).unwrap().0;
+    ws.settle(&original, Lookup::Conflict, &lease).unwrap();
+    assert_eq!(
+        ws.settle(&original, Lookup::Absent, &lease).unwrap().status,
+        Lookup::Conflict
+    );
+    assert_eq!(ws.pending().unwrap().as_slice(), std::slice::from_ref(op));
+    drop(lease);
+    fs::write(&old, b"ordinary later edits").unwrap();
+    let draft = ws.review_conflict_archive(op).unwrap();
+    assert_eq!(draft.intent(), &intent);
+    assert!(ws.archive_conflict(draft, false).is_err());
+    assert_eq!(ws.pending().unwrap().as_slice(), std::slice::from_ref(op));
+    let selected = ws.review_conflict_archive(op).unwrap();
+    ws.archive_conflict(selected, true).unwrap();
+    drop(ws);
+
+    let mut ws = Workspace::open_local(&state).unwrap();
+    assert_eq!(ws.pending().unwrap(), [] as [Id; 0]);
+    assert_eq!(
+        ws.archived_conflicts().unwrap().as_slice(),
+        std::slice::from_ref(op)
+    );
+    assert_eq!(ws.intent(op).unwrap(), intent);
+    assert_eq!(ws.basis(&old).unwrap().as_ref(), Some(&old_basis));
+    assert_eq!(fs::read(&old).unwrap(), b"ordinary later edits");
+    assert_eq!(fs::read(&seal).unwrap(), b"frozen old conflict");
+    // Offline inspection and the older files still work; they cannot stage bytes for a new write.
+    let read_old = ws.review(&old, None).unwrap();
+    assert!(read_old.changed());
+    assert!(ws.prepare(&read_old, true).is_err());
+    assert!(ws.prepare(&previous_review, true).is_err());
+    assert!(ws.db.execute(
+        "INSERT INTO original(op,container,path,record,phase) VALUES(?1,?2,?3,?4,'prepared')",
+        (Id::fresh().unwrap().as_str(), intent.container_id.as_str(), spare.to_str().unwrap(),
+            serde_json::to_string(&original).unwrap())
+    ).is_err()); // Even a pre-upgrade writer cannot occupy the released slot.
+
+    // Simulate the exact new checkout transaction, not a rebind of either old path.
+    let other = spare.with_file_name("new");
+    fs::write(&other, b"new user merge").unwrap();
+    let mut basis = old_basis.clone();
+    basis.node = Id::fresh().unwrap();
+    basis.seen_sequence = 3;
+    let at = other.to_str().unwrap();
+    let generation = latest_generation(&ws.db, &intent.container_id).unwrap();
+    assert!(stamp_checkout(&ws.db, at, &intent.container_id, 0).is_err());
+    ws.db
+        .execute(
+            "INSERT INTO basis VALUES(?1,?2)",
+            (at, serde_json::to_string(&basis).unwrap()),
+        )
+        .unwrap();
+    stamp_checkout(&ws.db, at, &intent.container_id, generation).unwrap();
+    let new = ws
+        .prepare(&ws.review(&other, None).unwrap(), true)
+        .unwrap()
+        .unwrap();
+    assert_ne!(new.operation_id, *op);
+    assert_eq!(new.target.expected_base(), Some(&basis.node));
+    let lease = ws.hold_container(&intent.container_id).unwrap();
+    assert_eq!(
+        ws.settle(&original, Lookup::Confirmed { sequence: 2 }, &lease)
+            .unwrap()
+            .status,
+        Lookup::Confirmed { sequence: 2 }
+    );
+    assert_eq!(
+        ws.original(op).unwrap(),
+        (original, ARCHIVED.into(), Some(2))
+    );
+    assert_eq!(ws.basis(&old).unwrap(), Some(old_basis));
+    assert_eq!(ws.basis(&other).unwrap(), Some(basis));
+    assert_eq!(ws.pending().unwrap(), [new.operation_id]);
+    assert_eq!(fs::read(&seal).unwrap(), b"frozen old conflict");
+}
+
+#[test]
+#[ignore = "requires newly allocated unprivileged ext4 fixture scratch"]
+fn exact_receipt_before_archive_wins_over_the_stale_conflict_preview() {
+    let (mut ws, _, file, _) = scratch_workspace("archive-preview-revoked");
+    let reviewed = ws
+        .review(&file, Some(DisplayName::parse("first").unwrap()))
+        .unwrap();
+    let intent = ws.prepare(&reviewed, true).unwrap().unwrap();
+    let op = &intent.operation_id;
+    let lease = ws.hold_container(&intent.container_id).unwrap();
+    let original = ws.original(op).unwrap().0;
+    ws.settle(&original, Lookup::Unknown, &lease).unwrap();
+    assert!(ws.review_conflict_archive(op).is_err());
+    ws.settle(&original, Lookup::Conflict, &lease).unwrap();
+    let stale = ws.review_conflict_archive(op).unwrap();
+    ws.settle(&original, Lookup::Confirmed { sequence: 1 }, &lease)
+        .unwrap();
+    drop(lease);
+    assert!(ws.archive_conflict(stale, true).is_err());
+    assert_eq!(ws.archived_conflicts().unwrap(), [] as [Id; 0]);
+    assert_eq!(ws.basis(&file).unwrap().unwrap().node, intent.node_id);
+    assert_eq!(ws.original(op).unwrap().2, Some(1));
+}

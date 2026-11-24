@@ -17,10 +17,11 @@ use tokio::sync::{Notify, mpsc, watch};
 use zeroize::Zeroizing;
 use zxs_core::{
     Result,
-    r3::{Body, Branch, Catalog, Container, Detail, DisplayName, Id, Intent, Lookup},
+    r3::{Body, Branch, Catalog, Container, Detail, DisplayName, Id, Intent, Lookup, Target},
     session::{ExistingBasicLogin, ExistingBasicSession},
     workspace::{
-        Basis, CheckoutChoice, Resolution, Review, UploadObservation, UploadSelection, Workspace,
+        Basis, CheckoutChoice, ConflictArchiveChoice, PreparedCancellation, PreparedSubmission,
+        Resolution, Review, UploadObservation, UploadSelection, Workspace,
     },
 };
 
@@ -144,7 +145,9 @@ pub enum Action {
         resumable: bool,
     },
     ReviewResume(Id),
-    ReviewSend,
+    ReviewSend(Id),
+    ReviewCancelPrepared(Id),
+    ReviewArchiveConflict(Id),
     Approve {
         choice: Claim,
         gesture: Claim,
@@ -168,6 +171,8 @@ pub enum Effect {
     Checkout,
     Freeze,
     Send,
+    CancelPrepared,
+    ArchiveConflict,
     FirstUpload,
     FirstResumable,
     Resume,
@@ -186,6 +191,7 @@ impl Effect {
 pub enum CardTarget {
     Mapped(Basis),
     First(DisplayName),
+    RecordedConflict,
 }
 
 #[derive(Clone)]
@@ -196,6 +202,15 @@ pub struct Card {
     pub target: CardTarget,
     pub body: Body,
     pub intent: Option<Intent>,
+}
+
+#[derive(Clone)]
+pub struct PendingRow {
+    pub operation: Id,
+    pub send_frozen: bool,
+    pub cancel_frozen: bool,
+    pub resume: bool,
+    pub archive_conflict: bool,
 }
 
 #[derive(Clone, Default)]
@@ -212,13 +227,18 @@ pub struct Snapshot {
     pub detail: Option<Detail>,
     pub working: Option<PathBuf>,
     pub card: Option<Card>,
-    pub pending: Vec<Id>,
-    pub resume_candidates: Vec<Id>,
+    pub pending: Vec<PendingRow>,
     pub pending_start: usize,
     pub pending_more: bool,
-    pub fresh_send: bool,
+    pub fresh_send: Option<Id>,
     pub resolution: Option<Resolution>,
     pub notice: &'static str,
+}
+
+impl Snapshot {
+    pub fn pending_row(&self, op: &Id) -> Option<&PendingRow> {
+        self.pending.iter().find(|row| &row.operation == op)
+    }
 }
 
 struct PendingLogin {
@@ -231,7 +251,9 @@ enum Choice {
     FirstUpload(Review, bool),
     Resume(Box<UploadSelection>),
     Freeze(Review),
-    Send(Intent),
+    Send(Box<PreparedSubmission>),
+    CancelPrepared(Box<PreparedCancellation>),
+    ArchiveConflict(Box<ConflictArchiveChoice>),
 }
 
 impl Choice {
@@ -244,7 +266,13 @@ impl Choice {
                 "Freeze not confirmed. The working file was not overwritten. Check pending originals."
             }
             Self::Send(_) => {
-                "Submit not confirmed. Keep the original operation and check its receipt; do not resend here."
+                "Submit not confirmed. Keep the original operation and check its receipt. No automatic resend."
+            }
+            Self::CancelPrepared(_) => {
+                "Discard not confirmed. Keep your working file and check the exact Pending original again."
+            }
+            Self::ArchiveConflict(_) => {
+                "Archive not confirmed. Reopen the same workspace and check this exact original before proceeding."
             }
             Self::Resume(_) | Self::FirstUpload(_, true) => {
                 "Upload not confirmed. Keep the same pending original and check its receipt before continuing."
@@ -262,7 +290,6 @@ struct Owner {
     login: Option<PendingLogin>,
     session: Option<ExistingBasicSession>,
     choice: Option<(Claim, Choice)>,
-    fresh: Option<(Intent, String, Basis)>,
     view: Snapshot,
 }
 
@@ -342,7 +369,6 @@ impl Owner {
         self.drop_login();
         self.drop_choice();
         self.session = None;
-        self.fresh = None;
         self.workspace = workspace;
         self.view = Snapshot {
             epoch: self.view.epoch.wrapping_add(1),
@@ -361,15 +387,26 @@ impl Owner {
         let page = pending_page(all.len(), self.view.pending_start);
         self.view.pending_start = page.start;
         self.view.pending_more = page.end < all.len();
-        self.view.pending = all[page].to_vec();
-        self.view.resume_candidates = self
-            .view
-            .pending
+        self.view.pending = all[page]
             .iter()
-            .filter(|op| workspace.choose_upload_for_send(op).is_ok())
-            .cloned()
+            .map(|op| PendingRow {
+                operation: op.clone(),
+                send_frozen: workspace.review_prepared_submit(op).is_ok(),
+                cancel_frozen: workspace
+                    .review_prepared_cancellation(op)
+                    .is_ok_and(|choice| choice.is_ordinary_full_file()),
+                resume: workspace.choose_upload_for_send(op).is_ok(),
+                archive_conflict: workspace.review_conflict_archive(op).is_ok(),
+            })
             .collect();
-        self.view.fresh_send = self.fresh.is_some();
+        if self
+            .view
+            .fresh_send
+            .as_ref()
+            .is_some_and(|op| workspace.review_prepared_submit(op).is_err())
+        {
+            self.view.fresh_send = None;
+        }
         Ok(())
     }
 
@@ -487,7 +524,7 @@ impl Owner {
             .workspace
             .as_ref()
             .ok_or_else(|| fail("no open workspace"))?;
-        if self.fresh.is_some() {
+        if self.view.fresh_send.is_some() {
             return Err(fail("finish reviewing the newly staged operation first"));
         }
         let review = workspace.review(&path, None)?;
@@ -533,47 +570,87 @@ impl Owner {
     }
 
     fn review_resume(&mut self, op: &Id) -> Result<()> {
-        if !self.view.pending.contains(op) {
-            return Err(fail("not a displayed pending original"));
+        if !self.view.pending_row(op).is_some_and(|row| row.resume) {
+            return Err(fail(
+                "not a displayed pending original for resumable upload",
+            ));
         }
         let (workspace, _) = self.online()?;
         let choice = workspace.choose_upload_for_send(op)?;
         let intent = choice.intent();
-        let target = match (&intent.target, choice.basis()) {
-            (zxs_core::r3::Target::FirstMain { name }, None) => CardTarget::First(name.clone()),
-            (_, Some(basis)) => CardTarget::Mapped(basis.clone()),
-            _ => return Err(fail("missing the original target")),
-        };
-        let card = Card {
-            claim: Claim::new(),
-            effect: Effect::Resume,
-            path: choice.path().to_owned(),
-            target,
-            body: intent.body.clone(),
-            intent: Some(intent.clone()),
-        };
+        let card = frozen_card(Effect::Resume, intent, choice.path(), choice.basis())?;
         self.set_choice(Choice::Resume(Box::new(choice)), card);
         Ok(())
     }
 
-    fn review_send(&mut self) -> Result<()> {
-        let (workspace, _) = self.online()?;
-        let (intent, path, basis) = self
-            .fresh
-            .as_ref()
-            .ok_or_else(|| fail("only a newly frozen original can be sent here"))?;
-        if workspace.intent(&intent.operation_id)? != *intent {
-            return Err(fail("the reviewed original changed"));
+    fn review_send(&mut self, op: &Id) -> Result<()> {
+        if self.view.fresh_send.as_ref() != Some(op)
+            && !self.view.pending_row(op).is_some_and(|row| row.send_frozen)
+        {
+            return Err(fail("not a displayed never-armed ordinary freeze"));
         }
+        let (workspace, _) = self.online()?;
+        let choice = workspace.review_prepared_submit(op)?;
+        let card = frozen_card(
+            Effect::Send,
+            choice.intent(),
+            choice.working_path(),
+            choice.basis(),
+        )?;
+        self.set_choice(Choice::Send(Box::new(choice)), card);
+        Ok(())
+    }
+
+    fn review_cancel_prepared(&mut self, op: &Id) -> Result<()> {
+        if !self
+            .view
+            .pending_row(op)
+            .is_some_and(|row| row.cancel_frozen)
+        {
+            return Err(fail(
+                "not a displayed never-armed ordinary freeze to discard",
+            ));
+        }
+        let workspace = self
+            .workspace
+            .as_ref()
+            .ok_or_else(|| fail("no open workspace"))?;
+        let choice = workspace.review_prepared_cancellation(op)?;
+        if !choice.is_ordinary_full_file() {
+            return Err(fail("the original is not an ordinary full-file freeze"));
+        }
+        let card = frozen_card(
+            Effect::CancelPrepared,
+            choice.intent(),
+            choice.working_path(),
+            choice.basis(),
+        )?;
+        self.set_choice(Choice::CancelPrepared(Box::new(choice)), card);
+        Ok(())
+    }
+
+    fn review_archive_conflict(&mut self, op: &Id) -> Result<()> {
+        if !self
+            .view
+            .pending_row(op)
+            .is_some_and(|row| row.archive_conflict)
+        {
+            return Err(fail("not a displayed saved conflict"));
+        }
+        let workspace = self
+            .workspace
+            .as_ref()
+            .ok_or_else(|| fail("no open workspace"))?;
+        let choice = workspace.review_conflict_archive(op)?;
         let card = Card {
             claim: Claim::new(),
-            effect: Effect::Send,
-            path: path.clone(),
-            target: CardTarget::Mapped(basis.clone()),
-            body: intent.body.clone(),
-            intent: Some(intent.clone()),
+            effect: Effect::ArchiveConflict,
+            path: choice.working_path().to_owned(),
+            target: CardTarget::RecordedConflict,
+            body: choice.intent().body.clone(),
+            intent: Some(choice.intent().clone()),
         };
-        self.set_choice(Choice::Send(intent.clone()), card);
+        self.set_choice(Choice::ArchiveConflict(Box::new(choice)), card);
         Ok(())
     }
 
@@ -654,14 +731,9 @@ impl Owner {
                 self.submit_first(&review, resumable, meter).await
             }
             Choice::Freeze(review) => {
-                let basis = review
-                    .basis()
-                    .ok_or_else(|| fail("no original basis"))?
-                    .clone();
                 let frozen = w.prepare(&review, true)?;
                 if let Some(intent) = frozen {
-                    self.fresh = Some((intent, review.path().to_owned(), basis));
-                    self.view.fresh_send = true;
+                    self.view.fresh_send = Some(intent.operation_id);
                     let _ = self.refresh_pending();
                     Ok("Full file frozen locally. Sending requires a separate decision.")
                 } else {
@@ -674,13 +746,8 @@ impl Owner {
                     .as_ref()
                     .ok_or_else(|| fail("no authorized session"))?;
                 let op = choice.intent().operation_id.clone();
-                if self
-                    .fresh
-                    .as_ref()
-                    .is_some_and(|(i, _, _)| i.operation_id == op)
-                {
-                    self.fresh = None;
-                    self.view.fresh_send = false;
+                if self.view.fresh_send.as_ref() == Some(&op) {
+                    self.view.fresh_send = None;
                 }
                 let result =
                     resumable_submit(w, remote, &choice, meter)
@@ -699,22 +766,75 @@ impl Owner {
                     .session
                     .as_ref()
                     .ok_or_else(|| fail("no authorized session"))?;
-                let fresh = self
-                    .fresh
-                    .take()
-                    .ok_or_else(|| fail("the original approval is no longer present"))?;
-                self.view.fresh_send = false;
-                if fresh.0 != original || w.intent(&original.operation_id)? != original {
-                    return Err(fail("the exact original changed before submit"));
+                let op = original.intent().operation_id.clone();
+                if self.view.fresh_send.as_ref() == Some(&op) {
+                    self.view.fresh_send = None;
                 }
-                // A failure here never restores the right to submit. Use the
-                // retained local original for a subsequent receipt GET only.
-                let result = w
-                    .submit_existing(remote, &original.operation_id, true)
-                    .await?;
-                self.view.resolution = Some(result);
+                let result = w.submit_prepared_existing(remote, *original, true).await;
                 let _ = self.refresh_pending();
-                Ok("Original operation checked. See its exact receipt status.")
+                match result {
+                    Ok(resolution) => {
+                        self.view.resolution = Some(resolution);
+                        Ok("Original operation checked. See its exact receipt status.")
+                    }
+                    Err(error) => {
+                        self.view.resolution = Some(Resolution {
+                            operation: op,
+                            status: Lookup::Unknown,
+                            local_cleanup_pending: false,
+                        });
+                        Err(error)
+                    }
+                }
+            }
+            Choice::CancelPrepared(choice) => {
+                let op = choice.intent().operation_id.clone();
+                let result = w.cancel_prepared(*choice, true);
+                let _ = self.refresh_pending();
+                result?;
+                if self.view.fresh_send.as_ref() == Some(&op) {
+                    self.view.fresh_send = None;
+                }
+                if self
+                    .view
+                    .resolution
+                    .as_ref()
+                    .is_some_and(|row| row.operation == op)
+                {
+                    self.view.resolution = None;
+                }
+                Ok(
+                    "Discarded only the original frozen copy. The working file and mapping were kept.",
+                )
+            }
+            Choice::ArchiveConflict(choice) => {
+                // No transport is used. The core rechecks the saved conflict
+                // under the original container lease at the local archive cut.
+                let first = matches!(choice.intent().target, Target::FirstMain { .. });
+                let op = choice.intent().operation_id.clone();
+                let archived = w.archive_conflict(*choice, true);
+                let _ = self.refresh_pending();
+                // Keep the exact historical receipt action even if this
+                // was opened cold and the pending row just disappeared.
+                self.view.resolution = Some(Resolution {
+                    operation: op,
+                    status: if archived.is_ok() {
+                        Lookup::Conflict
+                    } else {
+                        Lookup::Unknown
+                    },
+                    local_cleanup_pending: false,
+                });
+                archived?;
+                if first {
+                    Ok(
+                        "Conflict archived locally. Check the original receipt and catalog. If the target exists, check out its verified current head to a new file.",
+                    )
+                } else {
+                    Ok(
+                        "Conflict archived locally. Check out the verified current branch head to a new file before preparing another submit.",
+                    )
+                }
             }
         }
     }
@@ -750,14 +870,8 @@ impl Owner {
             .as_ref()
             .ok_or_else(|| fail("no authorized session"))?;
         let result = w.lookup_existing(remote, &op).await?;
-        if self
-            .fresh
-            .as_ref()
-            .is_some_and(|(intent, _, _)| intent.operation_id == op)
-            && !matches!(result.status, Lookup::Absent)
-        {
-            self.fresh = None;
-            self.view.fresh_send = false;
+        if self.view.fresh_send.as_ref() == Some(&op) && !matches!(result.status, Lookup::Absent) {
+            self.view.fresh_send = None;
         }
         self.view.resolution = Some(result);
         let _ = self.refresh_pending();
@@ -896,11 +1010,28 @@ impl Owner {
                     "Only a never-sent freeze or its original resumable transfer is eligible. Check the original receipt."
                 }
             }
-            Action::ReviewSend => {
-                if self.review_send().is_ok() {
+            Action::ReviewSend(op) => {
+                if self.review_send(&op).is_ok() {
                     "Review the exact frozen operation before sending."
                 } else {
-                    "No current matching frozen original is available to send."
+                    let _ = self.refresh_pending();
+                    "No current never-armed ordinary freeze is available to send. Check its receipt."
+                }
+            }
+            Action::ReviewCancelPrepared(op) => {
+                if self.review_cancel_prepared(&op).is_ok() {
+                    "Review the exact local freeze before discarding it."
+                } else {
+                    let _ = self.refresh_pending();
+                    "This exact never-armed freeze could not be verified for discard. No files were removed."
+                }
+            }
+            Action::ReviewArchiveConflict(op) => {
+                if self.review_archive_conflict(&op).is_ok() {
+                    "Review this exact saved conflict before archiving it locally."
+                } else {
+                    let _ = self.refresh_pending();
+                    "That exact saved conflict could not be verified. Nothing was archived."
                 }
             }
             Action::Approve { choice, gesture } => self.approve(choice, gesture).await,
@@ -950,6 +1081,22 @@ fn pending_page(total: usize, requested: usize) -> std::ops::Range<usize> {
     let last = total.saturating_sub(1) / PENDING_DISPLAY * PENDING_DISPLAY;
     let start = requested.min(last);
     start..start.saturating_add(PENDING_DISPLAY).min(total)
+}
+
+fn frozen_card(effect: Effect, intent: &Intent, path: &str, basis: Option<&Basis>) -> Result<Card> {
+    let target = match (&intent.target, basis) {
+        (zxs_core::r3::Target::FirstMain { name }, None) => CardTarget::First(name.clone()),
+        (_, Some(basis)) => CardTarget::Mapped(basis.clone()),
+        _ => return Err(fail("missing the original target")),
+    };
+    Ok(Card {
+        claim: Claim::new(),
+        effect,
+        path: path.to_owned(),
+        target,
+        body: intent.body.clone(),
+        intent: Some(intent.clone()),
+    })
 }
 
 fn first_card(path: &str, name: &DisplayName, body: &Body) -> Card {

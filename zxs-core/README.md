@@ -23,6 +23,8 @@ cargo install --locked --path .
 
 大文件需要分块时可显式选择[断点上传](docs/guides/resumable-upload.md)；不是默认传输方式。
 
+原操作冲突时可[手动归档并从当前分支头继续](docs/guides/conflict-archive.md)，旧文件不会被替换。
+
 ## 本机代码包
 
 `bundle-diff /绝对/目录` 与 `bundle-pack /绝对/目录 /绝对/新文件.zip` 都用离线前缀。支持根 `.zxsignore`；当前只比对和生成标准 Deflate ZIP，不解包或提交 ZIP。

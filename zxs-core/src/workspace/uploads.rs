@@ -1,6 +1,6 @@
 //! Keep resumable transmission tied to one frozen local original and one durable remote prefix.
 use super::{
-    BasicLane, Id, Intent, Lease, Lookup, Original, Resolution, Source, Workspace, db_basis,
+    ARCHIVED, BasicLane, Id, Intent, Lease, Lookup, Original, Resolution, Source, Workspace,
     held_lease_at, payload,
 };
 use crate::{
@@ -150,14 +150,12 @@ impl Workspace {
     fn pin_upload(&self, original: &mut Original, pin: Checkpoint, lease: &Lease) -> Result<()> {
         let (retained, phase, _) = self.original(&original.intent.operation_id)?;
         let eligible = phase == "prepared" || (phase == "attempted" && original.upload.is_some());
-        if retained != *original
-            || !eligible
-            || db_basis(&self.db, &original.path)? != original.prior
-        {
+        if retained != *original || !eligible {
             return Err(invalid(
                 "local original is not eligible for this upload transition",
             ));
         }
+        self.require_live_write_basis(original)?;
         pin.validate(original.intent.body.length, "attempted")?;
         if phase == "attempted" && original.upload.as_ref() == Some(&pin) {
             return held_lease_at(&self.root, self.db_id, lease);
@@ -254,7 +252,7 @@ impl Workspace {
         let guard = || self.upload_guard(basic, &original, &lease);
         let peer = Exchange::login(basic, &guard).await?;
         let found = peer.receipt(&original.intent, &guard).await?;
-        if found != Lookup::Absent || phase == "conflict" {
+        if found != Lookup::Absent || matches!(phase.as_str(), "conflict" | ARCHIVED) {
             return Ok(UploadObservation::Receipt(
                 self.settle(&original, found, &lease)?,
             ));

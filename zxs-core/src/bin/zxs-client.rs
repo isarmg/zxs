@@ -32,7 +32,8 @@ fn run() -> zxs_core::Result<()> {
          zxs-client HTTPS_ORIGIN ACCOUNT /absolute/private-state init|reconcile|list [after]|detail ID|checkout ID BRANCH /new/file|status OP|send OP\n\
          zxs-client --receipt-session HTTPS_ORIGIN ACCOUNT /absolute/private-state reconcile|status OP\n\
          zxs-client --payload-session HTTPS_ORIGIN ACCOUNT /absolute/private-state slice /mapped/file START LENGTH /new/output\n\
-         zxs-client --upload-session HTTPS_ORIGIN ACCOUNT /absolute/private-state status|send OP".into()
+         zxs-client --upload-session HTTPS_ORIGIN ACCOUNT /absolute/private-state status|send OP\n\
+         zxs-client /absolute/private-state archive-conflict OP|archived-conflicts".into()
     }
 
     fn ask(word: &str) -> Result<bool> {
@@ -56,6 +57,9 @@ fn run() -> zxs_core::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "--payload-session") {
         return run_payload(&args);
+    }
+    if conflict::run_if_selected(&args, ask)? {
+        return Ok(());
     }
     if let Some((directory, op)) = cancel_prepared_args(&args)? {
         // This branch does not touch other receipts or open any network session.
@@ -225,6 +229,9 @@ fn run() -> zxs_core::Result<()> {
     })
 }
 
+#[cfg(target_os = "linux")]
+#[path = "conflict/cli.rs"]
+mod conflict;
 #[cfg(target_os = "linux")]
 #[path = "upload/cli.rs"]
 mod upload;

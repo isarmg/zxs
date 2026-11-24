@@ -1,4 +1,5 @@
 //! Local mappings, frozen unconfirmed payloads, and verified R3 receipt reconciliation.
+use self::conflicts::{ARCHIVE_VERSION, ARCHIVED};
 use crate::{
     Result, bundle, invalid,
     native::{self, Folder, Lease, Source, Stamp},
@@ -23,8 +24,12 @@ use zeroize::Zeroizing;
 
 mod browse;
 mod checkout;
+mod conflicts;
+mod prepared;
 mod uploads;
 pub use checkout::CheckoutChoice;
+pub use conflicts::ConflictArchiveChoice;
+pub use prepared::PreparedSubmission;
 pub use uploads::{UploadObservation, UploadSelection};
 
 const DB: &str = "workspace.sqlite";
@@ -68,6 +73,8 @@ struct Original {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     upload: Option<uploads::Checkpoint>,
 }
+
+type OriginalRecord = (String, String, String, String, Option<String>);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Resolution {
@@ -246,10 +253,7 @@ impl Workspace {
             let principal = match enrolled {
                 Some(value) => value.clone(),
                 None => {
-                    let (app, version) = schema_version(&db)?;
-                    if (app, version) != (APP, VERSION) {
-                        return Err(invalid("not independent ZXS Rust client state"));
-                    }
+                    checked_schema(&db)?;
                     let profile: String =
                         db.query_row("SELECT record FROM profile WHERE id=1", [], |r| r.get(0))?;
                     serde_json::from_str::<Principal>(&profile)?
@@ -508,6 +512,7 @@ impl Workspace {
         }
         self.validate()?;
         self.normal_path(Path::new(&review.path))?;
+        conflicts::require_fresh_path(&self.db, &review.path, review.prior.as_ref())?;
         if self.basis(Path::new(&review.path))? != review.prior
             || review.source.scan(sink())? != review.body
         {
@@ -543,6 +548,7 @@ impl Workspace {
                 "an unresolved original already owns this file or container",
             ));
         }
+        conflicts::require_fresh_path(&self.db, &review.path, review.prior.as_ref())?;
         let mut pending = self.root.unlinked()?;
         if review.source.scan(&mut pending)? != review.body {
             return Err(invalid("source changed after review"));
@@ -564,6 +570,18 @@ impl Workspace {
         let db_id = self.db_id;
         let recheck = || held_lease_at(root, db_id, lease);
         recheck()?;
+        let verify_slot = |db: &Connection| -> Result<()> {
+            if db_basis(db, &review.path)? != review.prior
+                || unresolved_selection(db, &intent.container_id, &review.path)?
+                || conflicts::archived_id(db, &intent.operation_id)?
+            {
+                return Err(invalid(
+                    "the original local mapping or pending slot changed",
+                ));
+            }
+            conflicts::require_fresh_path(db, &review.path, review.prior.as_ref())
+        };
+        verify_slot(&self.db)?;
         let name = payload(&intent.operation_id);
         if let Err(error) = root.publish_guarded(name.as_ref(), pending, &intent.body, recheck) {
             return Err(format!("original {} may have local staged bytes; no network sent, retain its evidence: {error}",
@@ -582,13 +600,7 @@ impl Workspace {
             let tx = self
                 .db
                 .transaction_with_behavior(TransactionBehavior::Immediate)?;
-            if db_basis(&tx, &review.path)? != review.prior
-                || unresolved_selection(&tx, &intent.container_id, &review.path)?
-            {
-                return Err(invalid(
-                    "the original local mapping or pending slot changed",
-                ));
-            }
+            verify_slot(&tx)?;
             recheck()?;
             tx.execute("INSERT INTO original(op,container,path,record,phase) VALUES(?1,?2,?3,?4,'prepared')",
                        params![intent.operation_id.as_str(), intent.container_id.as_str(), &review.path,
@@ -725,11 +737,7 @@ impl Workspace {
             String,
             String,
             Option<String>,
-        ) = self.db.query_row(
-            "SELECT container,path,record,phase,receipt FROM original WHERE op=?1",
-            [op.as_str()],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-        )?;
+        ) = self.original_row(op)?;
         let original: Original = serde_json::from_str(&raw)?;
         self.normal_path(Path::new(&original.path))?;
         if &original.intent.operation_id != op
@@ -742,10 +750,15 @@ impl Workspace {
         }
         original.intent.validate()?;
         if let Some(pin) = &original.upload {
-            pin.validate(original.intent.body.length, &phase)?;
+            let saved_phase = if phase == ARCHIVED {
+                "conflict"
+            } else {
+                &phase
+            };
+            pin.validate(original.intent.body.length, saved_phase)?;
         }
         let sequence = receipt.map(|s| s.parse::<u64>()).transpose()?;
-        if (phase == "confirmed") != sequence.is_some()
+        if (phase != ARCHIVED && (phase == "confirmed") != sequence.is_some())
             || sequence.is_some_and(|n| {
                 n <= original.intent.seen_sequence
                     || n == u64::MAX
@@ -755,6 +768,43 @@ impl Workspace {
             return Err(invalid("original local receipt record disagrees"));
         }
         Ok((original, phase, sequence))
+    }
+
+    fn original_row(&self, op: &Id) -> Result<OriginalRecord> {
+        let supports_archive = conflicts::has_archive(&self.db)?;
+        let row = self.read_original_record(op, supports_archive)?;
+        if row.is_none() && !supports_archive && conflicts::has_archive(&self.db)? {
+            // The first archive may have moved the row after our v1 schema
+            // observation but before reading the active table.
+            return self
+                .read_original_record(op, true)?
+                .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows.into());
+        }
+        row.ok_or_else(|| rusqlite::Error::QueryReturnedNoRows.into())
+    }
+
+    fn read_original_record(
+        &self,
+        op: &Id,
+        supports_archive: bool,
+    ) -> Result<Option<OriginalRecord>> {
+        let mut sql = self.db.prepare(if supports_archive {
+            "SELECT container,path,record,phase,receipt FROM original WHERE op=?1
+             UNION ALL SELECT container,path,record,'archived_conflict',receipt FROM archived_original WHERE op=?1"
+        } else {
+            "SELECT container,path,record,phase,receipt FROM original WHERE op=?1"
+        })?;
+        let mut rows = sql.query([op.as_str()])?;
+        let Some(r) = rows.next()? else {
+            return Ok(None);
+        };
+        let value = (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?);
+        if rows.next()?.is_some() {
+            return Err(invalid(
+                "the same operation exists in both active and archived evidence",
+            ));
+        }
+        Ok(Some(value))
     }
 
     /// Retry only local cleanup of independently confirmed receipts; never has a transport handle.
@@ -877,8 +927,12 @@ impl Workspace {
         op: &Id,
         confirmed: bool,
     ) -> Result<Resolution> {
-        self.submit_using(BasicLane::Legacy(session), op, confirmed)
-            .await
+        self.submit_using(
+            BasicLane::Legacy(session),
+            prepared::FullSend::Existing(op),
+            confirmed,
+        )
+        .await
     }
 
     pub async fn submit_existing(
@@ -887,14 +941,18 @@ impl Workspace {
         op: &Id,
         confirmed: bool,
     ) -> Result<Resolution> {
-        self.submit_using(BasicLane::Existing(session), op, confirmed)
-            .await
+        self.submit_using(
+            BasicLane::Existing(session),
+            prepared::FullSend::Existing(op),
+            confirmed,
+        )
+        .await
     }
 
     async fn submit_using(
         &mut self,
         lane: BasicLane<'_>,
-        op: &Id,
+        selection: prepared::FullSend<'_>,
         confirmed: bool,
     ) -> Result<Resolution> {
         if !confirmed {
@@ -903,12 +961,8 @@ impl Workspace {
         let before_wire = || self.validate_basic_lane(lane);
         before_wire()?;
         let session = lane.requests(&before_wire);
-        let (initial, _, _) = self.original(op)?;
-        let lease = self.hold_container(&initial.intent.container_id)?;
-        let (original, phase, prior) = self.original(op)?;
-        if original != initial {
-            return Err(invalid("the selected original record changed"));
-        }
+        let op = selection.operation();
+        let (original, phase, prior, lease) = selection.hold(self)?;
         if let Some(sequence) = prior {
             return self.settle(&original, Lookup::Confirmed { sequence }, &lease);
         }
@@ -924,7 +978,9 @@ impl Workspace {
         }
         let receipt = session
             .lookup(&original.intent, || {
-                if self.original(op)?.0 != original {
+                let (current, phase, _) = self.original(op)?;
+                selection.require(&current, &phase)?;
+                if current != original {
                     return Err(invalid(
                         "the selected original changed before submit preflight",
                     ));
@@ -937,11 +993,7 @@ impl Workspace {
             return self.settle(&original, receipt, &lease); // Not permission to send.
         }
         held_lease_at(&self.root, self.db_id, &lease)?;
-        if db_basis(&self.db, &original.path)? != original.prior {
-            return Err(invalid(
-                "original mapping no longer agrees; only look up the prior operation",
-            ));
-        }
+        self.require_live_write_basis(&original)?;
         let source = self.root.source(Path::new(&payload(op)))?;
         if source.before != original.sealed || source.scan(sink())? != original.intent.body {
             return Err(invalid(
@@ -949,7 +1001,7 @@ impl Workspace {
             ));
         }
         let file = source.file.try_clone()?;
-        self.arm_attempt(&original, &source, &lease)?;
+        self.arm_attempt_for(&original, &source, &lease, selection)?;
         let reply = session
             .save_exact(&original.intent, file, || {
                 // H2 readiness may suspend; recheck all custody at the actual wire boundary.
@@ -960,18 +1012,41 @@ impl Workspace {
         self.settle(&original, reply, &lease)
     }
 
+    fn require_live_write_basis(&self, original: &Original) -> Result<()> {
+        if db_basis(&self.db, &original.path)? != original.prior {
+            return Err(invalid(
+                "original mapping no longer agrees; only look up the prior operation",
+            ));
+        }
+        conflicts::require_fresh_path(&self.db, &original.path, original.prior.as_ref())
+    }
+
+    #[cfg(test)]
     fn arm_attempt(&self, original: &Original, source: &Source, lease: &Lease) -> Result<()> {
+        self.arm_attempt_for(
+            original,
+            source,
+            lease,
+            prepared::FullSend::Existing(&original.intent.operation_id),
+        )
+    }
+
+    fn arm_attempt_for(
+        &self,
+        original: &Original,
+        source: &Source,
+        lease: &Lease,
+        selection: prepared::FullSend<'_>,
+    ) -> Result<()> {
         source.check()?;
         let (retained, phase, _) = self.original(&original.intent.operation_id)?;
-        if original.upload.is_some()
-            || retained != *original
-            || !can_arm_original(&phase)
-            || db_basis(&self.db, &original.path)? != original.prior
-        {
+        selection.require(&retained, &phase)?;
+        if original.upload.is_some() || retained != *original || !can_arm_original(&phase) {
             return Err(invalid(
                 "authorization, conflict state or original basis changed before arming",
             ));
         }
+        self.require_live_write_basis(original)?;
         held_lease_at(&self.root, self.db_id, lease)?;
         if self.db.execute(
             "UPDATE original SET phase='attempted' WHERE op=?1 AND record=?2 AND phase=?3",
@@ -991,14 +1066,12 @@ impl Workspace {
     fn check_attempt(&self, original: &Original, source: &Source, lease: &Lease) -> Result<()> {
         source.check()?;
         let (again, phase, _) = self.original(&original.intent.operation_id)?;
-        if again != *original
-            || phase != "attempted"
-            || db_basis(&self.db, &original.path)? != original.prior
-        {
+        if again != *original || phase != "attempted" {
             return Err(invalid(
                 "authorization or original basis changed before POST",
             ));
         }
+        self.require_live_write_basis(original)?;
         held_lease_at(&self.root, self.db_id, lease)
     }
 
@@ -1021,6 +1094,9 @@ impl Workspace {
             status = Lookup::Confirmed { sequence };
         }
         let status = preserve_original_conflict(&phase, status);
+        if phase == ARCHIVED {
+            return self.settle_archived(original, status, prior, recheck);
+        }
         if let Lookup::Confirmed { sequence } = status {
             if prior.is_none() {
                 let tx = self
@@ -1310,8 +1386,9 @@ fn check_workspace_header(file: &Source, require_rollback: bool) -> Result<()> {
 }
 
 fn validate_workspace_header(header: &[u8; 100], require_rollback: bool) -> Result<()> {
+    let version = i64::from(u32::from_be_bytes(header[60..64].try_into()?));
     if &header[..16] != b"SQLite format 3\x00"
-        || header[60..64] != (VERSION as u32).to_be_bytes()
+        || !matches!(version, VERSION | ARCHIVE_VERSION)
         || header[68..72] != (APP as u32).to_be_bytes()
     {
         return Err(invalid(
@@ -1358,7 +1435,7 @@ fn can_arm_original(phase: &str) -> bool {
 }
 
 fn preserve_original_conflict(phase: &str, observation: Lookup) -> Lookup {
-    if phase == "conflict" && !matches!(observation, Lookup::Confirmed { .. }) {
+    if matches!(phase, "conflict" | ARCHIVED) && !matches!(observation, Lookup::Confirmed { .. }) {
         Lookup::Conflict
     } else {
         observation
@@ -1387,9 +1464,7 @@ fn held_lease_at(root: &Folder, db_id: (u64, u64), lease: &Lease) -> Result<()> 
 }
 
 fn require_profile(db: &Connection, principal: &Principal) -> Result<()> {
-    if schema_version(db)? != (APP, VERSION) {
-        return Err(invalid("not independent ZXS Rust client state"));
-    }
+    checked_schema(db)?;
     let profile: String =
         db.query_row("SELECT record FROM profile WHERE id=1", [], |r| r.get(0))?;
     if &serde_json::from_str::<Principal>(&profile)? != principal {
@@ -1400,11 +1475,13 @@ fn require_profile(db: &Connection, principal: &Principal) -> Result<()> {
     Ok(())
 }
 
-fn schema_version(db: &Connection) -> Result<(i64, i64)> {
-    Ok((
-        db.pragma_query_value(None, "application_id", |r| r.get(0))?,
-        db.pragma_query_value(None, "user_version", |r| r.get(0))?,
-    ))
+fn checked_schema(db: &Connection) -> Result<i64> {
+    let app: i64 = db.pragma_query_value(None, "application_id", |r| r.get(0))?;
+    let version = db.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if app != APP || !matches!(version, VERSION | ARCHIVE_VERSION) {
+        return Err(invalid("not independent ZXS Rust client state"));
+    }
+    Ok(version)
 }
 
 fn unresolved_selection(db: &Connection, container: &Id, path: &str) -> Result<bool> {

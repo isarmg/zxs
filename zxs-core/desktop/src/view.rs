@@ -435,6 +435,8 @@ impl Desktop {
             Effect::Checkout => "Confirm exact checkout",
             Effect::Freeze => "Freeze this exact full file locally",
             Effect::Send => "Submit this original operation",
+            Effect::CancelPrepared => "Discard this exact local freeze",
+            Effect::ArchiveConflict => "Archive this exact conflict locally",
             Effect::FirstUpload => "Submit as a new remote file",
             Effect::FirstResumable => "Submit a new file with resumable upload",
             Effect::Resume => "Continue this exact frozen upload",
@@ -449,12 +451,30 @@ impl Desktop {
             }
             CardTarget::First(name) => {
                 ui.label(format!("New remote name: {name}"));
-                ui.label(format!(
-                    "Destination account: {} · {}",
-                    self.view.authority, self.view.account
-                ));
+                if let Some(intent) = &card.intent {
+                    ui.label(format!("Container: {}", intent.container_id));
+                }
+                if self.view.connected {
+                    ui.label(format!(
+                        "Destination account: {} · {}",
+                        self.view.authority, self.view.account
+                    ));
+                }
                 if card.intent.is_none() {
                     ui.label("Submit will stage this exact full file and use one original operation. The ordinary file is not replaced.");
+                }
+            }
+            CardTarget::RecordedConflict => {
+                if let Some(intent) = &card.intent {
+                    ui.label(format!("Container: {}", intent.container_id));
+                    ui.label(format!("Original branch: {}", intent.target.branch()));
+                    if let Some(node) = intent.target.expected_base() {
+                        ui.label(format!("Original base node: {node}"));
+                        ui.label(format!("Container revision: {}", intent.seen_sequence));
+                    }
+                    if let zxs_core::r3::Target::FirstMain { name } = &intent.target {
+                        ui.label(format!("Original remote name: {name}"));
+                    }
                 }
             }
         }
@@ -463,7 +483,18 @@ impl Desktop {
         if let Some(intent) = &card.intent {
             ui.label(format!("Operation: {}", intent.operation_id));
             ui.label(format!("New node: {}", intent.node_id));
-            ui.label("Only authoritative absence of this exact receipt permits sending these frozen bytes.");
+            match card.effect {
+                Effect::CancelPrepared => {
+                    ui.label("Discard only the local frozen copy. This keeps the working file and its mapping and does not use the network.");
+                }
+                Effect::ArchiveConflict => {
+                    ui.label("Releases the local pending slot without deleting the freeze, changing the working file or mapping, or contacting the server.");
+                    ui.label("The first archive updates this private workspace. Older clients cannot open the updated workspace.");
+                }
+                _ => {
+                    ui.label("Only authoritative absence of this exact receipt permits sending these frozen bytes.");
+                }
+            }
         }
         if matches!(card.effect, Effect::FirstResumable | Effect::Resume) {
             ui.label("Checks the original receipt first, then uploads only the remaining chunks and publishes. No full-file fallback.");
@@ -491,6 +522,9 @@ impl Desktop {
             .add_enabled(
                 !self.waiting && previously_shown && card.claim.live(),
                 egui::Button::new(match card.effect {
+                    Effect::Send => "Submit this frozen file",
+                    Effect::CancelPrepared => "Discard frozen copy",
+                    Effect::ArchiveConflict => "Archive this conflict",
                     Effect::FirstUpload => "Submit new file",
                     Effect::FirstResumable => "Submit new file with resume",
                     Effect::Resume => "Continue and publish this original",
@@ -684,7 +718,7 @@ impl Desktop {
                     if ui.button("Choose file").clicked() {
                         pick = Some(Field::WorkingFile);
                     }
-                    if !self.view.fresh_send && (ui.button("Review full change").clicked() || field_enter(&edit, enter)) {
+                    if self.view.fresh_send.is_none() && (ui.button("Review full change").clicked() || field_enter(&edit, enter)) {
                         if absolute_file(&self.working) {
                             action = Some(Action::Review(self.working.as_str().into()));
                         } else {
@@ -692,8 +726,9 @@ impl Desktop {
                         }
                     }
                 });
-                if ui.add_enabled(self.view.connected && self.view.fresh_send, egui::Button::new("Review newly frozen original for submit")).clicked() {
-                    action = Some(Action::ReviewSend);
+                if let Some(op) = &self.view.fresh_send
+                    && ui.add_enabled(self.view.connected, egui::Button::new("Review newly frozen original for submit")).clicked() {
+                    action = Some(Action::ReviewSend(op.clone()));
                 }
                 ui.heading("Pending originals");
                 if let Some(result) = &self.view.resolution {
@@ -706,7 +741,7 @@ impl Desktop {
                     });
                     if result.local_cleanup_pending { ui.label("Confirmed receipt; local cleanup still pending."); }
                     if self.view.connected && !matches!(result.status, Lookup::Confirmed { .. })
-                        && !self.view.pending.contains(&result.operation)
+                        && self.view.pending_row(&result.operation).is_none()
                         && ui.button("Check this original receipt").clicked()
                     {
                         action = Some(Action::Lookup(result.operation.clone()));
@@ -721,16 +756,27 @@ impl Desktop {
                     }
                 });
                 egui::ScrollArea::vertical().id_salt("pending").max_height(120.0).show(ui, |ui| {
-                    for op in &self.view.pending {
-                        ui.horizontal(|ui| {
-                            ui.label(op.as_str());
-                            if ui.add_enabled(self.view.connected, egui::Button::new("Check original receipt")).clicked() {
-                                action = Some(Action::Lookup(op.clone()));
-                            }
-                            if self.view.connected && self.view.resume_candidates.contains(op)
-                                && ui.button("Review resumable upload").clicked() {
-                                action = Some(Action::ReviewResume(op.clone()));
-                            }
+                    for row in &self.view.pending {
+                        let op = &row.operation;
+                        ui.push_id(op.as_str(), |ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.label(op.as_str());
+                                if ui.add_enabled(self.view.connected, egui::Button::new("Check original receipt")).clicked() {
+                                    action = Some(Action::Lookup(op.clone()));
+                                }
+                                if self.view.connected && row.send_frozen && ui.button("Review full-file submit").clicked() {
+                                    action = Some(Action::ReviewSend(op.clone()));
+                                }
+                                if self.view.connected && row.resume && ui.button("Review resumable upload").clicked() {
+                                    action = Some(Action::ReviewResume(op.clone()));
+                                }
+                                if row.cancel_frozen && ui.button("Review discard freeze").clicked() {
+                                    action = Some(Action::ReviewCancelPrepared(op.clone()));
+                                }
+                                if row.archive_conflict && ui.button("Review archive conflict").clicked() {
+                                    action = Some(Action::ReviewArchiveConflict(op.clone()));
+                                }
+                            });
                         });
                     }
                 });

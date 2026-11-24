@@ -1,6 +1,7 @@
 //! Held before confirmation, then one exact read-only remote checkout.
 use super::{
-    BasicLane, Basis, Workspace, db_basis, held_database_at, require_profile, unresolved_path,
+    BasicLane, Basis, Workspace, conflicts, db_basis, held_database_at, require_profile,
+    unresolved_path,
 };
 use crate::{
     Result, invalid,
@@ -17,6 +18,7 @@ pub struct CheckoutChoice {
     session: Arc<()>,
     selected: OriginalHead,
     target: Destination,
+    archive_generation: i64,
 }
 
 impl CheckoutChoice {
@@ -95,7 +97,10 @@ struct Destination {
 
 impl Destination {
     fn require_vacant(&self, db: &Connection) -> Result<()> {
-        if db_basis(db, &self.path)?.is_some() || unresolved_path(db, &self.path)? {
+        if db_basis(db, &self.path)?.is_some()
+            || unresolved_path(db, &self.path)?
+            || conflicts::archived_path(db, &self.path)?
+        {
             return Err(invalid(
                 "local file already owns a workspace binding or an unresolved original",
             ));
@@ -134,8 +139,10 @@ impl Workspace {
     ) -> Result<CheckoutChoice> {
         self.validate_basic_lane(BasicLane::Existing(session))?;
         let target = self.checkout_destination(output)?;
+        let archive_generation = conflicts::latest_generation(&self.db, container)?;
         let guard = || {
             self.validate_basic_lane(BasicLane::Existing(session))?;
+            conflicts::require_generation(&self.db, container, archive_generation)?;
             target.require_vacant(&self.db)
         };
         let (detail, node) = session
@@ -148,6 +155,7 @@ impl Workspace {
             session: Arc::clone(session.checkout_session()),
             selected,
             target,
+            archive_generation,
         })
     }
 
@@ -168,6 +176,11 @@ impl Workspace {
         let guard = || {
             choice.require_session(session)?;
             self.validate_basic_lane(BasicLane::Existing(session))?;
+            conflicts::require_generation(
+                &self.db,
+                &choice.basis().container,
+                choice.archive_generation,
+            )?;
             choice.target.require_vacant(&self.db)
         };
         guard()?;
@@ -196,7 +209,7 @@ impl Workspace {
         choice.selected.require_detail(&final_detail)?;
         guard()?;
         let basis = basis.clone();
-        self.publish_checkout(ready, basis)
+        self.publish_checkout(ready, basis, choice.archive_generation)
     }
 
     pub async fn checkout(
@@ -228,17 +241,29 @@ impl Workspace {
         branch: &Branch,
         file: &Path,
     ) -> Result<Basis> {
-        let before_wire = || self.validate_basic_lane(lane);
-        before_wire()?;
-        let session = lane.requests(&before_wire);
+        self.validate_basic_lane(lane)?;
         let target = self.checkout_destination(file)?;
+        let archive_generation = conflicts::latest_generation(&self.db, container)?;
+        let before_wire = || {
+            self.validate_basic_lane(lane)?;
+            conflicts::require_generation(&self.db, container, archive_generation)
+        };
+        let session = lane.requests(&before_wire);
         let (detail, node) = session.selected_head(container, branch).await?;
         let mut staged = target.parent.unlinked()?;
         session.download(container, &node, &mut staged).await?;
-        self.validate_basic_lane(lane)?;
-        let basis = OriginalHead::new(container, branch, &detail, node).basis;
-        let ready = target.verify(&staged, &basis)?;
-        self.publish_checkout(ready, basis)
+        before_wire()?;
+        let selected = OriginalHead::new(container, branch, &detail, node);
+        let ready = target.verify(&staged, &selected.basis)?;
+        if archive_generation != 0 {
+            // Qualification is a new checkout, not a reassignment of old
+            // working bytes. Re-prove the chosen head after the body readback.
+            let current = session
+                .detail_at(container, Some(selected.basis.seen_sequence))
+                .await?;
+            selected.require_detail(&current)?;
+        }
+        self.publish_checkout(ready, selected.basis, archive_generation)
     }
 
     fn checkout_destination(&self, file: &Path) -> Result<Destination> {
@@ -257,7 +282,12 @@ impl Workspace {
         Ok(target)
     }
 
-    fn publish_checkout(&mut self, ready: StagedCheckout<'_>, basis: Basis) -> Result<Basis> {
+    fn publish_checkout(
+        &mut self,
+        ready: StagedCheckout<'_>,
+        basis: Basis,
+        archive_generation: i64,
+    ) -> Result<Basis> {
         // Local-only namespace/basis transaction. One exact no-replace link;
         // after a possible effect neither retry nor try to delete the new name.
         let StagedCheckout { target, output } = ready;
@@ -274,6 +304,7 @@ impl Workspace {
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let before_link = || {
             database(&tx)?;
+            conflicts::require_generation(&tx, &basis.container, archive_generation)?;
             target.require_vacant(&tx)
         };
         before_link()?;
@@ -293,6 +324,7 @@ impl Workspace {
                 "INSERT INTO basis VALUES(?1,?2)",
                 params![&target.path, serde_json::to_string(&basis)?],
             )?;
+            conflicts::stamp_checkout(&tx, &target.path, &basis.container, archive_generation)?;
             recheck()?;
             Ok(())
         })();
