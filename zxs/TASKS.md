@@ -6,6 +6,7 @@
 
 | 验证范围 | 证据和限制 |
 | --- | --- |
+| [跨 DATA 离线移动](../helper/docs/guides/offline-data-move.md) | [CI通过] [`559820a` ZXS 源码作业](https://github.com/isarmg/zxs/actions/runs/45396945893/job/138455127052)。另见两项目源码与合并相同的[隔离 ext4 验收](../helper/TASKS.md#安装后的普通迁移)，未验安装后故障注入或掉电。 |
 | 代码检查与普通 Linux 夹具 | [CI通过] [`85a8988` ZXS 源码作业](https://github.com/isarmg/zxs/actions/runs/45331407209/job/138233242638)：严格 Clippy、格式检查、78 个单元及 2 个入口用例通过；7 个需另配环境的用例未运行。 |
 | 固定批量导入 | [CI通过] [`7f249da` ZXS](https://github.com/isarmg/zxs/actions/runs/45332479121/job/138236653813)与 [Helper](https://github.com/isarmg/zxs/actions/runs/45332479121/job/138236653527)的严格 Clippy、原生测试及格式检查。只证明各自的测试范围，未做跨进程故障恢复。 |
 | [正文 Range 读取](docs/specs/payload-range.md) | [CI通过] [`090e76d` ZXS 源码作业](https://github.com/isarmg/zxs/actions/runs/45337302724/job/138252297285)的 7 个用例覆盖 Range 解析、原 R3 路由隔离、鉴权和响应边界。未验安装后的真实 HTTPS/2 读回。 |

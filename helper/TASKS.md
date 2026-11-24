@@ -7,12 +7,21 @@
 
 | 提交和范围 | 状态 | 可追溯证据 |
 | --- | --- | --- |
+| `559820a`，跨 DATA 移动 | [CI通过] | [Helper 源码](https://github.com/isarmg/zxs/actions/runs/45396945893/job/138455126430)、[ZXS 源码](https://github.com/isarmg/zxs/actions/runs/45396945893/job/138455127052)及[独立 ELF 构建](https://github.com/isarmg/zxs/actions/runs/45396945881/job/138455126356)。中断恢复见源码夹具，不是安装后故障注入。 |
 | `7f249da`，Helper 与 ZXS 独立默认包 | [CI通过] | [Helper](https://github.com/isarmg/zxs/actions/runs/45332479121/job/138236653527)、[ZXS](https://github.com/isarmg/zxs/actions/runs/45332479121/job/138236653813)严格 Clippy、原生测试与第一方格式检查。 |
 | `7f249da`，批量导入的独立原生用例 | [CI通过] | 同次两项 Rust 作业覆盖计划上限/封存、原回执优先状态、逐项 ACK、输出失败、结束包和非法票据拒绝，不是两进程端到端。 |
 | `7f249da`，默认独立 ELF 构建 | [CI通过] | [Linux 配对构建记录](https://github.com/isarmg/zxs/actions/runs/45332479104/job/138236653339)。它构建并检查两份独立 ELF，不发布或安装它们。 |
 | `ca2dc248`，单容器离线核验 | [CI通过] | [ZXS 7 项](https://github.com/isarmg/zxs/actions/runs/45336495507/job/138249700531)、[Helper 4 项](https://github.com/isarmg/zxs/actions/runs/45336495507/job/138249700205)覆盖 DATA/回收原件、正文摘要与终点、原角色绑定及结果帧。 |
 | 较早的默认构建和源码检查 | [CI通过] | `85a8988` 的两项作业见[交付](RELEASE.md)；保留 `7d86855` 的[默认构建](https://github.com/isarmg/zxs/actions/runs/45223533959)和[原生作业](https://github.com/isarmg/zxs/actions/runs/45223533974)作为历史证据，不归给当前源码。 |
 | 独立依赖材料 | [仅静态] | [依赖](DEPENDENCIES.md)保留 26 份锁定上游源码、许可与对应材料，没有当前发行制品的归属结论。 |
+
+### 安装后的普通迁移
+
+在无网卡 Ubuntu QEMU 客机的一次性 ext4 卷上，安装由 [`493661f`](https://github.com/isarmg/zxs/commit/493661ff1f1538edc82f53a969c609a2a0349557) 构建的配套程序。
+其 `helper` 和 `zxs` 源码目录与 [合并 `559820a`](https://github.com/isarmg/zxs/commit/559820a8042e3c05fc413503f407846a9e70a22d) 逐字节一致。
+
+通过[普通命令](docs/guides/offline-data-move.md)迁移后，核对了两个分支、三个版本的正文及原业务回执，并确认了同号历史重查。
+该客机运行未注入中断，未做掉电验证，也未使用现有磁盘。
 
 ## [仅静态] 功能的目标环境缺口
 
@@ -23,6 +32,7 @@
 | [源目录预检](docs/guides/import-preflight.md) | 来源不重叠，权限不足/原件变化不报部分结果；真实已登记目标名称必须按原拼写核对。 |
 | [导入与恢复](docs/guides/offline-imports.md) | 真实调用一个固定配套 ZXS 进程。覆盖原回执存在而源已缺失、输出断开不推进、部分持久化后按原票重放、目标满与换盘；核验结束包、EOF、退出和来源未变。 |
 | [单容器核验](docs/guides/offline-verify.md) | 在隔离实盘核对 DATA 与回收盘重挂后的同一原件；源码用例未覆盖真实重挂。 |
+| [移动中断与介质恢复](docs/specs/offline-data-move.md#待验) | 在隔离介质验证安装后中断、掉电与原盘重挂；普通客机迁移与源码夹具不替代这些验证。 |
 | [服务单元预览](docs/guides/headless-offline.md#可选服务单元预览)、[可选内嵌发布](docs/guides/embedded-image.md) | 实际挂载顺序与前台启动分别验证；另验完整 ELF、无覆盖发布、冷启动、复建一致性与发行材料。默认构建证据不覆盖内嵌版。 |
 
 下次获得运行授权后，用独立临时数据与明确准入的隔离挂载。
@@ -30,7 +40,6 @@
 
 ## [设计中] 尚无完整入口
 
-- 跨 DATA 盘离线迁移整容器。先核验完整目标并确认原路由已持久切换，再考虑源清理或退盘；容器身份和历史保持不变。
 - 一次核验全部容器；当前只支持指定一个容器。
 - 原目录标签和显式 ZIP 打包。当前文件选择、名称映射和批量导入不自动打包。
 - 五类公共入口收敛。可选 ELF 发布和现有命令拼写仍保留，最终入口尚未完成。

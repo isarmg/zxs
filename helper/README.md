@@ -15,6 +15,8 @@ helper setup-headless new SYSTEM RECYCLE DATA [DATA ...] LOGIN
 
 [离线维护指南](docs/guides/headless-offline.md)包含系统服务单元文本预览、加盘、初始化已登记空盘、退空盘和密码重置。维护前停业务服务，用原账号运行。首设后以同一账号运行 `/zxs/bin/zxs --listen IP:PORT`。
 
+把一个活动容器移到另一块已登记的 DATA，见[停机移盘指南](docs/guides/offline-data-move.md)。
+
 ## 导入外部文件
 
 [文件导入指南](docs/guides/offline-imports.md)包含单文件、明确映射的批量、整目录选择及重放示例。先准备、审阅并同步保存原计划，再离线应用；部分完成时只用同一份原计划重试。不会覆盖同名容器，不删除原件，不就地接管非空盘。
