@@ -16,6 +16,9 @@ use std::{
 use zeroize::Zeroizing;
 
 mod add_data;
+#[cfg(test)]
+#[path = "../../tests/maintenance/disk_move_evidence.rs"]
+mod disk_move_evidence;
 pub(super) mod import_command;
 mod import_one;
 mod init_data;
