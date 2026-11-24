@@ -7,22 +7,22 @@
 )))]
 compile_error!("helper currently supports Linux x86_64 (LP64) only");
 
+#[cfg(any(test, feature = "embedded-zxs"))]
+mod asset_digest;
 mod block_tools;
 #[cfg(test)]
 #[path = "../tests/build/dependency_document.rs"]
 mod dependency_document;
-mod disk_web;
 #[cfg(any(test, feature = "embedded-zxs"))]
 mod embedded_image;
+#[cfg(any(test, feature = "embedded-zxs"))]
 mod foreground;
 mod fresh_password;
 mod fresh_random;
-mod fs_tools;
 mod hardware;
 mod headless_setup;
 mod headless_setup_command;
 mod inspect;
-mod isolated_group;
 mod local_worker;
 mod maintenance;
 mod path_rules;
@@ -31,21 +31,18 @@ pub(crate) mod product_layout;
 #[cfg(test)]
 #[path = "../tests/common/mod.rs"]
 mod test_area;
-mod volume_images;
 
 use pinned::storage_status::Selection;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use volume_images::CheckFormat;
 
 const USAGE: &str = "helper: local diagnostics and explicit offline pool installation (Linux x86_64)\n\
 usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper hardware\n  helper disk-web [--fat32-copy|--exfat-copy|--ext4-copy|--xfs-copy|--ntfs-copy|--btrfs-copy IMAGE --sha256 HEX]\n  helper disk-web --storage-roots --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper fs-tools [FORMAT [--sha256 HEX]]\n  helper check-fat32-copy IMAGE --sha256 HEX\n  helper check-exfat-copy IMAGE --sha256 HEX\n  helper check-ext4-copy IMAGE --sha256 HEX\n  helper repair-ext4-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-exfat-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper repair-fat32-copy [web] IMAGE --sha256 HEX --output NEW_DIR\n  helper check-xfs-copy IMAGE --sha256 HEX\n  helper check-ntfs-copy IMAGE --sha256 HEX\n  helper check-btrfs-copy IMAGE --sha256 HEX\n  helper setup-headless check SYSTEM RECYCLE DATA [DATA ...]
+helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper hardware\n  helper setup-headless check SYSTEM RECYCLE DATA [DATA ...]
   helper setup-headless preview-unit IP:PORT SYSTEM RECYCLE DATA [DATA ...]
   helper setup-headless new SYSTEM RECYCLE DATA [DATA ...] LOGIN
-  helper setup-headless web new [--preview-unit IP:PORT] SYSTEM RECYCLE DATA [DATA ...] LOGIN
   helper setup-headless reset SYSTEM RECYCLE DATA [DATA ...]
   helper setup-headless add-data NEW_DATA SYSTEM RECYCLE DATA [DATA ...]
   helper setup-headless init-data TARGET SYSTEM RECYCLE DATA [DATA ...]
@@ -63,7 +60,7 @@ Supply already mounted directories; storage-status reports observations, not an 
 fn usage() -> String {
     let mut help = USAGE.to_owned();
     if cfg!(feature = "embedded-zxs") {
-        help.push_str("\n\nOptional image extraction:\n  helper install-zxs-image [--destination-dir DIR] --zxs-sha256 HEX (default /zxs/bin/zxs)");
+        help.push_str("\n\nOptional embedded ZXS installer:\n  helper install-zxs-image [--destination-dir DIR] --zxs-sha256 HEX (default /zxs/bin/zxs)");
     }
     help.push_str("\n\nOptional read-only health:\n  helper disk-health --device MAJOR:MINOR (one direct PCIe NVMe namespace)");
     help
@@ -85,16 +82,6 @@ enum Command {
     Disks(block_tools::Query),
     DiskHealth(block_tools::HealthQuery),
     Hardware,
-    DiskWeb(Option<volume_images::Request>),
-    DiskWebStorage(Selection),
-    SealedWorker(volume_images::Format, [u8; 32]),
-    LeasedPanelWorker(volume_images::LeasedFormat, [u8; 32]),
-    CopyRepairBrowserWorker,
-    FsTools(fs_tools::Query),
-    CopyCheck(volume_images::Request),
-    RepairExt4(volume_images::repair::Request),
-    RepairExfat(volume_images::repair::Request),
-    RepairFat32(volume_images::repair::Request),
 }
 
 fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static str> {
@@ -129,23 +116,6 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     if op == "disk-health" {
         return block_tools::HealthQuery::parse(args).map(Command::DiskHealth);
     }
-    if op == "disk-web" {
-        return match args.next() {
-            None => Ok(Command::DiskWeb(None)),
-            Some(arg) if arg == "--storage-roots" => {
-                Selection::parse(args).map(Command::DiskWebStorage)
-            }
-            Some(arg) => {
-                let kind = volume_images::panel_format(&arg).ok_or(
-                    "disk-web accepts one terminal-selected --fat32-copy, --exfat-copy, --ext4-copy, --xfs-copy, --ntfs-copy or --btrfs-copy IMAGE --sha256 HEX",
-                )?;
-                volume_images::Request::parse(kind, args).map(|r| Command::DiskWeb(Some(r)))
-            }
-        };
-    }
-    if let Some(worker) = parse_worker(&op, &mut args)? {
-        return Ok(worker);
-    }
     if op == "inspect-dirs" {
         let dirs: Vec<_> = args
             .take(inspect::MAX_DIRS + 1)
@@ -155,21 +125,6 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
             return Err("expected 1–16 directories");
         }
         return Ok(Command::Directories(dirs));
-    }
-    if op == "repair-ext4-copy" {
-        return volume_images::repair::Request::parse(args).map(Command::RepairExt4);
-    }
-    if op == "repair-exfat-copy" {
-        return volume_images::repair::Request::parse_exfat(args).map(Command::RepairExfat);
-    }
-    if op == "repair-fat32-copy" {
-        return volume_images::repair::Request::parse_fat32(args).map(Command::RepairFat32);
-    }
-    if let Some(format) = volume_images::command_format(&op) {
-        return volume_images::Request::parse(format, args).map(Command::CopyCheck);
-    }
-    if op == "fs-tools" {
-        return fs_tools::Query::parse(args).map(Command::FsTools);
     }
     if op == "hardware" {
         if args.next().is_some() {
@@ -194,44 +149,10 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     Err("unknown command")
 }
 
-fn parse_worker(
-    op: &OsStr,
-    args: &mut impl Iterator<Item = OsString>,
-) -> Result<Option<Command>, &'static str> {
-    if op == "__copy-repair-browser-v2" {
-        if args.next().is_some() {
-            return Err("unexpected copy-repair browser worker argument");
-        }
-        return Ok(Some(Command::CopyRepairBrowserWorker));
-    }
-    if let Some(format) = CheckFormat::from_worker_argument(op) {
-        let error = match format {
-            CheckFormat::Sealed(_) => "invalid internal worker",
-            CheckFormat::Leased(_) => "invalid internal leased worker",
-        };
-        let expected = args
-            .next()
-            .and_then(|s| fs_tools::hex(s.to_str()?))
-            .ok_or(error)?;
-        if args.next().is_some() {
-            return Err(error);
-        }
-        return Ok(Some(match format {
-            CheckFormat::Sealed(kind) => Command::SealedWorker(kind, expected),
-            CheckFormat::Leased(kind) => Command::LeasedPanelWorker(kind, expected),
-        }));
-    }
-    Ok(None)
-}
-
 fn line(s: &str) -> io::Result<()> {
     let mut out = io::stdout().lock();
     writeln!(out, "{s}")?;
     out.flush()
-}
-
-fn fixed_worker_status(confirmed: bool) -> ExitCode {
-    ExitCode::from(if confirmed { 0 } else { 2 })
 }
 
 fn run(command: Command) -> io::Result<ExitCode> {
@@ -240,26 +161,7 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::ImportCensus(request) => return request.run(),
         Command::ImportSingle(request) => return request.run(),
         Command::ImportBatch(request) => return request.run(),
-        Command::DiskWeb(image) => disk_web::serve(image)?,
-        Command::DiskWebStorage(s) => disk_web::serve_storage(s)?,
         Command::DiskHealth(query) => return disk_health(query),
-        Command::CopyRepairBrowserWorker => {
-            return Ok(fixed_worker_status(
-                volume_images::repair::authorization::browser_worker().is_ok(),
-            ));
-        }
-        Command::SealedWorker(fmt, digest) => {
-            return Ok(ExitCode::from(
-                volume_images::panel::worker(fmt, digest).unwrap_or(2),
-            ));
-        }
-        // Code 2 can describe a structured incomplete report. Internal
-        // failure must never accept an already-written packet.
-        Command::LeasedPanelWorker(kind, digest) => {
-            return Ok(ExitCode::from(
-                volume_images::panel::leased_worker(kind, digest).unwrap_or(3),
-            ));
-        }
         #[cfg(feature = "embedded-zxs")]
         Command::EmbeddedInstall(s) => {
             s.run()?;
@@ -268,19 +170,6 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::Help => line(&usage())?,
         Command::Version => line(concat!("helper ", env!("CARGO_PKG_VERSION")))?,
         Command::Directories(dirs) => line(&inspect::directories(&dirs)?)?,
-        Command::RepairExt4(job) | Command::RepairExfat(job) | Command::RepairFat32(job) => {
-            line(&job.run()?)?;
-        }
-        Command::CopyCheck(job) => {
-            let (code, report) = job.run()?;
-            line(&report)?;
-            return Ok(ExitCode::from(code));
-        }
-        Command::FsTools(query) => {
-            let report = query.observe();
-            line(&report.to_string())?;
-            return Ok(ExitCode::from(report.exit()));
-        }
         Command::Disks(query) => {
             let report = query.observe()?;
             line(&report.to_string())?;
@@ -357,7 +246,7 @@ fn main() -> ExitCode {
 fn user_help_only_offers_current_setup() {
     let help = usage();
     assert!(help.contains("setup-headless new"));
-    assert!(help.contains("setup-headless web new [--preview-unit IP:PORT]"));
+    assert!(!help.contains("setup-headless web"));
     for name in [
         "install-pool",
         "setup-pair",
@@ -376,9 +265,8 @@ fn user_help_only_offers_current_setup() {
 }
 
 #[cfg(test)]
-mod copy_arguments {
+mod arguments {
     use super::*;
-    use volume_images::{Format, LeasedFormat};
 
     #[test]
     fn hardware_argv_only_selects_a_fixed_passive_observation() {
@@ -392,179 +280,42 @@ mod copy_arguments {
     }
 
     #[test]
-    fn the_repair_worker_gets_no_path_format_or_tool_arguments() {
-        let cmd = |a: &[&str]| parse(a.iter().map(|&arg| OsString::from(arg)));
-        assert!(matches!(
-            cmd(&["__copy-repair-browser-v2"]),
-            Ok(Command::CopyRepairBrowserWorker)
-        ));
-        for extra in ["fat32", "/saved/volume", "--repair"] {
-            assert!(cmd(&["__copy-repair-browser-v2", extra]).is_err());
-        }
-    }
-    #[test]
-    fn readonly_formats_bind_the_same_choice_in_cli_panel_and_fixed_worker() {
+    fn retired_tooling_has_no_commands_or_private_worker_entrypoints() {
+        let reject = |name: &str, args: &[&str]| {
+            let input = std::iter::once(name).chain(args.iter().copied());
+            assert!(!usage().contains(name), "{name}");
+            assert_eq!(
+                parse(input.map(OsString::from)).unwrap_err(),
+                "unknown command",
+                "{name}"
+            );
+        };
         let digest = "35".repeat(32);
-        let cmd = |a: &[&str]| parse(a.iter().copied().map(OsString::from));
-        let cases = [
-            (
-                "check-fat32-copy",
-                "--fat32-copy",
-                "__fat32-sealed-v1",
-                CheckFormat::Sealed(Format::Fat32),
-                "-a",
-            ),
-            (
-                "check-exfat-copy",
-                "--exfat-copy",
-                "__exfat-sealed-v1",
-                CheckFormat::Sealed(Format::Exfat),
-                "-p",
-            ),
-            (
-                "check-ext4-copy",
-                "--ext4-copy",
-                "__ext4-leased-v1",
-                CheckFormat::Leased(LeasedFormat::Ext4),
-                "-y",
-            ),
-            (
-                "check-xfs-copy",
-                "--xfs-copy",
-                "__xfs-leased-v1",
-                CheckFormat::Leased(LeasedFormat::Xfs),
-                "-L",
-            ),
-            (
-                "check-ntfs-copy",
-                "--ntfs-copy",
-                "__ntfs-leased-v1",
-                CheckFormat::Leased(LeasedFormat::Ntfs),
-                "-d",
-            ),
-            (
-                "check-btrfs-copy",
-                "--btrfs-copy",
-                "__btrfs-leased-v1",
-                CheckFormat::Leased(LeasedFormat::Btrfs),
-                "--repair",
-            ),
-        ];
-        for (cli, web, worker, format, forbidden) in cases {
-            assert!(matches!(cmd(&[cli, "/saved/volume", "--sha256", &digest]),
-                Ok(Command::CopyCheck(r)) if r.format() == format));
-            assert!(
-                matches!(cmd(&["disk-web", web, "/saved/volume", "--sha256", &digest]),
-                Ok(Command::DiskWeb(Some(r))) if r.format() == format)
-            );
-            match cmd(&[worker, &digest]).unwrap() {
-                Command::SealedWorker(kind, bound) => {
-                    assert_eq!(format, CheckFormat::Sealed(kind));
-                    assert_eq!(bound, [0x35; 32]);
-                }
-                Command::LeasedPanelWorker(kind, bound) => {
-                    assert_eq!(format, CheckFormat::Leased(kind));
-                    assert_eq!(bound, [0x35; 32]);
-                }
-                other => panic!("not the selected diagnostic worker: {other:?}"),
-            }
-            assert!(cmd(&[cli, "relative", "--sha256", &digest]).is_err());
-            assert!(cmd(&[cli, "/saved/volume", "--sha256", &digest, forbidden]).is_err());
-            assert!(cmd(&["disk-web", web, "relative", "--sha256", &digest]).is_err());
-            assert!(
-                cmd(&[
-                    "disk-web",
-                    web,
-                    "/saved/volume",
-                    "--sha256",
-                    &digest,
-                    forbidden
-                ])
-                .is_err()
-            );
-            assert!(
-                cmd(&[
-                    "disk-web",
-                    web,
-                    "/saved/volume",
-                    "--sha256",
-                    &digest,
-                    "--fat32-copy"
-                ])
-                .is_err()
-            );
-            assert!(cmd(&[worker, "/saved/volume", &digest]).is_err());
-            assert!(cmd(&[worker, &digest, forbidden]).is_err());
+        for name in ["disk-web", "fs-tools", "__copy-repair-browser-v2"] {
+            reject(name, &[]);
         }
-    }
-
-    #[test]
-    fn readonly_rejects_unrecognized_formats_and_unapproved_worker_switches() {
-        let digest = "35".repeat(32);
-        let cmd = |a: &[&str]| parse(a.iter().copied().map(OsString::from));
-        assert!(cmd(&["check-zfs-copy", "/saved/volume", "--sha256", &digest]).is_err());
-        assert!(
-            cmd(&[
-                "disk-web",
-                "--zfs-copy",
-                "/saved/volume",
-                "--sha256",
-                &digest
-            ])
-            .is_err()
-        );
-        assert!(
-            cmd(&[
-                "disk-web",
-                "--repair-ext4-copy",
-                "/saved/volume",
-                "--sha256",
-                &digest
-            ])
-            .is_err()
-        );
-        assert!(cmd(&["__ext4-sealed-v1", &digest]).is_err());
-        assert!(cmd(&["__fat32-leased-v1", &digest]).is_err());
-        assert!(cmd(&["__ext4-leased-v1", &digest, "--journal"]).is_err());
-        assert!(
-            cmd(&[
-                "check-btrfs-copy",
-                "/saved/volume",
-                "--sha256",
-                &digest,
-                "--force"
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn readonly_argv_keeps_raw_absolute_paths_but_never_accepts_non_text_options_or_digests() {
-        use std::os::unix::ffi::OsStringExt;
-        let raw_image = OsString::from_vec(b"/saved/\xff".to_vec());
-        let digest = OsString::from("35".repeat(32));
-        let sha = OsString::from("--sha256");
-        assert!(
-            matches!(parse(["check-ext4-copy".into(), raw_image.clone(), sha.clone(), digest.clone()]),
-            Ok(Command::CopyCheck(r)) if r.format() == CheckFormat::Leased(LeasedFormat::Ext4))
-        );
-        assert!(
-            matches!(parse(["disk-web".into(), "--ext4-copy".into(), raw_image, sha, digest.clone()]),
-            Ok(Command::DiskWeb(Some(r))) if r.format() == CheckFormat::Leased(LeasedFormat::Ext4))
-        );
-        let bad_option = OsString::from_vec(b"--ext4-copy\xff".to_vec());
-        assert!(
-            parse([
-                "disk-web".into(),
-                bad_option,
-                "/saved/volume".into(),
-                "--sha256".into(),
-                digest
-            ])
-            .is_err()
-        );
-        let mut nontext = vec![b'0'; 64];
-        nontext[12] = 0xff;
-        assert!(parse(["__ext4-leased-v1".into(), OsString::from_vec(nontext)]).is_err());
+        for name in [
+            "check-fat32-copy",
+            "check-exfat-copy",
+            "check-ext4-copy",
+            "check-xfs-copy",
+            "check-ntfs-copy",
+            "check-btrfs-copy",
+        ] {
+            reject(name, &["/saved/volume", "--sha256", &digest]);
+        }
+        for name in ["repair-fat32-copy", "repair-exfat-copy", "repair-ext4-copy"] {
+            reject(name, &["/saved/volume", "--sha256", &digest, "--output", "/new-dir"]);
+        }
+        for name in [
+            "__fat32-sealed-v1",
+            "__exfat-sealed-v1",
+            "__ext4-leased-v1",
+            "__xfs-leased-v1",
+            "__ntfs-leased-v1",
+            "__btrfs-leased-v1",
+        ] {
+            reject(name, &[&digest]);
+        }
     }
 }

@@ -1,8 +1,7 @@
-//! Actual reaped private workers for offline provisioning and interactive diagnostics.
+//! Waitable children for the exact installed ZXS offline workers.
 use super::{bad, transport::Channel};
 use helper_linux_evidence::diagnostic_process::{
-    prepare_copy_repair_browser_exec, prepare_import_one_exec, prepare_init_data_exec,
-    require_waitable_children,
+    prepare_import_one_exec, prepare_init_data_exec, require_waitable_children,
 };
 use rustix::{
     io::Errno,
@@ -26,21 +25,6 @@ pub(crate) struct Worker {
     done: bool,
 }
 impl Worker {
-    pub(crate) fn spawn_copy_repair_browser(
-        exe: &File,
-        peer: &File,
-        order: &File,
-    ) -> io::Result<Self> {
-        require_waitable_children()?;
-        let mut cmd = Command::new("/not-a-copy-repair-browser"); // only pinned execveat in pre_exec
-        cmd.env_clear();
-        let null = helper_linux_evidence::diagnostic_process::null_device()?;
-        cmd.stdin(Stdio::from(null.try_clone()?))
-            .stdout(Stdio::from(null.try_clone()?))
-            .stderr(Stdio::from(null));
-        prepare_copy_repair_browser_exec(&mut cmd, exe, peer, order)?;
-        Self::spawn_prepared(&mut cmd)
-    }
     pub(crate) fn spawn_import(
         exe: &File,
         peer: &File,
@@ -126,34 +110,15 @@ impl Worker {
         }
         channel.eof()
     }
-    pub(crate) fn finish(&mut self, channel: &Channel, until: Instant) -> io::Result<()> {
-        loop {
-            if Instant::now() >= until {
-                return Err(bad("original maintenance worker completion timed out"));
-            }
-            if let Some(status) = self.peek()? {
-                let read = self.child.wait()?;
-                self.done = true;
-                // A clean result and real independent exit are both
-                // required; empty or additional control packets are errors.
-                return if status == 0 && read.code() == Some(0) {
-                    channel.eof()
-                } else {
-                    Err(bad("original maintenance worker did not exit normally"))
-                };
-            }
-            thread::sleep(Duration::from_millis(20));
-        }
-    }
 }
 impl Worker {
     pub(crate) fn cancel(&mut self) {
         if self.done {
             return;
         }
-        // Restore Web's tty guard via TERM before considering force. If the
-        // kernel is stalled even a kill-and-wait can be delayed. Forced exit
-        // never supplies success, and this process keeps the two originals.
+        // Ask the exact child to stop before considering force. If the kernel
+        // is stalled even a kill-and-wait can be delayed. Forced exit never
+        // supplies success; original inputs remain under Helper custody.
         let _ = pidfd_send_signal(&self.fd, Signal::TERM);
         let end = Instant::now() + Duration::from_secs(3);
         while Instant::now() < end && self.peek().ok().flatten().is_none() {

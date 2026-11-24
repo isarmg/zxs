@@ -1,8 +1,7 @@
 //! A private nonblocking prompt channel to the same actual foreground tty.
 //! No terminal path, device selection, mutable standard-stream flags, shell,
 //! caller-supplied output or secret output. Keep one original slave/VT open.
-use super::{own_descriptor_table, same_terminal};
-use crate::disk_web::require_terminal;
+use super::{own_descriptor_table, require_terminal, same_terminal};
 use rustix::{
     fs::{self, AtFlags, Mode, OFlags, StatxFlags},
     io::Errno,

@@ -77,87 +77,6 @@ impl Selection {
     }
 }
 
-/// The local panel has no path-taking operation. Capture only the explicit
-/// foreground selection, before the listener, without waking automounts or
-/// taking capacity samples. Never adopt a later file at a missing/changed name.
-pub(crate) struct WebSelection {
-    roots: Vec<(Role, Result<WebRoot, Reason>)>,
-}
-struct WebRoot {
-    pin: Pinned,
-    mount: Mount,
-}
-impl WebSelection {
-    pub(crate) fn pin(selection: &Selection) -> Self {
-        Self {
-            roots: selection
-                .paths()
-                .map(|(role, path)| (role, WebRoot::pin(path)))
-                .collect(),
-        }
-    }
-
-    pub(crate) fn observe(&self) -> Report {
-        let started = timestamp();
-        let rows = self
-            .roots
-            .iter()
-            .map(|(role, root)| {
-                (
-                    *role,
-                    match root {
-                        Ok(root) => root.sample(),
-                        Err(why) => Err(*why),
-                    },
-                )
-            })
-            .collect();
-        Report {
-            started,
-            ended: timestamp(),
-            rows,
-        }
-    }
-}
-impl WebRoot {
-    fn pin(path: &Path) -> Result<Self, Reason> {
-        let pin =
-            Pinned::already_mounted(path, Kind::StorageRoot).map_err(Reason::opening_directory)?;
-        let mount = observed_mount(&pin.fd)?;
-        let root = Self { pin, mount };
-        root.require()?;
-        Ok(root)
-    }
-
-    fn require(&self) -> Result<(), Reason> {
-        // The observer can only sample its original O_PATH handle. The
-        // independently resolved name, all visible parents and the mount
-        // must match both before and after; the recheck is never a fallback.
-        let current = self
-            .pin
-            .require_same_named_mount()
-            .map_err(Reason::recheck_directory)?;
-        if current == self.mount {
-            Ok(())
-        } else {
-            Err(Reason::Changed)
-        }
-    }
-
-    fn sample(&self) -> Result<Observed, Reason> {
-        self.require()?;
-        let space = Space::read(&self.pin.fd);
-        self.require()?;
-        Ok(Observed {
-            entity: self.pin.entity(),
-            mount: Ok(Mounted {
-                mount: self.mount,
-                space,
-            }),
-        })
-    }
-}
-
 fn timestamp() -> Option<u128> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -275,7 +194,7 @@ pub(crate) struct Observed {
     pub(crate) mount: Result<Mounted, Reason>,
 }
 
-// CLI as well as Web observes only the already-mounted directory. Keep its
+// The observer only reads the already-mounted directory. Keep its
 // O_PATH descriptor through attribution; do not take a pool or volume lock.
 struct HeldSample {
     root: Pinned,
@@ -462,17 +381,14 @@ mod tests {
             flock(&owner, held).unwrap();
             let original = HeldSample::take(&system).unwrap();
             assert!(original.root.passive_mount_observation());
-            let cli = selection().observe();
-            let web = WebSelection::pin(&selection()).observe();
-            for report in [cli, web] {
-                assert_eq!(report.rows.len(), 3);
-                assert!(
-                    report
-                        .rows
-                        .iter()
-                        .all(|(_, v)| v.as_ref().is_ok_and(|r| r.mount.is_ok()))
-                );
-            }
+            let report = selection().observe();
+            assert_eq!(report.rows.len(), 3);
+            assert!(
+                report
+                    .rows
+                    .iter()
+                    .all(|(_, v)| v.as_ref().is_ok_and(|r| r.mount.is_ok()))
+            );
             let other = File::open(&system).unwrap();
             assert_eq!(
                 flock(&other, FlockOperation::NonBlockingLockExclusive),

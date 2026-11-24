@@ -1,13 +1,15 @@
 # 离线首设与密码重置
 
+面向部署和离线维护人员。先挂载选择的存储目录，并以原专用服务账号运行。
+检查和预览只读。写入仅限下表的明确动作，不启动服务，不格式化磁盘。
+
 | 操作 | 命令 | 写入范围 |
 | --- | --- | --- |
 | 首设前检查 | `setup-headless check SYSTEM RECYCLE DATA [DATA ...]` | 无 |
 | 服务单元预览（可选） | `setup-headless preview-unit IP:PORT SYSTEM RECYCLE DATA [DATA ...]` | 无，写标准输出 |
 | 首设 | `setup-headless new SYSTEM RECYCLE DATA [DATA ...] LOGIN` | 所选磁盘的角色标记及 `/zxs/state/headless/server.conf` |
 | 源目录预检 | `preflight-import [--show-names \| --check-target] SOURCE SYSTEM RECYCLE DATA [DATA ...]` | 无，仅观察源目录和可选目标目录元数据 |
-| 选定文件导入 | [`import-one` 和 `import-batch`](../README.md#从非空盘批量导入所选文件) 分两次 prepare/apply | prepare 仅输出计划；apply 逐项写入已登记 DATA，在 SYSTEM 留存容器记录，保留来源 |
-| 网页首设 | `setup-headless web new [--preview-unit IP:PORT] SYSTEM RECYCLE DATA [DATA ...] LOGIN` | 同首设，仍在终端确认 |
+| 选定文件导入 | [`import-one` 和 `import-batch`](offline-imports.md#从非空盘批量导入所选文件) 分两次 prepare/apply | prepare 仅输出计划；apply 逐项写入已登记 DATA，在 SYSTEM 留存容器记录，保留来源 |
 | 重置密码 | `setup-headless reset SYSTEM RECYCLE DATA [DATA ...]` | 同一份 `server.conf` 中的账号代次、随机盐和验证值 |
 
 使用同一非 root 服务账号。目录参数使用实际绝对路径。
@@ -16,14 +18,13 @@
 
 重置前先停止业务服务。Helper 取得与服务共同使用的离线排他锁后，
 核对现有账户、所有已登记的磁盘目录和原标记，再在同一前台终端显示所选对象。
-键入 `RESET` 后两次输入不回显的密码；不会接收命令行或网页口令。
+键入 `RESET` 后两次输入不回显的密码；不从命令行参数读取口令。
 用户名、池和角色保持不变。退出码 0 表示确认；
 退出码 3 表示结果不确定，保留原目录和可能存在的暂存记录，先查明再继续。
 不向旧 SQLite 格式写入或迁移账户。
 
-本机磁盘、硬件和镜像观察不需要业务停机，见[磁盘面板](disk-web.md)。
-磁盘加入、移除和[外部文件整目录导入](../README.md#从整个非空源目录导入文件)是独立的离线操作，不是首设或重置的副作用。首设后用同一非 root 服务账号直接运行
-`/zxs/bin/zxs --listen IP:PORT`，见[部署说明](../../zxs/docs/headless-activation.md)。
+磁盘加入、移除和[外部文件整目录导入](offline-imports.md#从整个非空源目录导入文件)是独立的离线操作，不是首设或重置的副作用。首设后用同一非 root 服务账号直接运行
+`/zxs/bin/zxs --listen IP:PORT`，见[部署说明](../../../zxs/docs/headless-activation.md)。
 
 ## 非空源目录预检
 
@@ -49,9 +50,13 @@
 
 ## 可选服务单元预览
 
-与首次检查使用同一次有序的 SYSTEM、RECYCLE、DATA 原目录准入；仅在初始目录检查通过时生成。请在首次设置之前运行预览。输出的 `RequiresMountsFor` 是按登记顺序列出实际目录路径，不认定目录本身就是独立挂载点；启动时服务仍核对原卷。预览保留可表示路径的精确内容；含控制字符或非 UTF-8 字节的路径不生成单元。
+与首次检查使用同一次有序的 SYSTEM、RECYCLE、DATA 原目录准入；仅在初始目录检查通过时生成。请在首次设置之前运行预览。输出的 `RequiresMountsFor` 是按登记顺序列出实际目录路径，不认定目录本身就是独立挂载点；启动时服务仍核对原卷。
 
-预览供管理员审阅。显式填数字 IP 和非零端口；IPv6 用方括号。单元以当前非 root 服务账号直接执行 `/zxs/bin/zxs --listen IP:PORT`；`Type=simple` 只跟踪进程，不证明 HTTP 已就绪。停机先通知服务并等它收尾。Helper 不写 unit、不调用 systemd，也不启动或启用任何服务。首次设置也可用 `setup-headless web new --preview-unit IP:PORT …` 匹配原终端并展开相同纯文本；没有显式开关，网页不显示路径。
+预览保留可表示路径的精确内容；含控制字符或非 UTF-8 字节的路径不生成单元。
+
+预览供管理员审阅。显式填数字 IP 和非零端口；IPv6 用方括号。单元以当前非 root 服务账号直接执行 `/zxs/bin/zxs --listen IP:PORT`；`Type=simple` 只跟踪进程，不证明 HTTP 已就绪。停机先通知服务并等它收尾。
+
+Helper 不写 unit、不调用 systemd，也不启动或启用任何服务。
 
 ## 离线加入空数据盘
 
@@ -73,9 +78,13 @@ helper setup-headless add-data NEW_DATA SYSTEM RECYCLE DATA [DATA ...]
 helper setup-headless init-data /mnt/archive/zxs-data /system /recycle /data-one /mnt/archive/zxs-data
 ```
 
-填写当前清单的完整角色顺序。该命令仅在选定 DATA 上准备现行 `owner`、`data`、`staging` 布局，不加盘、不改清单、不启动服务。不初始化首次部署的 SYSTEM/RECYCLE，不打开其他 DATA 的业务数据或清理其暂存。若新加了多块尚未初始化的 DATA，可逐块选择；导入仍要求池中所需布局齐备。
+填写当前清单的完整角色顺序。该命令仅在选定 DATA 上准备现行 `owner`、`data`、`staging` 布局，不加盘、不改清单、不启动服务。不初始化首次部署的 SYSTEM/RECYCLE，不打开其他 DATA 的业务数据或清理其暂存。
 
-只有已登记的原标记，或同一布局的有效空前缀才可继续。额外条目、非空正文/暂存、已有指向该盘的容器登记、待确认的系统路由、该盘未完成的退盘临时记录或已发布的退盘记录都会阻止初始化，原件保留。掉电或报告结果不明确时不手工删除；保持原角色和目标不变，重试**同一个命令**。已初始化但仍空的目标不会重建其目录。首次部署仍按正常启动方式初始化整个池；此次操作不替代它。
+若新加了多块尚未初始化的 DATA，可逐块选择；导入仍要求池中所需布局齐备。
+
+只有已登记的原标记，或同一布局的有效空前缀才可继续。额外条目、非空正文/暂存、已有指向该盘的容器登记、待确认的系统路由、该盘未完成的退盘临时记录或已发布的退盘记录都会阻止初始化，原件保留。掉电或报告结果不明确时不手工删除；保持原角色和目标不变，重试**同一个命令**。
+
+已初始化但仍空的目标不会重建其目录。首次部署仍按正常启动方式初始化整个池；此次操作不替代它。
 
 ## 离线移除空数据盘
 
@@ -85,6 +94,10 @@ helper setup-headless init-data /mnt/archive/zxs-data /system /recycle /data-one
 helper setup-headless retire-data TARGET SYSTEM RECYCLE DATA [DATA ...]
 ```
 
-按当前清单顺序列出全部目录（包含 `TARGET`），并至少留下一块数据盘。目标盘须仍可访问，存储目录和上传暂存目录都必须为空；指向旧盘的已登记容器必须已有回收记录。命令只更新系统盘及清单，不擦除目标磁盘，也不更改它的角色标记。中断后用相同参数重试。已移除磁盘的旧角色标记不可用于再次加入。
+按当前清单顺序列出全部目录（包含 `TARGET`），并至少留下一块数据盘。目标盘须仍可访问，存储目录和上传暂存目录都必须为空；若旧容器路由仍指向目标盘，须核对已选中的回收回执和回收盘原副本。命令只更新系统盘及清单，不擦除目标磁盘，也不更改它的角色标记。中断后用相同参数重试。
 
-如果报告 `container … has no selected recycle record`，命令会显示目标盘标识和容器 ID，并拒绝退盘。首次保存中断也可能留下这种记录，即使盘上看不到已发布的文件。如果是 `import-one` 中断，且原票据和匹配的源文件仍在，请对原目标盘重试同一张票据。补齐首次保存后，先将容器移入回收站，再退盘。不要手动删除登记记录。
+已移除磁盘的旧角色标记不可用于再次加入。
+
+如果报告 `container … has no selected recycle record`，命令会显示目标盘标识和容器 ID，并拒绝退盘。首次保存中断也可能留下这种记录，即使盘上看不到已发布的文件。
+
+如果是 `import-one` 中断，且原票据和匹配的源文件仍在，请对原目标盘重试同一张票据。补齐首次保存后，先将容器移入回收站，再退盘。不要手动删除登记记录。

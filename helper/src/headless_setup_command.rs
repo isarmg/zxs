@@ -39,42 +39,22 @@ pub(crate) struct Setup {
 enum Action {
     Check,
     PreviewUnit(SocketAddr),
-    New { login: String, review: Review },
+    New { login: String },
     ResetPassword,
     AddData(PathBuf),
     InitData(PathBuf),
     RetireData(PathBuf),
 }
 
-#[derive(Clone, Copy, Debug)]
-enum Review {
-    Terminal,
-    Browser(Option<SocketAddr>),
-}
-
 impl Setup {
-    pub(crate) fn parse(args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
-        const USAGE: &str = "expected setup-headless check|new|reset SYSTEM RECYCLE DATA [DATA ...] [LOGIN], preview-unit IP:PORT SYSTEM RECYCLE DATA [DATA ...], web new [--preview-unit IP:PORT] SYSTEM RECYCLE DATA [DATA ...] LOGIN, or add-data|init-data|retire-data TARGET SYSTEM RECYCLE DATA [DATA ...]";
-        let mut args = args.peekable();
+    pub(crate) fn parse(mut args: impl Iterator<Item = OsString>) -> Result<Self, &'static str> {
+        const USAGE: &str = "expected setup-headless check|new|reset SYSTEM RECYCLE DATA [DATA ...] [LOGIN], preview-unit IP:PORT SYSTEM RECYCLE DATA [DATA ...] or add-data|init-data|retire-data TARGET SYSTEM RECYCLE DATA [DATA ...]";
         let mode = args.next().ok_or(USAGE)?;
         let action = match mode.to_str() {
             Some("check") => Action::Check,
             Some("reset") => Action::ResetPassword,
             Some("preview-unit") => Action::PreviewUnit(parse_listen(args.next())?),
-            Some("new" | "web") => {
-                let review = if mode == "web" {
-                    if args.next().is_none_or(|w| w != "new") {
-                        return Err(USAGE);
-                    }
-                    let preview = if args.next_if(|w| w == "--preview-unit").is_some() {
-                        Some(parse_listen(args.next())?)
-                    } else {
-                        None
-                    };
-                    Review::Browser(preview)
-                } else {
-                    Review::Terminal
-                };
+            Some("new") => {
                 // Include one extra to reject (not truncate) an oversized roster.
                 let mut values: Vec<_> = args.take(MAX_DATA + 4).collect();
                 let login = values
@@ -87,7 +67,7 @@ impl Setup {
                 }
                 return Ok(Self {
                     paths: parse_paths(values.into_iter())?,
-                    action: Action::New { login, review },
+                    action: Action::New { login },
                 });
             }
             Some("add-data" | "init-data" | "retire-data") => {
@@ -126,7 +106,7 @@ impl Setup {
                     ExitCode::from(2)
                 });
             }
-            Action::New { login, review } => return install(selected, &login, review),
+            Action::New { login } => return install(selected, &login),
             Action::ResetPassword => return reset_password(selected),
             Action::PreviewUnit(listen) => {
                 require_ready(&selected)?;
@@ -171,23 +151,9 @@ fn require_ready(roles: &SelectedRoles) -> io::Result<()> {
     }
 }
 
-fn install(selected: SelectedRoles, login: &str, review: Review) -> io::Result<ExitCode> {
+fn install(selected: SelectedRoles, login: &str) -> io::Result<ExitCode> {
     require_ready(&selected)?;
-    let input = io::stdin();
-    let output = io::stderr();
-    let tty = input.as_fd();
-    let display = output.as_fd();
-    require_terminal(tty, display)?;
-    if let Review::Browser(preview) = review {
-        let unit = preview
-            .map(|listen| preview_unit(selected.paths(), selected.storage_uid(), listen))
-            .transpose()?;
-        if !crate::disk_web::request_headless_review(unit, || require_terminal(tty, display))? {
-            return Err(io::Error::other("setup cancelled; no role changed"));
-        }
-        require_terminal(tty, display)?;
-        require_ready(&selected)?;
-    }
+    require_terminal(io::stdin().as_fd(), io::stderr().as_fd())?;
     let selection = format!(
         "Fresh headless setup (no format or service start)\n{}\nLogin {login}",
         summarize_paths(selected.paths())
@@ -505,41 +471,30 @@ mod setup_actions {
     use super::*;
 
     #[test]
-    fn only_fresh_setup_accepts_the_browser_and_login() {
+    fn only_terminal_setup_accepts_the_login() {
         let command =
             |words: &[&str]| Setup::parse(words.iter().map(OsString::from)).map(|cmd| cmd.action);
-        let roles = ["/s", "/r", "/d"];
-        let new = |words: &[&str]| command(&[words, &roles, &["login"]].concat());
         assert!(matches!(
-            new(&["new"]),
-            Ok(Action::New {
-                review: Review::Terminal,
-                ..
-            })
+            command(&["new", "/s", "/r", "/d", "login"]),
+            Ok(Action::New { login }) if login == "login"
         ));
-        assert!(matches!(
-            new(&["web", "new"]),
-            Ok(Action::New {
-                review: Review::Browser(None),
-                ..
-            })
-        ));
-        let listen = "127.0.0.1:8123".parse::<SocketAddr>().unwrap();
-        assert!(
-            matches!(new(&["web", "new", "--preview-unit", "127.0.0.1:8123"]), Ok(Action::New {review: Review::Browser(Some(addr)), ..}) if addr == listen)
-        );
-        for mode in [
-            "reset",
-            "check",
-            "add-data",
-            "retire-data",
-            "init-data",
-            "preview-unit",
+        for words in [
+            ["web", "new", "/s", "/r", "/d", "login"].as_slice(),
+            [
+                "web",
+                "new",
+                "--preview-unit",
+                "127.0.0.1:8123",
+                "/s",
+                "/r",
+                "/d",
+                "login",
+            ]
+            .as_slice(),
+            ["reset", "/s", "/r", "/d", "login"].as_slice(),
         ] {
-            assert!(command(&[&["web", mode], &roles[..]].concat()).is_err());
+            assert!(command(words).is_err());
         }
-        assert!(command(&[&["reset"], &roles[..], &["login"]].concat()).is_err());
-        assert!(new(&["web", "new", "--preview-unit", "127.0.0.1:0"]).is_err());
         let mut too_many = vec!["new", "/s", "/r"];
         too_many.extend(std::iter::repeat_n("/d", MAX_DATA + 1));
         too_many.push("login");

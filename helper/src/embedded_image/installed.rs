@@ -59,7 +59,7 @@ impl Image {
             stamp,
         };
         owned.require()?;
-        if crate::fs_tools::hash_upto(&mut &owned.reader, stamp.len, MAX_IMAGE)? != *expected {
+        if crate::asset_digest::hash_upto(&mut &owned.reader, stamp.len, MAX_IMAGE)? != *expected {
             return Err(denied());
         }
         standalone(stamp.len, |offset, body| {

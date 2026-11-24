@@ -27,7 +27,7 @@ fn challenge() -> io::Result<String> {
     loop {
         match getrandom(&mut bytes[..], GetRandomFlags::NONBLOCK) {
             Ok(16) if bytes != [0; 16] => {
-                return Ok(crate::fs_tools::lower_hex(&bytes[..]));
+                return Ok(crate::asset_digest::lower_hex(&bytes[..]));
             }
             Err(Errno::INTR) => {}
             Err(e) => return Err(e.into()),
@@ -90,15 +90,6 @@ impl PublicConfirmation {
     #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn confirm_image_installation(&self, review: String) -> io::Result<()> {
         self.ask("INSTALL-ZXS-IMAGE", Some(review), 32 * 1024)
-    }
-    pub(crate) fn confirm_ext_repair(&self, preview: String) -> io::Result<()> {
-        self.ask("REPAIR-EXT-COPY", Some(preview), 64 * 1024)
-    }
-    pub(crate) fn confirm_exfat_repair(&self, preview: String) -> io::Result<()> {
-        self.ask("REPAIR-EXFAT-COPY", Some(preview), 64 * 1024)
-    }
-    pub(crate) fn confirm_fat32_repair(&self, preview: String) -> io::Result<()> {
-        self.ask("REPAIR-FAT32-COPY", Some(preview), 64 * 1024)
     }
     pub(crate) fn report(&self, line: &str) -> io::Result<()> {
         nonblocking_prompt(

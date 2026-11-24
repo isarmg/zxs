@@ -1,5 +1,8 @@
 # Optional raw Helper with the exact standalone ZXS image
 
+For operators working with an explicitly built embedded Helper. Check the original ZXS digest and host prerequisites first.
+This procedure publishes an independent executable only; it does not provision storage or start a service.
+
 The normal Helper has no placeholder payload. Build the optional separate
 Helper only with the already reviewed and independently measured **complete**
 standalone ZXS ELF from the independently selected current ZXS source. Do not use

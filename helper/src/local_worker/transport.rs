@@ -14,7 +14,7 @@ use std::{
     fs::File,
     io::{self, IoSlice, IoSliceMut},
     mem::MaybeUninit,
-    time::{Duration, Instant},
+    time::Duration,
 };
 const MAGIC: &[u8; 8] = b"ZXSAMW1\0";
 const WIRE: usize = 8 + 1 + 32 + 32 + 65;
@@ -22,8 +22,6 @@ pub(crate) type Payload = [u8; 65];
 
 #[derive(Clone, Copy)]
 pub(crate) enum Kind {
-    CopyRepairBrowserReady = 22,
-    CopyRepairBrowserRequest = 23,
     ImportStep = 45,
     InitData = 46,
 }
@@ -76,7 +74,7 @@ impl Channel {
             || sockopt::socket_type(&fd)? != SocketType::SEQPACKET
             || scope == [0; 32]
         {
-            return Err(bad("not the dedicated account-maintenance peer"));
+            return Err(bad("not the dedicated offline maintenance peer"));
         }
         Ok(Self { fd, peer, scope })
     }
@@ -210,30 +208,6 @@ impl Channel {
             }
         }
     }
-    pub(crate) fn wait_checked<const K: usize>(
-        &self,
-        kind: Kind,
-        digest: &[u8; 32],
-        until: Instant,
-        check: impl Fn() -> io::Result<()>,
-    ) -> io::Result<(Payload, [File; K])> {
-        loop {
-            check()?;
-            if Instant::now() >= until {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "offline maintenance worker stopped responding",
-                ));
-            }
-            match self.receive(kind, digest) {
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                r => return r,
-            }
-        }
-    }
     pub(crate) fn eof(&self) -> io::Result<()> {
         let mut buffer = [0];
         let mut ctl = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1), ScmCredentials(1))];
@@ -274,39 +248,20 @@ mod tests {
         let worker = Channel::from_owned_child_session(b, c, [8; 32]).unwrap();
         let data = [5; 65];
         let digest = [4; 32];
-        root.send(Kind::CopyRepairBrowserReady, &digest, &data)
-            .unwrap();
+        root.send(Kind::ImportStep, &digest, &data).unwrap();
         assert_eq!(
-            worker
-                .receive::<0>(Kind::CopyRepairBrowserReady, &digest)
-                .unwrap()
-                .0,
+            worker.receive::<0>(Kind::ImportStep, &digest).unwrap().0,
             data
         );
-        root.send(Kind::CopyRepairBrowserRequest, &digest, &data)
-            .unwrap();
-        assert!(
-            worker
-                .receive::<0>(Kind::CopyRepairBrowserReady, &digest)
-                .is_err()
-        );
-        root.send(Kind::CopyRepairBrowserReady, &[7; 32], &data)
-            .unwrap();
-        assert!(
-            worker
-                .receive::<0>(Kind::CopyRepairBrowserReady, &digest)
-                .is_err()
-        );
+        root.send(Kind::InitData, &digest, &data).unwrap();
+        assert!(worker.receive::<0>(Kind::ImportStep, &digest).is_err());
+        root.send(Kind::ImportStep, &[7; 32], &data).unwrap();
+        assert!(worker.receive::<0>(Kind::ImportStep, &digest).is_err());
         let mut wrong = c;
         wrong.uid = Uid::from_raw(u32::from(c.uid.is_root()));
         let worker = Channel::from_owned_child_session(worker.fd, wrong, [8; 32]).unwrap();
-        root.send(Kind::CopyRepairBrowserReady, &digest, &data)
-            .unwrap();
-        assert!(
-            worker
-                .receive::<0>(Kind::CopyRepairBrowserReady, &digest)
-                .is_err()
-        );
+        root.send(Kind::ImportStep, &digest, &data).unwrap();
+        assert!(worker.receive::<0>(Kind::ImportStep, &digest).is_err());
         drop(root);
         worker.eof().unwrap();
     }

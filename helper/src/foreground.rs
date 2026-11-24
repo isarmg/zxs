@@ -2,7 +2,7 @@
 pub(crate) mod channel;
 pub(crate) use channel::PublicConfirmation;
 
-use crate::{disk_web::require_terminal, pinned::Mount};
+use crate::pinned::Mount;
 use rustix::fs::{
     self, Mode, OFlags, PROC_SUPER_MAGIC, RawDir, ResolveFlags, fstatfs, open, openat2,
 };
@@ -19,6 +19,47 @@ fn denied() -> io::Error {
         "exact protected host administrator, explicit original scope and controlling terminal required",
     )
 }
+fn supported_terminal(mode: u32, dev: u64, magic: u64) -> bool {
+    let (major, minor) = (rustix::fs::major(dev), rustix::fs::minor(dev));
+    mode & 0o170_000 == 0o020_000
+        && ((major, minor) == (5, 0)
+            || (major == 4 && (1..=63).contains(&minor))
+            || ((136..=143).contains(&major) && magic == 0x1cd1)) // Linux devpts slave
+}
+fn foreground(tty_sid: i32, our_sid: i32, tty_group: i32, our_group: i32) -> bool {
+    tty_sid > 0 && tty_group > 0 && tty_sid == our_sid && tty_group == our_group
+}
+fn require_terminal(fd: impl AsFd) -> io::Result<()> {
+    use rustix::{
+        fs::{fstat, fstatfs},
+        process::{getpgrp, getsid},
+        termios::{tcgetpgrp, tcgetsid},
+    };
+    let deny = || {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "requires the operator's supported foreground controlling terminal",
+        )
+    };
+    let stat = fstat(&fd)?;
+    if !supported_terminal(
+        stat.st_mode,
+        stat.st_rdev,
+        fstatfs(&fd)?.f_type.cast_unsigned(),
+    ) {
+        return Err(deny());
+    }
+    if !foreground(
+        tcgetsid(&fd)?.as_raw_pid(),
+        getsid(None)?.as_raw_pid(),
+        tcgetpgrp(&fd)?.as_raw_pid(),
+        getpgrp().as_raw_pid(),
+    ) {
+        return Err(deny());
+    }
+    Ok(())
+}
+
 pub(crate) fn same_terminal(input: &io::Stdin, output: &io::Stderr) -> io::Result<()> {
     let stdout = io::stdout();
     require_terminal(input.as_fd())?;
@@ -55,11 +96,7 @@ fn own_descriptor_table() -> io::Result<(File, File)> {
     }
     Ok((proc, dir))
 }
-#[cfg(any(test, feature = "embedded-zxs"))]
 pub(crate) fn no_inherited_descriptors() -> io::Result<()> {
-    only_inherited_descriptors(&[])
-}
-pub(crate) fn only_inherited_descriptors(already_verified: &[i32]) -> io::Result<()> {
     let (proc, dir) = own_descriptor_table()?;
     let mut buf = [MaybeUninit::uninit(); 4096];
     let mut entries = RawDir::new(&dir, &mut buf);
@@ -73,13 +110,31 @@ pub(crate) fn only_inherited_descriptors(already_verified: &[i32]) -> io::Result
             .ok()
             .and_then(|s| s.parse::<i32>().ok())
             .ok_or_else(denied)?;
-        if !matches!(fd, 0..=2)
-            && fd != proc.as_raw_fd()
-            && fd != dir.as_raw_fd()
-            && !already_verified.contains(&fd)
-        {
+        if !matches!(fd, 0..=2) && fd != proc.as_raw_fd() && fd != dir.as_raw_fd() {
             return Err(denied());
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn foreground_publish_requires_a_supported_terminal_and_the_callers_session() {
+    use rustix::fs::makedev;
+    assert!(supported_terminal(0o020_620, makedev(136, 4), 0x1cd1));
+    assert!(supported_terminal(0o020_620, makedev(4, 1), 0));
+    assert!(supported_terminal(0o020_666, makedev(5, 0), 0));
+    for (mode, dev, fs) in [
+        (0o020_666, makedev(5, 2), 0x1cd1),
+        (0o100_600, makedev(136, 4), 0x1cd1),
+        (0o020_620, makedev(136, 4), 0),
+        (0o010_600, 0, 0),
+    ] {
+        assert!(!supported_terminal(mode, dev, fs));
+    }
+    assert!(foreground(31, 31, 47, 47));
+    assert!(!foreground(30, 31, 47, 47));
+    assert!(!foreground(31, 31, 42, 47));
+    assert!(!foreground(0, 0, 47, 47));
+    assert!(!foreground(31, 31, 0, 0));
 }

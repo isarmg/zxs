@@ -1,8 +1,11 @@
 # helper 独立交付核对表
 
-**[默认 Linux 版已在 GitHub Actions 构建](https://github.com/isarmg/zxs/actions/runs/45223533959)，日志记录 ELF 摘要，未上传制品。内嵌版和实机安装仍待验收。** [清单](Cargo.toml)中的 `1.0.0` 是源码包版本，不是发行记录；包名是 `local-ops-helper`，命令名是 `helper`。`publish = false`，不向 crates.io 发布本包。
+[仅静态] 本次删除镜像工具和本机网页未运行构建、测试或安装；没有当前版发行制品。
 
-[Debian 13 amd64 离线工具材料配方](packaging/debian13-amd64/README.md)已经写入：随包提取的上游 ELF、库、版权和对应源码均有来源链；本次未生成制品、安装或执行。
+历史提交 `7d86855` [CI通过]：[默认 Linux 构建](https://github.com/isarmg/zxs/actions/runs/45223533959)记录 ELF 摘要，未上传下载制品，不能归给当前源码。内嵌版和实机仍待验。
+[清单](Cargo.toml)的 `1.0.0` 是源码包版本，不是发行记录。包名为 `local-ops-helper`，不向 crates.io 发布。
+
+当前交付不带外部镜像检查器或旧本机网页。原工具发行、版权和对应源码入口见[历史索引](docs/archive/retired-volume-tools.md)。
 
 ## H07：获准后，怎样验证一次独立构建
 
@@ -17,7 +20,7 @@
    cargo +1.100.0 test --workspace --locked --offline --target x86_64-unknown-linux-gnu
    ```
 
-   默认构建提供当前的[离线首设与重置](docs/headless-offline.md)；安装、密码重置和离线维护仍需在获准的环境独立验收。
+   默认构建提供当前的[离线首设与重置](docs/guides/headless-offline.md)；安装、密码重置和离线维护仍需在获准的环境独立验收。
 
    测试和发行构建分别记录。正向介质用例用专用临时目录，不能使用业务数据。记录运行用例数、失败及环境限制。
 

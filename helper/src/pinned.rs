@@ -1,5 +1,4 @@
 //! Resolve inputs using held directories, without adopting a replacement at the same spelling.
-pub(crate) mod helper_elf;
 pub(crate) mod storage_status;
 pub(crate) use crate::path_rules::Kind;
 
@@ -610,32 +609,6 @@ pub(crate) fn external_import_reader(pin: &File, original: Entity, mount: u64) -
         original,
         ReaderBoundary::Mount(mount, MountRead::PassiveSource),
     )
-}
-
-/// Upgrade an original `O_PATH` private regular inode only; never use its mutable pathname.
-/// The caller must independently recheck the original name, held birth, protocol and lock.
-pub(crate) fn private_inode_reader(pin: &File, uid: u32, expected_mount: u64) -> io::Result<File> {
-    let m = pin.metadata()?;
-    if !rustix::fs::fcntl_getfl(pin)?.contains(OFlags::PATH)
-        || !m.is_file()
-        || m.uid() != uid
-        || m.nlink() != 1
-        || m.mode() & 0o7777 != 0o600
-        || Mount::on(pin)?.is_none_or(|v| v.id != expected_mount)
-    {
-        return Err(invalid(
-            "expected a singly linked private file pinned on its original mount",
-        ));
-    }
-    let file = reopen_admitted_reader(
-        pin,
-        Entity::of(&m)?,
-        ReaderBoundary::DataFilesystem(local_data_filesystem(pin)?),
-    )?;
-    if Mount::on(&file)?.is_none_or(|v| v.id != expected_mount) {
-        return Err(invalid("opened file no longer has the selected mount"));
-    }
-    Ok(file)
 }
 
 /// Public installed executables, libraries or root policy only. Caller walked the

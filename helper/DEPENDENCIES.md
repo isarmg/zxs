@@ -1,26 +1,23 @@
 # 依赖与固定版本
 
-[Cargo.toml](Cargo.toml) 在主程序中声明七个非开发的直接注册表依赖，另有一个本项目内部小库：
+[Cargo.toml](Cargo.toml) 在主程序中声明六个非开发的直接注册表依赖，另有一个本项目内部小库：
 
-- `argon2 = 0.5.3`（只开 `zeroize`）、`zeroize = 1.9.1`（只开 `alloc`）：内部准备 Web 初设的固定格式慢验证值，使用 RustCrypto 上游算法及有界、显式擦除的工作区；不导入 PHC 文本、外部参数或口令生成器，不用于 SMB。前台两次输入的字节比较另直接使用锁内的 `subtle = 2.6.1`（不启用默认功能）。
-- `httparse = 1.10.1`：只用成熟的 HTTP/1.1 请求头解析器；Web 自己限制方法、来源、请求长度、时限、操作和会话。没有新增传递普通依赖。
+- `argon2 = 0.5.3`（只开 `zeroize`）、`zeroize = 1.9.1`（只开 `alloc`）：前台首设及密码重置使用固定格式的慢验证值，使用 RustCrypto 上游算法及有界、显式擦除的工作区；不导入 PHC 文本、外部参数或口令生成器。前台两次输入的字节比较另直接使用锁内的 `subtle = 2.6.1`（不启用默认功能）。
 - `rustix = 1.1.5`（默认 `std`，显式 `event`、`fs`、`mm`、`net`、`pipe`、`process`、`rand`、`termios`、`thread`）：提供 Linux 系统调用封装，包括文件描述符和文件系统观察、内核随机数及凭据进程的内存锁定。测试另开 `pty` 和 `stdio`。
 - `sha2 = 0.10.9`（不启用默认功能）：在内存中以 RustCrypto SHA-256 核验候选新登记完整前缀；不用于认证操作者或保护口令。
 - `linux-raw-sys = 0.12.1`（关闭默认功能，显式 `general`、`std`）：提供诊断、准入和凭据派生阶段所需的 Linux 文件系统类型常量。
 
 `tempfile = 3.27.0` 仅供测试，在专用临时父目录内独占创建私有子目录。Rust 工具链固定为 1.100.0。
 
-本项目内部的 [helper-linux-evidence](linux-evidence/Cargo.toml) 是单独静审的 Linux LP64 小库，不依赖其他项目。它直接使用锁内的 `libc 0.2.190`、`linux-raw-sys 0.12.1` 和 `rustix 1.1.5`。主程序仍禁止 unsafe；小库的固定 Linux/POSIX 只读接口使用少量 unsafe：通过持有的原描述符读取 [FS_IOC_GETFSUUID](https://github.com/torvalds/linux/blob/master/include/uapi/linux/fs.h) 和 [name_to_handle_at](https://www.man7.org/linux/man-pages/man2/name_to_handle_at.2.html)；每个卷行的原生名称字节限额使用同目录 [fpathconf(_PC_NAME_MAX)](https://man7.org/linux/man-pages/man3/fpathconf.3.html)，不猜未知值。另有一个仅供独立诊断 CLI 的 [close_range](https://man7.org/linux/man-pages/man2/close_range.2.html) 固定调用，私有化描述符表并给所有非标准描述符加 close-on-exec，不关闭外部文件。隔离运行的极小 Linux 层还核验可等待的子进程信号策略，在本次 CLI 处理取消消息；子进程在启动之前用 setsid 建独立组，并仅对已核的 ELF 文件描述符使用 execveat。小库另单独封装专用单线程输入期间的固定信号集和原线程信号掩码恢复，不读取凭据。主程序通过 rustix 的 netlink 接口只问当前任务固定的 AUDIT_TTY_GET；该接口不修改宿主审计设置。主程序没有 unsafe。没有任意 ioctl、路径重开或按句柄开文件的接口。libc 现在是小库的直接普通依赖，不是新增或升级了注册表包。
+本项目内部的 [helper-linux-evidence](linux-evidence/Cargo.toml) 是单独静审的 Linux LP64 小库，不依赖其他项目。它直接使用锁内的 `libc 0.2.190`、`linux-raw-sys 0.12.1` 和 `rustix 1.1.5`。主程序仍禁止 unsafe；小库的固定 Linux/POSIX 只读接口使用少量 unsafe：通过持有的原描述符读取 [FS_IOC_GETFSUUID](https://github.com/torvalds/linux/blob/master/include/uapi/linux/fs.h) 和 [name_to_handle_at](https://www.man7.org/linux/man-pages/man2/name_to_handle_at.2.html)；每个卷行的原生名称字节限额使用同目录 [fpathconf(_PC_NAME_MAX)](https://man7.org/linux/man-pages/man3/fpathconf.3.html)，不猜未知值。离线 Core 子进程入口使用 [close_range](https://man7.org/linux/man-pages/man2/close_range.2.html) 给非标准描述符加 close-on-exec，仅保留各固定协议允许的原描述符。小库还核验可等待的子进程信号策略，仅对已核的 ELF 文件描述符使用 execveat；名称读取进程仍建立自己的会话。小库另单独封装专用单线程输入期间的固定信号集和原线程信号掩码恢复，不读取凭据。主程序通过 rustix 的 netlink 接口只问当前任务固定的 AUDIT_TTY_GET；该接口不修改宿主审计设置。主程序没有 unsafe。没有任意 ioctl、路径重开或按句柄开文件的接口。libc 现在是小库的直接普通依赖，不是新增或升级了注册表包。
 
 本项目的锁文件包括主程序、内部小库、构建和测试所需的注册表包。支持目标为 Linux x86_64；表中另列锁内的目标特有传递依赖。
 
-在独立目录使用标准 crates.io 源，或使用已备齐精确版本的本机可信缓存；不从父目录导入清单、源码、锁文件或构建产物。缓存不全时显式报告缺件，不替换包名或校验值。本次未捆绑或安装第三方二进制。已有[离线工具包配方](packaging/debian13-amd64/README.md)分别核上游工具、库、准确原包和对应源码；这些不是 Cargo 依赖。
+在独立目录使用标准 crates.io 源，或使用已备齐精确版本的本机可信缓存；不从父目录导入清单、源码、锁文件或构建产物。缓存不全时显式报告缺件，不替换包名或校验值。本次未捆绑或安装第三方二进制。旧卷镜像工具和网页的来源见[历史索引](docs/archive/retired-volume-tools.md)，它们不是现行发行的一部分。
 
-## 已核对的 27 份发行源码包
+## [仅静态] 已核对的 26 份发行源码包
 
-`httparse` 的完整锁记录由 [crates.io 登记](https://github.com/rust-lang/crates.io-index/blob/master/ht/tp/httparse)及上游 axum 的 Cargo.lock 对读；原始发行包 SHA-256 为 `6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87`，静态核对了包内许可；未执行其 build.rs、解析器或 Cargo。
-
-Cargo.lock SHA-256: `78453abcf2d7da38fa775b0d27213e5c91d9477930ebf03524fd8125c83a3b08`
+Cargo.lock SHA-256: `9dea3e14264ad491146cc648e01184a152209aa262ab3970ef441b0bfa36475d`
 
 本表使用 [Cargo.lock](Cargo.lock) 中的版本和 `checksum` 核对整个 `.crate` 归档，许可及署名以归档材料为准。[Cargo 注册表规范](https://doc.rust-lang.org/cargo/reference/registry-index.html#download-endpoint)给出原始包下载方式。
 
@@ -31,7 +28,6 @@ Cargo.lock SHA-256: `78453abcf2d7da38fa775b0d27213e5c91d9477930ebf03524fd8125c83
 | [blake2 0.10.6](https://crates.io/crates/blake2/0.10.6) | argon2 | `MIT OR Apache-2.0` | `LICENSE-APACHE`、`LICENSE-MIT` |
 | [subtle 2.6.1](https://crates.io/crates/subtle/2.6.1) | 主程序直接使用，亦由 blake2 所用 digest 的 mac 特性引入 | `BSD-3-Clause` | `LICENSE` |
 | [zeroize 1.9.1](https://crates.io/crates/zeroize/1.9.1) | 主程序及 argon2 的指定特性 | `Apache-2.0 OR MIT` | `LICENSE-APACHE`、`LICENSE-MIT` |
-| [httparse 1.10.1](https://crates.io/crates/httparse/1.10.1) | 主程序直接依赖；上游测试依赖不引入 | `MIT OR Apache-2.0` | `LICENSE-MIT`、`LICENSE-APACHE` |
 | [bitflags 2.13.2](https://crates.io/crates/bitflags/2.13.2) | rustix | `MIT OR Apache-2.0` | `LICENSE-MIT`、`LICENSE-APACHE` |
 | [cfg-if 1.0.5](https://crates.io/crates/cfg-if/1.0.5) | getrandom、sha2 | `MIT OR Apache-2.0` | `LICENSE-MIT`、`LICENSE-APACHE` |
 | [errno 0.3.14](https://crates.io/crates/errno/0.3.14) | rustix | `MIT OR Apache-2.0` | `LICENSE-MIT`、`LICENSE-APACHE` |
@@ -58,4 +54,4 @@ Cargo.lock SHA-256: `78453abcf2d7da38fa775b0d27213e5c91d9477930ebf03524fd8125c83
 
 ## 退役材料的来源记录
 
-不再构建 SQLite/SMB 历史夹具，也不随诊断工具提取旧凭据提供者。过去版本的[锁定源码及许可核对](https://github.com/isarmg/zxs/blob/b2e3af5aba9c0901bfaa83c4bebf16d75a25e79e/helper/DEPENDENCIES.md)和[原 Debian 包摘要](https://github.com/isarmg/zxs/blob/b2e3af5aba9c0901bfaa83c4bebf16d75a25e79e/helper/packaging/debian13-amd64/lock.json)仍可按该提交只读查证。这些材料不属于当前锁或发行配方。
+不再构建 SQLite/SMB 历史夹具或分发旧凭据提供者。过去版本的[锁定源码及许可核对](https://github.com/isarmg/zxs/blob/b2e3af5aba9c0901bfaa83c4bebf16d75a25e79e/helper/DEPENDENCIES.md)和[原 Debian 包摘要](https://github.com/isarmg/zxs/blob/b2e3af5aba9c0901bfaa83c4bebf16d75a25e79e/helper/packaging/debian13-amd64/lock.json)仍可按该提交只读查证。这些材料不属于当前锁或发行配方。

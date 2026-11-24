@@ -18,7 +18,7 @@ pub(crate) fn sha(
             s.bytes()
                 .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
         })
-        .and_then(crate::fs_tools::hex)
+        .and_then(crate::asset_digest::hex)
         .filter(|x| *x != [0; 32])
         .ok_or("expected the independent original receipt SHA-256 (64 lowercase hex digits)")
 }

@@ -10,7 +10,6 @@ compile_error!("helper-linux-evidence supports x86_64 Linux LP64 only");
 
 pub mod diagnostic_process;
 pub mod nvme_health;
-pub mod panel_confinement;
 pub mod prompt_signals;
 
 use linux_raw_sys::general as uapi;
@@ -217,33 +216,6 @@ pub fn read_birth(file: &File, existing_mount: u64) -> io::Result<Birth> {
         return Err(unsupported("kernel did not return a complete handle"));
     }
     collect(uuid, &h, mount, existing_mount)
-}
-
-/// One-shot CLI launch boundary. Atomically privatize this thread's descriptor
-/// table and mark *all* non-standard descriptors close-on-exec, including
-/// unknown inherited ones. This does not close or retarget existing objects.
-/// Only explicitly chosen read-only runtime/image FDs and the monitor pipe
-/// may be reintroduced before spawn. No retries with a weaker descriptor set.
-///
-/// # Errors
-/// Propagates failure of the kernel's atomic `close_range` operation.
-#[allow(unsafe_code)]
-pub fn isolate_check_descriptors() -> io::Result<()> {
-    // SAFETY: close_range accepts only unsigned scalars; no pointer, Rust
-    // object or descriptor is invalidated by the CLOEXEC operation.
-    let result = unsafe {
-        libc::syscall(
-            libc::SYS_close_range,
-            3u32,
-            u32::MAX,
-            libc::CLOSE_RANGE_CLOEXEC | libc::CLOSE_RANGE_UNSHARE,
-        )
-    };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
 }
 
 #[cfg(test)]

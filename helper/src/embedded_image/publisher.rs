@@ -10,7 +10,7 @@ use super::{
 };
 use crate::{
     foreground::PublicConfirmation,
-    fs_tools::lower_hex,
+    asset_digest::lower_hex,
     path_rules::QuotedPath,
     pinned::{Entity, Mount},
     product_layout,
@@ -72,7 +72,7 @@ impl EmbeddedInstall {
     }
     #[cfg(feature = "embedded-zxs")]
     pub(crate) fn run(self) -> io::Result<()> {
-        let packaged = crate::fs_tools::hex(HASH).ok_or_else(denied)?;
+        let packaged = crate::asset_digest::hex(HASH).ok_or_else(denied)?;
         self.publish(ASSET, packaged)
     }
     // The production caller can only pass the compiled immutable asset
