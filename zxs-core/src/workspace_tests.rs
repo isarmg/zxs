@@ -260,3 +260,114 @@ fn sticky_conflict_preserves_the_original_until_its_exact_receipt() {
     assert_eq!(fs::read(file).unwrap(), b"later unsent local edit");
     ws.root.absent(payload(op).as_ref()).unwrap();
 }
+
+#[test]
+#[ignore = "requires newly allocated unprivileged ext4 fixture scratch"]
+fn cancel_only_never_armed_keeps_work_and_confirmed_basis() {
+    let (mut ws, _, file, _) = scratch_workspace("cancel-prepared");
+    let review = ws
+        .review(&file, Some(DisplayName::parse("first").unwrap()))
+        .unwrap();
+    let first = ws.prepare(&review, true).unwrap().unwrap();
+    let (original, _, _) = ws.original(&first.operation_id).unwrap();
+    let lease = ws.hold_container(&first.container_id).unwrap();
+    ws.settle(&original, Lookup::Confirmed { sequence: 1 }, &lease)
+        .unwrap();
+    drop(lease);
+    let basis = ws.basis(&file).unwrap().unwrap();
+
+    fs::write(&file, b"older local version A").unwrap();
+    let review = ws.review(&file, None).unwrap();
+    let candidate = ws.prepare(&review, true).unwrap().unwrap();
+    let op = &candidate.operation_id;
+    let leaf = payload(op);
+    let original_stage = ws.root.source(Path::new(&leaf)).unwrap();
+    let later = file.with_file_name("later-work");
+    fs::write(&later, b"newer edited bytes B").unwrap();
+    fs::rename(&later, &file).unwrap();
+
+    let choice = ws.review_prepared_cancellation(op).unwrap();
+    assert_eq!(&candidate, choice.intent());
+    assert_eq!(choice.working_path(), file.to_str().unwrap());
+    assert!(ws.cancel_prepared(choice, false).is_err());
+    original_stage.check().unwrap();
+
+    let stale = ws.review_prepared_cancellation(op).unwrap();
+    fs::rename(&file, &later).unwrap();
+    assert!(ws.review_prepared_cancellation(op).is_err());
+    assert!(ws.cancel_prepared(stale, true).is_err());
+    original_stage.check().unwrap();
+    fs::rename(&later, &file).unwrap();
+
+    let choice = ws.review_prepared_cancellation(op).unwrap();
+    ws.cancel_prepared(choice, true).unwrap();
+    assert!(ws.pending().unwrap().is_empty());
+    assert!(ws.intent(op).is_err());
+    ws.root.absent(leaf.as_ref()).unwrap();
+    assert_eq!(ws.basis(&file).unwrap(), Some(basis.clone()));
+    assert_eq!(fs::read(&file).unwrap(), b"newer edited bytes B");
+
+    // A subsequent plan is possible only after a new explicit review. Once
+    // armed its proof, body and work survive even apparent absence/ambiguity.
+    let next_review = ws.review(&file, None).unwrap();
+    let next = ws.prepare(&next_review, true).unwrap().unwrap();
+    assert_ne!(&next.operation_id, op);
+    let (armed, _, _) = ws.original(&next.operation_id).unwrap();
+    let next_lease = ws.hold_container(&next.container_id).unwrap();
+    let retained = ws
+        .root
+        .source(Path::new(&payload(&next.operation_id)))
+        .unwrap();
+    ws.arm_attempt(&armed, &retained, &next_lease).unwrap();
+    for status in [Lookup::Absent, Lookup::Unknown, Lookup::Conflict] {
+        ws.settle(&armed, status, &next_lease).unwrap();
+        assert!(ws.review_prepared_cancellation(&next.operation_id).is_err());
+        retained.check().unwrap();
+    }
+    assert_eq!(ws.basis(&file).unwrap(), Some(basis));
+
+    cancel_reopens_after_verified_unlink_and_refuses_substitution();
+}
+
+fn cancel_reopens_after_verified_unlink_and_refuses_substitution() {
+    let (mut ws, state, file, _) = scratch_workspace("cancel-cold-stage");
+    let name = DisplayName::parse("first").unwrap();
+    let review = ws.review(&file, Some(name.clone())).unwrap();
+    let pending = ws.prepare(&review, true).unwrap().unwrap();
+    let op = &pending.operation_id;
+    let leaf = payload(op);
+    let (original, _, _) = ws.original(op).unwrap();
+    let lease = ws.hold_container(&pending.container_id).unwrap();
+    // Simulate interruption after guarded unlink/fsync but before DELETE.
+    ws.root
+        .remove_verified(&leaf, &pending.body, original.sealed, || lease.check())
+        .unwrap();
+    drop(lease);
+    drop(ws);
+
+    let mut ws = Workspace::open_local(&state).unwrap();
+    assert_eq!(ws.pending().unwrap(), vec![op.clone()]);
+    ws.root.absent(leaf.as_ref()).unwrap();
+    let selected = ws.review_prepared_cancellation(op).unwrap();
+    ws.cancel_prepared(selected, true).unwrap();
+    assert!(ws.pending().unwrap().is_empty());
+    assert_eq!(fs::read(&file).unwrap(), b"synthetic a");
+    assert!(ws.basis(&file).unwrap().is_none());
+
+    let review = ws.review(&file, Some(name)).unwrap();
+    let pending = ws.prepare(&review, true).unwrap().unwrap();
+    let op = &pending.operation_id;
+    let frozen = state.join(payload(op));
+    let held_copy = state.join("preserved-synthetic-original");
+    let selected = ws.review_prepared_cancellation(op).unwrap();
+    fs::rename(&frozen, &held_copy).unwrap();
+    fs::write(&frozen, b"another ordinary inode, not the frozen original").unwrap();
+    assert!(ws.cancel_prepared(selected, true).is_err());
+    assert_eq!(ws.pending().unwrap(), vec![op.clone()]);
+    assert_eq!(fs::read(&held_copy).unwrap(), b"synthetic a");
+    assert_eq!(
+        fs::read(&frozen).unwrap(),
+        b"another ordinary inode, not the frozen original"
+    );
+    assert_eq!(fs::read(&file).unwrap(), b"synthetic a");
+}

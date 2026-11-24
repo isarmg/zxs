@@ -93,6 +93,24 @@ pub struct PayloadSlice {
     leaf: OsString,
 }
 
+/// One local cancellation review. This never owns a transport or authorizes
+/// removal of a working file, confirmed basis, or possibly submitted original.
+pub struct PreparedCancellation {
+    owner: Arc<()>,
+    original: Original,
+    working: Source,
+}
+
+impl PreparedCancellation {
+    pub fn intent(&self) -> &Intent {
+        &self.original.intent
+    }
+
+    pub fn working_path(&self) -> &str {
+        &self.original.path
+    }
+}
+
 pub struct Review {
     source: Source,
     path: String,
@@ -523,6 +541,104 @@ impl Workspace {
     pub fn intent(&self, op: &Id) -> Result<Intent> {
         self.validate()?;
         Ok(self.original(op)?.0.intent)
+    }
+
+    /// Show the exact unarmed local candidate without modifying it or connecting.
+    pub fn review_prepared_cancellation(&self, op: &Id) -> Result<PreparedCancellation> {
+        self.validate()?;
+        let (original, phase, _) = self.original(op)?;
+        if phase != "prepared" {
+            return Err(invalid(
+                "only an original known never armed can be canceled offline",
+            ));
+        }
+        let path = Path::new(&original.path);
+        let folder = Folder::open(
+            path.parent()
+                .ok_or_else(|| invalid("working file has no original parent"))?,
+            false,
+        )?;
+        // The current ordinary file must still exist, but can contain later edits.
+        let working = folder.source(Path::new(
+            path.file_name()
+                .ok_or_else(|| invalid("working file has no original name"))?,
+        ))?;
+        if (working.before.dev, working.before.ino) == (original.sealed.dev, original.sealed.ino) {
+            return Err(invalid(
+                "the working file must be separate from the frozen copy",
+            ));
+        }
+        let choice = PreparedCancellation {
+            owner: Arc::clone(&self.read_session_owner),
+            original,
+            working,
+        };
+        self.check_prepared_cancellation(&choice)?;
+        Ok(choice)
+    }
+
+    fn check_prepared_cancellation(&self, choice: &PreparedCancellation) -> Result<()> {
+        if !Arc::ptr_eq(&self.read_session_owner, &choice.owner) {
+            return Err(invalid(
+                "the cancellation belongs to a different workspace choice",
+            ));
+        }
+        self.validate()?;
+        let (current, phase, _) = self.original(&choice.original.intent.operation_id)?;
+        if phase != "prepared"
+            || current != choice.original
+            || db_basis(&self.db, &choice.original.path)? != choice.original.prior
+        {
+            return Err(invalid(
+                "the exact never-armed original or its working basis changed; nothing authorized",
+            ));
+        }
+        choice.working.check()
+    }
+
+    /// Discard only the explicitly confirmed never-armed frozen candidate.
+    /// No readback, retry, new plan, unbinding, or working-file mutation.
+    pub fn cancel_prepared(&self, choice: PreparedCancellation, confirmed: bool) -> Result<()> {
+        if !confirmed {
+            return Err(invalid(
+                "explicitly confirm discarding this exact local frozen candidate",
+            ));
+        }
+        self.check_prepared_cancellation(&choice)?;
+        let original = &choice.original;
+        let op = &original.intent.operation_id;
+        let lease = self.hold_container(&original.intent.container_id)?;
+        let guard = || {
+            self.check_prepared_cancellation(&choice)?;
+            held_lease_at(&self.root, self.db_id, &lease)
+        };
+        guard()?;
+        let leaf = payload(op);
+        if self.root.absent(leaf.as_ref()).is_err() {
+            // Another inode, unverified data, or stale custody is never removed.
+            self.root.remove_verified(&leaf, &original.intent.body, original.sealed, guard)
+                .map_err(|error| format!(
+                    "local cancellation of {op} was not completed; check its frozen copy, keep the working file: {error}",
+                ))?;
+        }
+        // Namespace durability precedes removing the local intent. After a crash
+        // the never-armed row may still be listed but no body is available to send.
+        let finish = || -> Result<()> {
+            self.root.sync()?;
+            guard()?;
+            self.root.absent(leaf.as_ref())?;
+            if self.db.execute(
+                "DELETE FROM original WHERE op=?1 AND record=?2 AND phase='prepared' AND receipt IS NULL",
+                params![op.as_str(), serde_json::to_string(original)?],
+            )? != 1
+            {
+                return Err(invalid("the never-armed original row changed before cancellation"));
+            }
+            held_lease_at(&self.root, self.db_id, &lease)
+        };
+        finish().map_err(|error| format!(
+            "frozen copy for {op} may be gone but local cancellation was not verified; reopen its original state, never resend: {error}",
+        ).into())
     }
 
     fn original(&self, op: &Id) -> Result<(Original, String, Option<u64>)> {

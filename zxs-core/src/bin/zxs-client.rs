@@ -28,7 +28,7 @@ fn run() -> zxs_core::Result<()> {
     };
 
     fn usage() -> Box<dyn std::error::Error + Send + Sync> {
-        "zxs-client /absolute/private-state open|prepare /file [first DISPLAY_NAME]|dirty /file|bundle-diff /dir|bundle-pack /dir /new.zip\n\
+        "zxs-client /absolute/private-state open|prepare /file [first DISPLAY_NAME]|cancel-prepared OP|dirty /file|bundle-diff /dir|bundle-pack /dir /new.zip\n\
          zxs-client HTTPS_ORIGIN ACCOUNT /absolute/private-state init|reconcile|list [after]|detail ID|checkout ID BRANCH /new/file|status OP|send OP\n\
          zxs-client --receipt-session HTTPS_ORIGIN ACCOUNT /absolute/private-state reconcile|status OP\n\
          zxs-client --payload-session HTTPS_ORIGIN ACCOUNT /absolute/private-state slice /mapped/file START LENGTH /new/output".into()
@@ -52,6 +52,22 @@ fn run() -> zxs_core::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "--payload-session") {
         return run_payload(&args);
+    }
+    if let Some((directory, op)) = cancel_prepared_args(&args)? {
+        // This branch does not touch other receipts or open any network session.
+        let state = Workspace::open_local(directory)?;
+        let choice = state.review_prepared_cancellation(&op)?;
+        println!(
+            "只丢弃尚未尝试的本机封存 {op}：{} 字节 SHA-256 {}。\n保留普通编辑文件 {} 和确认基线，不请求服务器。",
+            choice.intent().body.length,
+            choice.intent().body.sha256,
+            choice.working_path()
+        );
+        if ask(&format!("cancel {op}"))? {
+            state.cancel_prepared(choice, true)?;
+            println!("已取消本机封存 {op}；未发送。");
+        }
+        return Ok(());
     }
     if let [state, verb, rest @ ..] = args.as_slice()
         && matches!(
@@ -194,6 +210,31 @@ fn run() -> zxs_core::Result<()> {
         }
         Ok(())
     })
+}
+
+#[cfg(target_os = "linux")]
+fn cancel_prepared_args(
+    args: &[String],
+) -> zxs_core::Result<Option<(&std::path::Path, zxs_core::r3::Id)>> {
+    use std::path::Path;
+    use zxs_core::r3::Id;
+
+    let bad = || "use the offline form: zxs-client /absolute/private-state cancel-prepared OP";
+    if let [directory, verb, rest @ ..] = args
+        && verb == "cancel-prepared"
+        && Path::new(directory).is_absolute()
+    {
+        let [raw] = rest else {
+            return Err(bad().into());
+        };
+        return Ok(Some((Path::new(directory), Id::parse(raw)?)));
+    }
+    // Deny this verb in the fourth (online) slot before the CLI can authenticate.
+    // The second slot of a valid online invocation is the account, not a verb.
+    if args.get(3).is_some_and(|arg| arg == "cancel-prepared") {
+        return Err(bad().into());
+    }
+    Ok(None)
 }
 
 #[cfg(target_os = "linux")]
@@ -394,3 +435,7 @@ mod receipt_tests;
 #[cfg(all(test, target_os = "linux"))]
 #[path = "../../tests/unit/payload_cli_cases.rs"]
 mod payload_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "../../tests/unit/cancel_cli_cases.rs"]
+mod cancel_tests;
