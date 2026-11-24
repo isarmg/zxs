@@ -336,6 +336,29 @@ impl Workspace {
         session.requests(&guard).catalog(after).await
     }
 
+    /// Consume one selected login and verify only its first compact catalog
+    /// request. The caller's final sign-in check runs after HTTP/2 sender
+    /// readiness, immediately before sending. It cannot revoke a sent request.
+    pub async fn finish_existing_basic_with_catalog(
+        &self,
+        ready: ExistingBasicLogin,
+        password: Zeroizing<String>,
+        admit_wire: impl Fn() -> Result<()>,
+    ) -> Result<(ExistingBasicSession, Catalog)> {
+        let session = self.finish_existing_basic(ready, password)?;
+        let held = || self.validate_basic_lane(BasicLane::Existing(&session));
+        held()?;
+        let page = session
+            .requests(|| {
+                held()?;
+                admit_wire()
+            })
+            .catalog(None)
+            .await?;
+        held()?;
+        Ok((session, page))
+    }
+
     pub async fn detail_existing(
         &self,
         session: &ExistingBasicSession,

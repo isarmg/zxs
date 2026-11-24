@@ -1,0 +1,21 @@
+[package]
+name = "zxs-desktop"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "Apache-2.0"
+publish = false
+description = "Optional ZXS desktop shell for the existing shared client core"
+
+[workspace]
+resolver = "3"
+
+[dependencies]
+eframe = { version = "=0.37.0", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+log = { version = "=0.4.35", default-features = false, features = ["max_level_off"] }
+tokio = { version = "=1.54.1", default-features = false, features = ["rt", "sync", "time"] }
+zeroize = "=1.9.1"
+zxs-core = { path = ".." }
+
+[lints.rust]
+unsafe_code = "forbid"
