@@ -258,20 +258,7 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
                     }
                 }
                 var producer = new BasicRequestProducer(request, body);
-                var bounded = new BasicResponseConsumer<>(new BoundedBody(shape.limit())) {
-                    @Override public void consumeResponse(HttpResponse head, EntityDetails entity,
-                            HttpContext context, FutureCallback<Message<HttpResponse, byte[]>> result)
-                            throws HttpException, IOException {
-                        requireUploadProof(head.getCode(), body);
-                        super.consumeResponse(head, entity, context, result);
-                    }
-
-                    @Override public void streamEnd(List<? extends Header> trailers)
-                            throws HttpException, IOException {
-                        require(trailers == null || trailers.isEmpty());
-                        super.streamEnd(trailers);
-                    }
-                };
+                var bounded = responseConsumer(shape.limit(), body);
                 var future = endpoint.execute(producer, bounded, null);
                 var response = body == null ? waitFor(future) : waitForUpload(future, body);
                 byte[] data = response.getBody();
@@ -287,6 +274,23 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
         } catch (IllegalStateException | UnsupportedOperationException unavailable) {
             throw new IOException("verified HTTP/2 exchange unavailable");
         }
+    }
+
+    static BasicResponseConsumer<byte[]> responseConsumer(int limit, FullBodyProducer body) {
+        return new BasicResponseConsumer<>(new BoundedBody(limit)) {
+            @Override public void consumeResponse(HttpResponse head, EntityDetails entity,
+                    HttpContext context, FutureCallback<Message<HttpResponse, byte[]>> result)
+                    throws HttpException, IOException {
+                requireUploadProof(head.getCode(), body);
+                super.consumeResponse(head, entity, context, result);
+            }
+
+            @Override public void streamEnd(List<? extends Header> trailers)
+                    throws HttpException, IOException {
+                require(trailers == null || trailers.isEmpty());
+                super.streamEnd(trailers);
+            }
+        };
     }
 
     static void requireUploadProof(int status, FullBodyProducer body) throws IOException {

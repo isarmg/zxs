@@ -65,11 +65,14 @@ public final class RemoteH2ExchangeTest {
     @Test
     public void earlySuccessHeadersCannotBeUploadProof() throws Exception {
         var producer = new FullBodyProducer(new ByteArrayInputStream(new byte[] { 1 }), 1, EMPTY_SHA);
-        assertThrows(IOException.class, () -> RemoteH2Exchange.requireUploadProof(200, producer));
-        RemoteH2Exchange.requireUploadProof(409, producer);
-        RemoteH2Exchange.requireUploadProof(200, null);
+        var early = RemoteH2Exchange.responseConsumer(16, producer);
+        assertThrows(IOException.class, () -> early.consumeResponse(new BasicHttpResponse(200), null, null, null));
+        early.consumeResponse(new BasicHttpResponse(409), null, null, null);
+        RemoteH2Exchange.responseConsumer(16, null)
+                .consumeResponse(new BasicHttpResponse(200), null, null, null);
         var empty = new FullBodyProducer(new ByteArrayInputStream(new byte[0]), 0, EMPTY_SHA);
-        RemoteH2Exchange.requireUploadProof(200, empty);
+        RemoteH2Exchange.responseConsumer(16, empty)
+                .consumeResponse(new BasicHttpResponse(200), null, null, null);
     }
 
     @Test

@@ -144,7 +144,7 @@ instrument() {
 }
 cold="$package.RemoteColdProcessTest"
 instrument suite -e notClass "$cold"
-for cls in LocalWorkspaceDraftTest RemoteContainerReadTest RemoteH2ExchangeTest \
+for cls in FullBodyProducerTest LocalWorkspaceDraftTest OrdinaryFileStageTest RemoteContainerReadTest RemoteH2ExchangeTest \
     RemoteSaveContractTest RemoteSaveJournalTest RemoteSaveSubmitTest; do
     grep -Fxq "INSTRUMENTATION_STATUS: class=$package.$cls" "$scratch/suite.log"
 done

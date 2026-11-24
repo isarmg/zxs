@@ -1,6 +1,7 @@
 package org.zipworkspace.preview;
 
 import android.content.Context;
+import android.os.CancellationSignal;
 import androidx.test.platform.app.InstrumentationRegistry;
 
 import org.junit.Test;
@@ -20,12 +21,24 @@ import static org.junit.Assert.assertNotNull;
 public final class RemoteColdProcessTest {
     private static final RemoteSaveJournal.Authority AUTHORITY =
             new RemoteSaveJournal.Authority("55".repeat(32), "alice");
-    private static final byte[] BODY = "完整正文".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] BODY = new byte[400_001];
+    static {
+        for (int i = 0; i < BODY.length; i++) BODY[i] = (byte) (i * 17);
+    }
 
     @Test
     public void freezeAndLoseReply() throws Exception {
         var fake = fixture();
-        RemoteSaveJournal.prepare(fake.context, AUTHORITY, fake.save, BODY);
+        var stage = OrdinaryFileStage.stage(fake.context, fake.save.operation(), new OrdinaryFileStage.Source() {
+            @Override public long size() { return BODY.length; }
+            @Override public void validate() {}
+            @Override public void checkEnd() {}
+            @Override public void fill(long offset, byte[] target, int count) {
+                System.arraycopy(BODY, (int) offset, target, 0, count);
+            }
+        }, new CancellationSignal());
+        RemoteSaveJournal.prepareStaged(fake.context,
+                new RemoteSaveJournal.Plan(AUTHORITY, fake.save), stage);
         assertEquals(RemoteSaveSubmit.Status.UNCONFIRMED, fake.run(RemoteSaveSubmit.Mode.FIRST_SEND).status());
         assertEquals(1, fake.gets);
         assertEquals(1, fake.posts);
@@ -36,6 +49,8 @@ public final class RemoteColdProcessTest {
     public void recoverInNewProcess() throws Exception {
         var fake = fixture();
         fake.confirmed = true;
+        var rows = RemoteSaveJournal.plans(fake.context, AUTHORITY, null).rows();
+        assertEquals(1, rows.stream().filter(plan -> plan.save().equals(fake.save)).count());
         assertEquals(new RemoteSaveSubmit.Result(RemoteSaveSubmit.Status.CONFIRMED, BigInteger.ONE),
                 fake.run(RemoteSaveSubmit.Mode.LOOKUP_ONLY));
         assertEquals(1, fake.gets);
@@ -58,7 +73,7 @@ public final class RemoteColdProcessTest {
             throw new IllegalArgumentException("cold fixture needs a unique operation argument");
         }
         var save = new RemoteSaveContract.Save("11".repeat(16), operation, "33".repeat(16),
-                BigInteger.ZERO, new RemoteSaveContract.FirstMain("文件.txt"), BODY.length,
+                BigInteger.ZERO, new RemoteSaveContract.FirstMain("完整.bin"), BODY.length,
                 HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(BODY)));
         return new Fake(context, save);
     }
@@ -100,7 +115,7 @@ public final class RemoteColdProcessTest {
             return response(200, "{\"kind\":\"save_node\",\"container_id\":\"" + save.container()
                     + "\",\"operation_id\":\"" + save.operation() + "\",\"sequence\":1,\"node_id\":\""
                     + save.node() + "\",\"length\":" + save.length() + ",\"sha256\":\"" + save.sha256()
-                    + "\",\"target\":{\"kind\":\"first_main\",\"name\":\"文件.txt\"}}");
+                    + "\",\"target\":{\"kind\":\"first_main\",\"name\":\"完整.bin\"}}");
         }
 
         private static RemoteSaveSubmit.Response response(int status, String raw) {
