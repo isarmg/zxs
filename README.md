@@ -1,9 +1,10 @@
 # ZXS
 
-| 项目 | 用途 | 文档 |
-| --- | --- | --- |
-| [存储服务](zxs/) | 保存文件容器、版本和标签；删除移入专用回收盘 | [使用](zxs/README.md) · [架构](zxs/ARCHITECTURE.md) · [任务](zxs/TASKS.md) |
-| [Helper](helper/) | 初始化服务、系统与磁盘诊断、离线维护 | [使用](helper/README.md) · [架构](helper/ARCHITECTURE.md) · [任务](helper/TASKS.md) |
-| [Workspace](zxs-workspace/) | 桌面管理、虚拟磁盘、编辑及提交；也可独立管理本地 ZIP 工作区 | [使用](zxs-workspace/README.md) · [架构](zxs-workspace/ARCHITECTURE.md) · [任务](zxs-workspace/TASKS.md) |
+按文件保存完整版本、标签和回收记录的存储套件。各项目独立构建。
 
-三个项目分别构建。桌面应用使用 HTTPS 调用存储服务的文件容器协议。文件改动在本机进行，显式提交时逐个上传有新正文的文件，管理界面在桌面应用内。独立的本地 ZIP 工作区和远程容器提交是两个入口。
+| 项目 | 职责 | 文档 |
+| --- | --- | --- |
+| [ZXS 服务端](zxs/) | 保存文件容器、版本、标签和回收记录 | [上手](zxs/README.md) · [架构](zxs/ARCHITECTURE.md) · [状态](zxs/TASKS.md) |
+| [Helper](helper/) | 首设、磁盘维护、离线导入和密码重置 | [上手](helper/README.md) · [架构](helper/ARCHITECTURE.md) · [状态](helper/TASKS.md) |
+| [Rust 客户端核心](zxs-core/) | 新版普通目录编辑、显式提交和标准 ZIP 打包 | [上手与状态](zxs-core/README.md) |
+| [Workspace](zxs-workspace/) | 现有桌面和移动端客户端，本地 ZIP 工作区在迁移范围内 | [上手](zxs-workspace/README.md) · [架构](zxs-workspace/ARCHITECTURE.md) · [状态](zxs-workspace/TASKS.md) |
