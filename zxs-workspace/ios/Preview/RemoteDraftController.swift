@@ -223,10 +223,10 @@ final class RemoteDraftController: UIViewController {
         do {
             let (endpoint, account) = try selectedOrigin()
             let session = try MobileSaveSession.shared.get()
-            let target = RemoteSave.Target.firstMain(name: fileName.text ?? "")
-            guard target.valid else { throw RemoteSave.Failure.invalidIntent }
+            let name = fileName.text ?? ""
+            guard RemoteSave.Target.firstMain(name: name).valid else { throw RemoteSave.Failure.invalidIntent }
             let plan = WholeFileTarget(destination: MobileSaveExchange.identity(endpoint: endpoint, user: account),
-                container: Self.newID(), operation: Self.newID(), node: Self.newID(), base: 0, target: target)
+                container: Self.newID(), operation: Self.newID(), node: Self.newID(), base: 0, target: .firstMain(name: name))
             let controller = WholeFileImportController(plan: plan, files: session.files, drafts: session.store) {
                 [weak self] saved, ready in self?.showPrepared(saved, ready: ready)
             }

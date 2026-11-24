@@ -3,18 +3,70 @@ import UIKit
 import UniformTypeIdentifiers
 
 struct WholeFileTarget: Sendable {
+    // Keep the selected node itself: the save parent and the comparison must
+    // come from the same authenticated version, not a later branch head.
+    enum Selection: Sendable {
+        case firstMain(name: String)
+        case append(branch: String, original: RemoteRead.History.Node)
+        case forkMain(branch: String, original: RemoteRead.History.Node)
+    }
+
+    enum Preparation {
+        case retained(RemoteSave, ready: Bool)
+        case unchanged
+        case unconfirmed
+    }
+
+    private enum Failure: Error { case unchanged }
+
     let destination: String
     let container: String
     let operation: String
     let node: String
     let base: UInt64
-    let target: RemoteSave.Target
+    let target: Selection
     let file = UUID()
 
     func record(_ body: WholeFileStage.Identity) throws -> RemoteSave {
-        guard body.id == file else { throw RemoteSave.Failure.invalidIntent }
-        return try RemoteSave(destination: destination, container: container, operation: operation,
-                              node: node, base: base, target: target, wholeFile: body)
+        guard body.id == file, let length = UInt64(exactly: body.length) else { throw RemoteSave.Failure.invalidIntent }
+        let saveTarget: RemoteSave.Target
+        let original: RemoteRead.History.Node?
+        switch target {
+        case let .firstMain(name):
+            saveTarget = .firstMain(name: name); original = nil
+        case let .append(branch, selected):
+            saveTarget = .append(branch: branch, head: selected.nodeId); original = selected
+        case let .forkMain(branch, selected):
+            saveTarget = .forkMain(branch: branch, from: selected.nodeId); original = selected
+        }
+        let save = try RemoteSave(destination: destination, container: container, operation: operation,
+                                  node: node, base: base, target: saveTarget, wholeFile: body)
+        if let original, original.length == length, original.sha256 == body.sha256 { throw Failure.unchanged }
+        return save
+    }
+
+    // The source adapter calls beforePublish only after verifying all source
+    // bytes and the staged copy, and before the immutable body name is linked.
+    func prepare(in drafts: RemoteSaveStore,
+                 freeze: (_ beforePublish: (WholeFileStage.Identity) throws -> Void) throws -> WholeFileStage.Identity
+    ) -> Preparation {
+        var expected: RemoteSave?
+        do {
+            let body = try freeze { identity in
+                let save = try record(identity)
+                expected = save
+                try drafts.retain(save)
+            }
+            guard let save = expected, save.diskBody == body else { throw RemoteSave.Failure.invalidIntent }
+            return .retained(save, ready: true)
+        } catch Failure.unchanged {
+            return .unchanged
+        } catch {
+            guard let expected, let saved = try? drafts.reopenForRecovery(operation: operation),
+                  let frozen = try? expected.encode(), let reopened = try? saved.encode(), frozen == reopened
+            else { return .unconfirmed }
+            return .retained(saved, ready: false)
+        }
     }
 }
 
@@ -130,23 +182,20 @@ final class WholeFileImportController: UIViewController, UIDocumentPickerDelegat
         notice.text = "正在检查并暂存整份文件…"
         let plan = plan, files = files, drafts = drafts
         queue.addOperation { [weak self] in
-            let result: (RemoteSave, Bool)? = {
-                do {
-                    let body = try reading.freezeWholeFile(selected, id: plan.file, into: files) { identity in
-                        try drafts.retain(plan.record(identity))
-                    }
-                    return (try plan.record(body), true)
-                } catch {
-                    guard let record = try? drafts.reopenForRecovery(operation: plan.operation) else { return nil }
-                    return (record, false)
-                }
-            }()
+            let result = plan.prepare(in: drafts) { beforePublish in
+                try reading.freezeWholeFile(selected, id: plan.file, into: files, beforePublish: beforePublish)
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.current === reading, self.isActive else { return }
                 self.resetSelection()
-                if let (saved, ready) = result {
+                switch result {
+                case let .retained(saved, ready):
                     self.onPrepared(saved, ready)
-                } else {
+                case .unchanged:
+                    self.terminal = false
+                    self.pick.isEnabled = true
+                    self.notice.text = "所选文件与原节点内容相同。没有创建版本或分支，也没有发送。"
+                case .unconfirmed:
                     self.notice.text = "未确认暂存完成，文件未发送。原操作号：\(plan.operation)"
                 }
             }

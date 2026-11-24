@@ -65,7 +65,7 @@ enum RemoteRead {
         let nodes: [Node]
         let next: String?
 
-        struct Node: Decodable {
+        struct Node: Decodable, Sendable {
             let nodeId: String
             let operationId: String
             let parentNode: String?

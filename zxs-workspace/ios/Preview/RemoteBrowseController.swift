@@ -179,9 +179,9 @@ final class RemoteBrowseController: UITableViewController {
                       self.navigationController?.topViewController === self,
                       self.view.window?.windowScene?.activationState == .foregroundActive else { return }
                 self.consent = nil
-                let target: RemoteSave.Target = node.nodeId == branch.head
-                    ? .append(branch: branch.branch, head: node.nodeId)
-                    : .forkMain(branch: RemoteDraftController.newID(), from: node.nodeId)
+                let target: WholeFileTarget.Selection = node.nodeId == branch.head
+                    ? .append(branch: branch.branch, original: node)
+                    : .forkMain(branch: RemoteDraftController.newID(), original: node)
                 let plan = WholeFileTarget(destination: exchange.destination, container: container.containerId,
                     operation: RemoteDraftController.newID(), node: RemoteDraftController.newID(),
                     base: container.sequence, target: target)
