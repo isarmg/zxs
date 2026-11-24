@@ -13,10 +13,7 @@ const TICKET: Duration = Duration::from_secs(90);
 enum Purpose {
     Headless,
     HeadlessUnit(String),
-    CopyRepair {
-        format: RepairFormat,
-        bytes: u64,
-    },
+    CopyRepair { format: RepairFormat, bytes: u64 },
 }
 pub(super) struct Offer {
     purpose: Purpose,

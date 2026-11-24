@@ -22,7 +22,7 @@ fn obj(f: &File) -> io::Result<Entity> {
 }
 // Scoped resolution may report EAGAIN while the kernel cannot prove a
 // link containing ".." stayed beneath the root. Retry the same lookup once.
-fn retry_index_lookup<T>(mut open: impl FnMut() -> rustix::io::Result<T>) -> rustix::io::Result<T> {
+fn retry_scoped_open<T>(mut open: impl FnMut() -> rustix::io::Result<T>) -> rustix::io::Result<T> {
     match open() {
         Err(rustix::io::Errno::AGAIN) => open(),
         result => result,
@@ -167,7 +167,7 @@ impl Sys {
 
     fn at(&self, dev: Dev) -> io::Result<File> {
         let path = format!("dev/block/{dev}");
-        let selected = retry_index_lookup(|| {
+        let selected = retry_scoped_open(|| {
             openat2(
                 &self.root,
                 path.as_str(),
@@ -300,7 +300,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn index_lookup_retries_only_again_and_only_once() {
+    fn confined_lookup_retries_only_again_and_only_once() {
         use rustix::io::Errno;
 
         for (responses, expected, unused) in [
@@ -314,7 +314,7 @@ mod tests {
             ([Err(Errno::XDEV), Ok(2)], Err(Errno::XDEV), Some(Ok(2))),
         ] {
             let mut supplied = responses.into_iter();
-            assert_eq!(retry_index_lookup(|| supplied.next().unwrap()), expected);
+            assert_eq!(retry_scoped_open(|| supplied.next().unwrap()), expected);
             assert_eq!(supplied.next(), unused);
         }
     }

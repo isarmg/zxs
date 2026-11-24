@@ -274,20 +274,39 @@ mod tests {
         let worker = Channel::from_owned_child_session(b, c, [8; 32]).unwrap();
         let data = [5; 65];
         let digest = [4; 32];
-        root.send(Kind::CopyRepairBrowserReady, &digest, &data).unwrap();
+        root.send(Kind::CopyRepairBrowserReady, &digest, &data)
+            .unwrap();
         assert_eq!(
-            worker.receive::<0>(Kind::CopyRepairBrowserReady, &digest).unwrap().0,
+            worker
+                .receive::<0>(Kind::CopyRepairBrowserReady, &digest)
+                .unwrap()
+                .0,
             data
         );
-        root.send(Kind::CopyRepairBrowserRequest, &digest, &data).unwrap();
-        assert!(worker.receive::<0>(Kind::CopyRepairBrowserReady, &digest).is_err());
-        root.send(Kind::CopyRepairBrowserReady, &[7; 32], &data).unwrap();
-        assert!(worker.receive::<0>(Kind::CopyRepairBrowserReady, &digest).is_err());
+        root.send(Kind::CopyRepairBrowserRequest, &digest, &data)
+            .unwrap();
+        assert!(
+            worker
+                .receive::<0>(Kind::CopyRepairBrowserReady, &digest)
+                .is_err()
+        );
+        root.send(Kind::CopyRepairBrowserReady, &[7; 32], &data)
+            .unwrap();
+        assert!(
+            worker
+                .receive::<0>(Kind::CopyRepairBrowserReady, &digest)
+                .is_err()
+        );
         let mut wrong = c;
         wrong.uid = Uid::from_raw(u32::from(c.uid.is_root()));
         let worker = Channel::from_owned_child_session(worker.fd, wrong, [8; 32]).unwrap();
-        root.send(Kind::CopyRepairBrowserReady, &digest, &data).unwrap();
-        assert!(worker.receive::<0>(Kind::CopyRepairBrowserReady, &digest).is_err());
+        root.send(Kind::CopyRepairBrowserReady, &digest, &data)
+            .unwrap();
+        assert!(
+            worker
+                .receive::<0>(Kind::CopyRepairBrowserReady, &digest)
+                .is_err()
+        );
         drop(root);
         worker.eof().unwrap();
     }

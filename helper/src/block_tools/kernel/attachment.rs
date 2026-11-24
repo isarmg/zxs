@@ -3,6 +3,7 @@
 use super::{
     Attachment, AttachmentSource, Dev, Entity, Field, File, Identity, Kind, Mode, Node, OFlags,
     Reason, ResolveFlags, Sys, attr, confined, diskseq, io, obj, openat2, path_dir,
+    retry_scoped_open,
 };
 use rustix::{fs::readlinkat_raw, io::Errno};
 use std::{
@@ -119,13 +120,24 @@ fn equal(a: &File, b: &File) -> Field<bool> {
     Ok(obj(a).map_err(|error| Reason::io_kind(error.kind()))?
         == obj(b).map_err(|error| Reason::io_kind(error.kind()))?)
 }
-fn directory_fd(sys: &Sys, path: &Path, links: bool) -> rustix::io::Result<File> {
-    let resolve = if links {
-        confined()
+fn scoped_directory<T>(
+    links: bool,
+    mut open: impl FnMut(ResolveFlags) -> rustix::io::Result<T>,
+) -> rustix::io::Result<T> {
+    if links {
+        // Kernel subsystem links normally traverse "..". A concurrent rename
+        // can prevent the kernel proving scope even for an unchanged link.
+        // Retry once with the same restrictions; any second failure stays fatal.
+        retry_scoped_open(|| open(confined()))
     } else {
-        confined() | ResolveFlags::NO_SYMLINKS
-    };
-    openat2(&sys.root, path, path_dir(), Mode::empty(), resolve).map(File::from)
+        open(confined() | ResolveFlags::NO_SYMLINKS)
+    }
+}
+fn directory_fd(sys: &Sys, path: &Path, links: bool) -> rustix::io::Result<File> {
+    scoped_directory(links, |resolve| {
+        openat2(&sys.root, path, path_dir(), Mode::empty(), resolve)
+    })
+    .map(File::from)
 }
 fn directory(sys: &Sys, path: &Path, links: bool) -> Field<File> {
     directory_fd(sys, path, links).map_err(|e| Reason::io_kind(io::Error::from(e).kind()))
@@ -441,6 +453,29 @@ mod tests {
             node.attachment(&self.sys, &id)
         }
     }
+    #[test]
+    fn linked_ancestry_retries_the_same_confined_open_only_once() {
+        let mut checks = Vec::new();
+        let result = scoped_directory(true, |flags| {
+            checks.push(flags);
+            if checks.len() == 1 {
+                Err(Errno::AGAIN)
+            } else {
+                Ok(3)
+            }
+        });
+        assert_eq!(result, Ok(3));
+        assert_eq!(checks, [confined(), confined()]);
+
+        let mut checks = Vec::new();
+        let result = scoped_directory(false, |flags| {
+            checks.push(flags);
+            Err::<(), _>(Errno::AGAIN)
+        });
+        assert_eq!(result, Err(Errno::AGAIN));
+        assert_eq!(checks, [confined() | ResolveFlags::NO_SYMLINKS]);
+    }
+
     #[test]
     fn canonical_devpaths_and_transport_labels_are_bounded_and_never_guess() {
         assert_eq!(

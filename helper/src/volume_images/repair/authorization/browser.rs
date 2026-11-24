@@ -14,8 +14,7 @@ use crate::{
     pinned::helper_elf::ForegroundElf,
 };
 use helper_linux_evidence::{
-    diagnostic_process::copy_repair_browser_descriptors,
-    prompt_signals::PromptSignals,
+    diagnostic_process::copy_repair_browser_descriptors, prompt_signals::PromptSignals,
 };
 use rustix::{
     net::{UCred, sockopt},
