@@ -4,23 +4,27 @@ pub(crate) const MAX_PATH_BYTES: usize = 4096;
 
 #[derive(Copy, Clone)]
 pub(crate) enum Kind {
-    Directory,
+    #[cfg(any(test, feature = "embedded-zxs"))]
     Regular,
     StorageRoot,
 }
 
 impl Kind {
+    pub(crate) const fn is_regular(self) -> bool {
+        match self {
+            #[cfg(any(test, feature = "embedded-zxs"))]
+            Self::Regular => true,
+            Self::StorageRoot => false,
+        }
+    }
+
     pub(crate) fn check_path(self, raw: &[u8]) -> Result<(), &'static str> {
         let rest = raw.strip_prefix(b"/").ok_or("expected an absolute path")?;
         if raw.len() > MAX_PATH_BYTES {
             return Err("path exceeds 4096 bytes");
         }
         if rest.is_empty() {
-            return if matches!(self, Self::Directory) {
-                Ok(())
-            } else {
-                Err("filesystem root is not an admitted operand of this kind")
-            };
+            return Err("filesystem root is not an admitted operand of this kind");
         }
         let max_depth = if matches!(self, Self::StorageRoot) {
             256

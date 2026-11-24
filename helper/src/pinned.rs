@@ -1,5 +1,4 @@
 //! Resolve inputs using held directories, without adopting a replacement at the same spelling.
-pub(crate) mod storage_status;
 pub(crate) use crate::path_rules::Kind;
 
 use crate::maintenance::DiscoveryView;
@@ -257,14 +256,9 @@ pub(crate) trait DiscoveryAdmission {
 }
 
 impl Pinned {
+    #[cfg(test)]
     pub(crate) fn open(path: &Path, kind: Kind) -> io::Result<Self> {
-        Self::open_policy(path, kind, false)
-    }
-    pub(crate) fn already_mounted(path: &Path, kind: Kind) -> io::Result<Self> {
-        Self::open_policy(path, kind, true)
-    }
-    fn open_policy(path: &Path, kind: Kind, no_automount: bool) -> io::Result<Self> {
-        Self::open_guarded(path, kind, no_automount, None)
+        Self::open_guarded(path, kind, false, None)
     }
     /// A guarded storage selection and all of its later rewalks use the
     /// same admitted current mount cut. Never turn this into an ordinary pin.
@@ -313,18 +307,8 @@ impl Pinned {
         let mut chain = vec![Entity::of(&fd.metadata()?)?];
         see(&fd, chain[0], 0)?;
         let mut end = 0usize;
-        if raw == b"/" {
-            return Ok(Self {
-                path: path.to_owned(),
-                kind,
-                fd,
-                chain,
-                no_automount,
-                local: None,
-            });
-        }
         while let Some(name) = names.next() {
-            let last_file = names.peek().is_none() && matches!(kind, Kind::Regular);
+            let last_file = names.peek().is_none() && kind.is_regular();
             let flags = if last_file || no_automount {
                 OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC
             } else {
@@ -382,9 +366,6 @@ impl Pinned {
     pub(crate) fn overlaps(&self, other: &Self) -> bool {
         overlaps((&self.path, &self.chain), (&other.path, &other.chain))
     }
-    pub(crate) fn entity_is_visible_ancestor_of(&self, other: &Self) -> bool {
-        other.chain[..other.chain.len() - 1].contains(&self.entity())
-    }
     pub(crate) fn metadata(&self) -> io::Result<Metadata> {
         self.admit_held(&self.fd)?;
         self.fd.metadata()
@@ -437,10 +418,6 @@ impl Pinned {
 
     pub(crate) fn path(&self) -> &Path {
         &self.path
-    }
-    #[cfg(test)]
-    pub(crate) fn passive_mount_observation(&self) -> bool {
-        self.no_automount
     }
     pub(crate) fn mount(&self) -> io::Result<Mount> {
         self.admit_held(&self.fd)?;
@@ -558,36 +535,6 @@ fn check_named_mount(
     Ok(mount)
 }
 
-/// Keeps the original selected comparison operand and its admitted filesystem.
-pub(crate) struct LocalDataFile {
-    pin: Pinned,
-    magic: u32,
-}
-impl LocalDataFile {
-    pub(crate) fn select(path: &Path) -> io::Result<Self> {
-        let pin = Pinned::open(path, Kind::Regular)?;
-        let magic = local_data_filesystem(&pin.fd)?;
-        Ok(Self { pin, magic })
-    }
-
-    pub(crate) fn metadata(&self) -> io::Result<Metadata> {
-        self.pin.metadata()
-    }
-    pub(crate) fn require_same_path(&self) -> io::Result<()> {
-        self.pin.require_same_path()
-    }
-
-    // Selection keeps the admitted regular-file handle alive. Reopening the operand's
-    // pathname instead could read a different object or open a device or FIFO.
-    pub(crate) fn reader(&self) -> io::Result<File> {
-        reopen_admitted_reader(
-            &self.pin.fd,
-            self.pin.entity(),
-            ReaderBoundary::DataFilesystem(self.magic),
-        )
-    }
-}
-
 /// Reopen the exact, already-admitted external import operand, never its name.
 pub(crate) fn external_import_reader(pin: &File, original: Entity, mount: u64) -> io::Result<File> {
     let meta = pin.metadata()?;
@@ -629,25 +576,21 @@ pub(crate) fn installed_regular_reader(pin: &File) -> io::Result<File> {
     )
 }
 
-// Unknown comparison inputs still have their prior filesystem allowlist. The other
-// caller only reads fixed private control names below a separately selected, held
-// storage directory. A current mount ID binds its descriptors, not its provenance.
+// The installed executable keeps its filesystem allowlist. The external source
+// retains the mount already admitted by its guarded path and uses no-atime reads.
 #[derive(Copy, Clone)]
 enum MountRead {
     PassiveSource,
 }
 #[derive(Copy, Clone)]
 enum ReaderBoundary {
-    DataFilesystem(u32),
     Mount(u64, MountRead),
     InstalledRegular(u32),
 }
 impl ReaderBoundary {
     fn matches(self, fd: &File) -> io::Result<bool> {
         match self {
-            Self::DataFilesystem(magic) | Self::InstalledRegular(magic) => {
-                Ok(filesystem(fd)? == Some(magic))
-            }
+            Self::InstalledRegular(magic) => Ok(filesystem(fd)? == Some(magic)),
             Self::Mount(id, _) => Ok(Mount::on(fd)?.is_some_and(|m| m.id == id)),
         }
     }
@@ -912,11 +855,11 @@ mod tests {
         assert!(check_named_mount(&originals, mount, &other_parent, mount).is_err());
     }
     #[test]
-    fn new_directory_at_the_same_spelling_cannot_replace_a_held_observation() {
+    fn new_directory_at_the_same_spelling_cannot_replace_a_held_selection() {
         let area = tempfile::tempdir().unwrap();
         let dir = area.path().join("original");
         std::fs::create_dir(&dir).unwrap();
-        let original = super::Pinned::open(&dir, super::Kind::Directory).unwrap();
+        let original = super::Pinned::open(&dir, super::Kind::StorageRoot).unwrap();
         assert_eq!(
             original.require_same_named_mount().unwrap(),
             original.mount().unwrap()
@@ -927,7 +870,7 @@ mod tests {
         assert!(original.require_same_named_mount().is_err());
         assert_ne!(
             original.entity(),
-            super::Pinned::open(&dir, super::Kind::Directory)
+            super::Pinned::open(&dir, super::Kind::StorageRoot)
                 .unwrap()
                 .entity()
         );
@@ -940,17 +883,17 @@ mod tests {
         let leaf = parent.join("unchanged-leaf");
         std::fs::create_dir(&parent).unwrap();
         std::fs::create_dir(&leaf).unwrap();
-        let selected = super::Pinned::open(&leaf, super::Kind::Directory).unwrap();
-        let original_parent = super::Pinned::open(&parent, super::Kind::Directory).unwrap();
+        let selected = super::Pinned::open(&leaf, super::Kind::StorageRoot).unwrap();
+        let original_parent = super::Pinned::open(&parent, super::Kind::StorageRoot).unwrap();
         std::fs::rename(&parent, &saved_parent).unwrap();
         std::fs::create_dir(&parent).unwrap();
         std::fs::rename(saved_parent.join("unchanged-leaf"), &leaf).unwrap();
 
-        let current = super::Pinned::open(&leaf, super::Kind::Directory).unwrap();
+        let current = super::Pinned::open(&leaf, super::Kind::StorageRoot).unwrap();
         assert_eq!(selected.entity(), current.entity()); // comparing just the leaf would pass
         assert_ne!(
             original_parent.entity(),
-            super::Pinned::open(&parent, super::Kind::Directory)
+            super::Pinned::open(&parent, super::Kind::StorageRoot)
                 .unwrap()
                 .entity()
         );

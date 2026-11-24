@@ -4,7 +4,7 @@ version = "1.0.0"
 edition = "2024"
 rust-version = "1.100"
 license = "Apache-2.0"
-description = "Local storage diagnostics and explicitly authorized offline pool installation"
+description = "Explicit offline ZXS pool setup, maintenance, and file import"
 publish = false
 
 [workspace]

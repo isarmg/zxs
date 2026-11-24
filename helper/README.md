@@ -19,10 +19,9 @@ helper setup-headless new SYSTEM RECYCLE DATA [DATA ...] LOGIN
 
 [文件导入指南](docs/guides/offline-imports.md)包含单文件、明确映射的批量、整目录选择及重放示例。先准备、审阅并同步保存原计划，再离线应用；部分完成时只用同一份原计划重试。不会覆盖同名容器，不删除原件，不就地接管非空盘。
 
-## 其他当前入口
+## 可选内嵌发布
 
-- [只读宿主观察](docs/guides/host-diagnostics.md)：目录、独立文件字节对比、磁盘、容量、CPU 与内存，不是池登记或文件完整性验收。
-- [可选内嵌发布](docs/guides/embedded-image.md)：仅特定构建提供，独立验证原 ZXS ELF 和发布目标。
+[内嵌发布](docs/guides/embedded-image.md)仅在特定构建提供，独立验证原 ZXS ELF 和发布目标。
 
 ## 开发与交付
 

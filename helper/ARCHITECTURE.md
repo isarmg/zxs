@@ -13,7 +13,6 @@ flowchart LR
   C --> E[核对受保护的已安装 ZXS]
   E --> F[ZXS 离线名称查询、DATA 初始化与导入]
   G[原外部文件] -->|Helper 核对后交只读 FD| F
-  A --> H[独立的只读宿主观察]
 ```
 
 检查与服务单元预览只检查原目录的资格，不走写入分支。
@@ -41,10 +40,9 @@ flowchart LR
 | [离线会话](src/headless_setup/offline.rs)、[盘操作](src/headless_setup/offline/) | 原清单、排他锁、受控发布及中断证据 |
 | [原票和来源](src/headless_setup/offline/import_one.rs)、[批量交接](src/headless_setup/offline/import_one/batch/worker.rs) | 持有原件，批量原回执优先及逐项确认 |
 | [本地工作进程](src/local_worker/)、[Linux 证据库](linux-evidence/) | 固定可执行文件、来源描述符和真实进程退出 |
-| [宿主观察](src/block_tools.rs)、[可选发布器](src/embedded_image/) | 两条旁路，不提供池或账号写入权 |
+| [可选发布器](src/embedded_image/) | 独立验证和发布 ELF，不写入池或账号 |
 
 ## 独立能力
 
-[宿主观察](docs/guides/host-diagnostics.md)不代替池登记和数据核验。
 [可选 ELF 发布](docs/guides/embedded-image.md)需要独立启用，默认不内嵌 ZXS，不启动服务。
 旧 SQLite/SMB 和[镜像工具、网页](docs/archive/retired-volume-tools.md)不在当前交付中。

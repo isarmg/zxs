@@ -36,6 +36,7 @@ struct Row {
     parent: u64,
     device: u64,
     whole: bool,
+    // Keep this filesystem class in the exact before/after mount-table cut.
     devtmpfs: bool,
     magic: Option<u32>,
     place: MountPlace,
@@ -183,6 +184,7 @@ impl DiscoveryAdmission for DiscoveryView {
 }
 
 impl Mounts {
+    #[cfg(any(test, feature = "embedded-zxs"))]
     pub(crate) fn current() -> io::Result<Self> {
         let f = super::thread_evidence::mountinfo()?;
         let mut bytes = Vec::new();
@@ -275,6 +277,7 @@ impl Mounts {
     // mountinfo(5), numeric mount ID, parent, major:minor, then the root
     // *inside* the filesystem. Field five's visible mountpoint is not this root.
     // No stored paths are decoded, logged or subsequently opened.
+    #[cfg(any(test, feature = "embedded-zxs"))]
     fn parse(bytes: &[u8]) -> io::Result<Self> {
         Self::parse_each(bytes, |_, _, _| Ok(()))
     }
@@ -352,20 +355,6 @@ impl Mounts {
             visit(id, row, point)?;
         }
         Ok(Self(rows))
-    }
-
-    /// Numeric superblock matches in this thread's mount namespace. They do
-    /// not resolve a stack of devices or prove an unlisted device is unused.
-    pub(crate) fn ids_for_device(&self, device: u64) -> impl Iterator<Item = u64> + '_ {
-        self.0
-            .iter()
-            .filter_map(move |(&id, r)| (r.device == device).then_some(id))
-    }
-
-    pub(crate) fn is_full_devtmpfs(&self, mount: u64, device: u64) -> bool {
-        self.0
-            .get(&mount)
-            .is_some_and(|r| r.whole && r.devtmpfs && r.device == device)
     }
 
     /// Generic live kernel mount evidence: parent mount ID and this complete

@@ -41,6 +41,7 @@ pub(crate) fn thread_file(name: &CStr) -> io::Result<File> {
     Ok(fd)
 }
 
+#[cfg(any(test, feature = "embedded-zxs"))]
 pub(super) fn mountinfo() -> io::Result<File> {
     thread_file(c"thread-self/mountinfo")
 }

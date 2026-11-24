@@ -9,7 +9,6 @@ compile_error!("helper currently supports Linux x86_64 (LP64) only");
 
 #[cfg(any(test, feature = "embedded-zxs"))]
 mod asset_digest;
-mod block_tools;
 #[cfg(test)]
 #[path = "../tests/build/dependency_document.rs"]
 mod dependency_document;
@@ -19,10 +18,8 @@ mod embedded_image;
 mod foreground;
 mod fresh_password;
 mod fresh_random;
-mod hardware;
 mod headless_setup;
 mod headless_setup_command;
-mod inspect;
 mod local_worker;
 mod maintenance;
 mod path_rules;
@@ -32,15 +29,12 @@ pub(crate) mod product_layout;
 #[path = "../tests/common/mod.rs"]
 mod test_area;
 
-use pinned::storage_status::Selection;
 use std::ffi::OsString;
 use std::io::{self, Write};
-use std::path::PathBuf;
 use std::process::ExitCode;
 
-const USAGE: &str = "helper: local diagnostics and explicit offline pool installation (Linux x86_64)\n\
-usage:\n  helper inspect-dirs DIR [DIR ...]\n  \
-helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR --recycle DIR --data DIR [--data DIR ...]\n  helper disks [--device MAJOR:MINOR] [--rates]\n  helper hardware\n  helper setup-headless check SYSTEM RECYCLE DATA [DATA ...]
+const USAGE: &str = "helper: explicit offline ZXS setup, maintenance, and import (Linux x86_64)\n\
+usage:\n  helper setup-headless check SYSTEM RECYCLE DATA [DATA ...]
   helper setup-headless preview-unit IP:PORT SYSTEM RECYCLE DATA [DATA ...]
   helper setup-headless new SYSTEM RECYCLE DATA [DATA ...] LOGIN
   helper setup-headless reset SYSTEM RECYCLE DATA [DATA ...]
@@ -55,14 +49,13 @@ helper compare-files REFERENCE CANDIDATE\n  helper storage-status --system DIR -
   helper import-batch show
   helper import-batch apply SYSTEM RECYCLE DATA [DATA ...]
   helper --help | --version\n\n\
-Supply already mounted directories; storage-status reports observations, not an approved layout.";
+Supply already mounted directories in their registered order for maintenance and import.";
 
 fn usage() -> String {
     let mut help = USAGE.to_owned();
     if cfg!(feature = "embedded-zxs") {
         help.push_str("\n\nOptional embedded ZXS installer:\n  helper install-zxs-image [--destination-dir DIR] --zxs-sha256 HEX (default /zxs/bin/zxs)");
     }
-    help.push_str("\n\nOptional read-only health:\n  helper disk-health --device MAJOR:MINOR (one direct PCIe NVMe namespace)");
     help
 }
 
@@ -70,18 +63,12 @@ fn usage() -> String {
 enum Command {
     Help,
     Version,
-    Directories(Vec<PathBuf>),
-    Compare(PathBuf, PathBuf),
     HeadlessSetup(headless_setup_command::Setup),
     ImportCensus(headless_setup::Preflight),
     ImportSingle(headless_setup::ImportOne),
     ImportBatch(headless_setup::ImportBatch),
-    Storage(Selection),
     #[cfg(feature = "embedded-zxs")]
     EmbeddedInstall(embedded_image::EmbeddedInstall),
-    Disks(block_tools::Query),
-    DiskHealth(block_tools::HealthQuery),
-    Hardware,
 }
 
 fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static str> {
@@ -113,39 +100,6 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command, &'static s
     if op == "install-zxs-image" {
         return embedded_image::EmbeddedInstall::parse(args).map(Command::EmbeddedInstall);
     }
-    if op == "disk-health" {
-        return block_tools::HealthQuery::parse(args).map(Command::DiskHealth);
-    }
-    if op == "inspect-dirs" {
-        let dirs: Vec<_> = args
-            .take(inspect::MAX_DIRS + 1)
-            .map(PathBuf::from)
-            .collect();
-        if dirs.is_empty() || dirs.len() > inspect::MAX_DIRS {
-            return Err("expected 1–16 directories");
-        }
-        return Ok(Command::Directories(dirs));
-    }
-    if op == "hardware" {
-        if args.next().is_some() {
-            return Err("hardware takes no paths or options");
-        }
-        return Ok(Command::Hardware);
-    }
-    if op == "disks" {
-        return block_tools::Query::parse(args).map(Command::Disks);
-    }
-    if op == "storage-status" {
-        return Selection::parse(args).map(Command::Storage);
-    }
-    if op == "compare-files" {
-        let a = args.next().ok_or("expected a reference and candidate")?;
-        let b = args.next().ok_or("expected a reference and candidate")?;
-        if args.next().is_some() {
-            return Err("unexpected argument");
-        }
-        return Ok(Command::Compare(a.into(), b.into()));
-    }
     Err("unknown command")
 }
 
@@ -161,7 +115,6 @@ fn run(command: Command) -> io::Result<ExitCode> {
         Command::ImportCensus(request) => return request.run(),
         Command::ImportSingle(request) => return request.run(),
         Command::ImportBatch(request) => return request.run(),
-        Command::DiskHealth(query) => return disk_health(query),
         #[cfg(feature = "embedded-zxs")]
         Command::EmbeddedInstall(s) => {
             s.run()?;
@@ -169,60 +122,8 @@ fn run(command: Command) -> io::Result<ExitCode> {
         }
         Command::Help => line(&usage())?,
         Command::Version => line(concat!("helper ", env!("CARGO_PKG_VERSION")))?,
-        Command::Directories(dirs) => line(&inspect::directories(&dirs)?)?,
-        Command::Disks(query) => {
-            let report = query.observe()?;
-            line(&report.to_string())?;
-            return Ok(if report.complete() {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(2)
-            });
-        }
-        Command::Hardware => {
-            let report = hardware::observe();
-            line(&report.to_string())?;
-            return Ok(if report.complete() {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(2)
-            });
-        }
-        Command::Storage(selection) => {
-            let report = selection.observe();
-            line(&report.to_string())?;
-            return Ok(if report.all_sampled() {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(2)
-            });
-        }
-        Command::Compare(a, b) => return compare(&a, &b),
     }
     Ok(ExitCode::SUCCESS)
-}
-
-fn disk_health(query: block_tools::HealthQuery) -> io::Result<ExitCode> {
-    let (code, public) = query.run();
-    line(&public)?;
-    Ok(ExitCode::from(code))
-}
-
-fn compare(a: &std::path::Path, b: &std::path::Path) -> io::Result<ExitCode> {
-    let observed = inspect::compare(a, b)?;
-    if observed.equal {
-        line(&format!(
-            "equal: {} bytes in each distinct regular file",
-            observed.left
-        ))?;
-        Ok(ExitCode::SUCCESS)
-    } else {
-        line(&format!(
-            "different: reference={} bytes candidate={} bytes",
-            observed.left, observed.right
-        ))?;
-        Ok(ExitCode::from(1))
-    }
 }
 
 fn main() -> ExitCode {
@@ -245,7 +146,24 @@ fn main() -> ExitCode {
 #[test]
 fn user_help_only_offers_current_setup() {
     let help = usage();
+    assert!(help.contains("setup-headless check"));
     assert!(help.contains("setup-headless new"));
+    for args in [
+        &["setup-headless", "check", "/system", "/recycle", "/data"][..],
+        &[
+            "setup-headless",
+            "new",
+            "/system",
+            "/recycle",
+            "/data",
+            "operator",
+        ][..],
+    ] {
+        assert!(matches!(
+            parse(args.iter().copied().map(OsString::from)),
+            Ok(Command::HeadlessSetup(_))
+        ));
+    }
     assert!(!help.contains("setup-headless web"));
     for name in [
         "install-pool",
@@ -269,13 +187,33 @@ mod arguments {
     use super::*;
 
     #[test]
-    fn hardware_argv_only_selects_a_fixed_passive_observation() {
-        assert!(matches!(
-            parse(["hardware"].map(OsString::from)),
-            Ok(Command::Hardware)
-        ));
-        for extra in ["--loop", "--write", "/proc/self/status", "/dev/sda"] {
-            assert!(parse(["hardware", extra].map(OsString::from)).is_err());
+    fn retired_host_observations_are_neither_advertised_nor_parsed() {
+        let help = usage();
+        for (name, old_arguments) in [
+            ("inspect-dirs", &["/selected"][..]),
+            ("compare-files", &["/reference", "/candidate"][..]),
+            (
+                "storage-status",
+                &[
+                    "--system",
+                    "/system",
+                    "--recycle",
+                    "/recycle",
+                    "--data",
+                    "/data",
+                ][..],
+            ),
+            ("disks", &["--device", "259:1", "--rates"][..]),
+            ("hardware", &[][..]),
+            ("disk-health", &["--device", "259:1"][..]),
+        ] {
+            assert!(!help.contains(&format!("helper {name}")), "{name}");
+            let args = std::iter::once(name).chain(old_arguments.iter().copied());
+            assert_eq!(
+                parse(args.map(OsString::from)).unwrap_err(),
+                "unknown command",
+                "{name}"
+            );
         }
     }
 
