@@ -12,6 +12,8 @@ mod recycle_material;
 mod recycle_receipt;
 mod routes;
 mod stage;
+#[cfg(test)]
+mod upload;
 mod volume;
 
 #[cfg(test)]
