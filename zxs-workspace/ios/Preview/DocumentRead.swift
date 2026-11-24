@@ -206,7 +206,8 @@ final class DocumentRead {
         }
     }
 
-    func freezeWholeFile(_ selected: HeldArchive, id: UUID, into store: WholeFileStage) throws -> WholeFileStage.Identity {
+    func freezeWholeFile(_ selected: HeldArchive, id: UUID, into store: WholeFileStage,
+                         beforePublish: (WholeFileStage.Identity) throws -> Void = { _ in }) throws -> WholeFileStage.Identity {
         guard selected.scope.role == .wholeFile else { throw PreviewError.unavailable }
         let prepared = try coordinated(selected.scope) { name in
             try selected.withReads(at: name, check: self.check, exactEnd: true) { fill in
@@ -220,6 +221,9 @@ final class DocumentRead {
                     })
             }
         }
+        try self.check()
+        try selected.checkPreview()
+        try beforePublish(prepared.identity)
         return try store.publish(prepared, check: {
             try self.check()
             try selected.checkPreview()

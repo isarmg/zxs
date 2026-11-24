@@ -28,7 +28,8 @@ final class RemoteBrowseController: UITableViewController {
 
     private var exchange: MobileSaveExchange?
     private let store: RemoteSaveStore
-    private let onPrepared: (RemoteSave) -> Void
+    private let files: WholeFileStage
+    private let onPrepared: (RemoteSave, Bool) -> Void
     private var trail: [Page] = [.catalog(nil)]
     private var rows: [Row] = []
     private var next: Page?
@@ -37,9 +38,10 @@ final class RemoteBrowseController: UITableViewController {
     private weak var consent: UIAlertController?
     private let banner = UILabel()
 
-    init(exchange: MobileSaveExchange, store: RemoteSaveStore, onPrepared: @escaping (RemoteSave) -> Void) {
+    init(exchange: MobileSaveExchange, store: RemoteSaveStore, files: WholeFileStage, onPrepared: @escaping (RemoteSave, Bool) -> Void) {
         self.exchange = exchange
         self.store = store
+        self.files = files
         self.onPrepared = onPrepared
         super.init(style: .plain)
     }
@@ -156,11 +158,11 @@ final class RemoteBrowseController: UITableViewController {
     private func offer(_ container: RemoteRead.Catalog.Container, _ branch: RemoteRead.Detail.Head,
                        _ node: RemoteRead.History.Node) {
         guard let exchange, presentedViewController == nil, consent == nil else { return }
-        let editable = node.length <= UInt64(LocalDraft.byteLimit)
-            && (node.nodeId == branch.head || (branch.branch == "main" && node.originalBranch == "main"))
-        let alert = UIAlertController(title: editable ? "打开完整正文？" : "此节点无法在手机内编辑",
-            message: editable ? "\(container.name)\n\(branch.branch) · \(node.length) B\n\(node.nodeId)"
-                : "当前只编辑 256 KiB 内的 UTF-8 文本。非 main 分支只能编辑当前节点。",
+        let eligible = node.nodeId == branch.head || (branch.branch == "main" && node.originalBranch == "main")
+        let editable = eligible && node.length <= UInt64(LocalDraft.byteLimit)
+        let alert = UIAlertController(title: eligible ? "选择版本操作" : "此节点无法产生新版本",
+            message: eligible ? "\(container.name)\n\(branch.branch) · \(node.length) B\n\(node.nodeId)"
+                : "非 main 分支只能更新当前节点。",
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "关闭", style: .cancel) { [weak self] _ in self?.consent = nil })
         if editable {
@@ -169,6 +171,24 @@ final class RemoteBrowseController: UITableViewController {
                       self.view.window?.windowScene?.activationState == .foregroundActive else { return }
                 self.consent = nil
                 self.open(container, branch, node, over: exchange)
+            })
+        }
+        if eligible {
+            alert.addAction(UIAlertAction(title: "选择完整替换文件…", style: .default) { [weak self, weak alert] _ in
+                guard let self, let alert, self.consent === alert,
+                      self.navigationController?.topViewController === self,
+                      self.view.window?.windowScene?.activationState == .foregroundActive else { return }
+                self.consent = nil
+                let target: RemoteSave.Target = node.nodeId == branch.head
+                    ? .append(branch: branch.branch, head: node.nodeId)
+                    : .forkMain(branch: RemoteDraftController.newID(), from: node.nodeId)
+                let plan = WholeFileTarget(destination: exchange.destination, container: container.containerId,
+                    operation: RemoteDraftController.newID(), node: RemoteDraftController.newID(),
+                    base: container.sequence, target: target)
+                let editor = WholeFileImportController(plan: plan, files: self.files, drafts: self.store,
+                    onPrepared: self.onPrepared)
+                self.leaveForeground()
+                self.navigationController?.pushViewController(editor, animated: true)
             })
         }
         consent = alert
@@ -194,7 +214,7 @@ final class RemoteBrowseController: UITableViewController {
                 self.complete(selected)
                 self.navigationItem.prompt = nil
                 let editor = RemoteTextController(selection: selection, destination: exchange.destination,
-                    store: self.store, onPrepared: self.onPrepared)
+                    store: self.store, onPrepared: { [onPrepared = self.onPrepared] saved in onPrepared(saved, true) })
                 // Preserve only the verified body and destination identity;
                 // the editor has no credentials and cannot send requests.
                 self.leaveForeground()

@@ -40,6 +40,57 @@ final class WholeFileStageTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: directory.path), [])
     }
 
+    func testPostLinkFailureRetainsOriginalOperationAndCanOpenAfterSync() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = WholeFileStage(directory: directory)
+        let id = UUID()
+        let candidate = try store.prepare(id: id, length: 1, check: {}, fill: { _, buffer in
+            buffer[0] = 0x80
+        }, validate: {})
+        XCTAssertThrowsError(try store.publish(candidate, check: {}, afterLink: { throw Stop.sourceChanged })) {
+            guard case WholeFileStage.Failure.retained(let identity) = $0 else { return XCTFail("expected retained identity") }
+            XCTAssertEqual(identity, candidate.identity)
+        }
+        let opened = try await store.openForUpload(candidate.identity)
+        XCTAssertEqual(try opened.readChunk(maximum: 1), Data([0x80]))
+        XCTAssertEqual(try opened.readChunk(maximum: 1)?.count ?? 0, 0)
+    }
+
+    func testIntentWithoutPublishedBodyRemainsRecoverableButCannotUpload() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let files = WholeFileStage(directory: root.appendingPathComponent("files"))
+        let intents = RemoteSaveStore(directory: root.appendingPathComponent("intents"))
+        let plan = WholeFileTarget(destination: String(repeating: "a", count: 64),
+            container: String(repeating: "b", count: 32), operation: String(repeating: "c", count: 32),
+            node: String(repeating: "d", count: 32), base: 0, target: .firstMain(name: "file.bin"))
+        let candidate = try files.prepare(id: plan.file, length: 0, check: {}, fill: { _, _ in
+            XCTFail("empty body has no reads")
+        }, validate: {})
+        let save = try plan.record(candidate.identity)
+        try intents.retain(save)
+        XCTAssertThrowsError(try files.publish(candidate, check: { throw Stop.cancelled }))
+        XCTAssertEqual(try intents.reopenForRecovery(operation: plan.operation).encode(), try save.encode())
+        XCTAssertThrowsError(try files.reopen(candidate.identity, check: {}))
+    }
+
+    func testUncertainExtraLinkRefusesToOpenAndPreservesNames() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let files = WholeFileStage(directory: directory)
+        let id = UUID()
+        let identity = try files.freeze(id: id, length: 0, check: {}, fill: { _, _ in
+            XCTFail("empty body has no reads")
+        }, validate: {})
+        let original = directory.appendingPathComponent(id.uuidString)
+        let extra = directory.appendingPathComponent(".extra")
+        try FileManager.default.linkItem(at: original, to: extra)
+        XCTAssertThrowsError(try files.reopen(identity, check: {}))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: extra.path))
+    }
+
     func testChangedFrozenBytesAndWrongMetadataDoNotReopen() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

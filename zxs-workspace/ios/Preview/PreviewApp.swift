@@ -32,6 +32,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         for item in sheet.viewControllers {
             (item as? RemoteDraftController)?.leaveForeground()
             (item as? RemoteBrowseController)?.leaveForeground()
+            (item as? WholeFileImportController)?.leaveForeground()
         }
     }
     func sceneDidEnterBackground(_ scene: UIScene) {

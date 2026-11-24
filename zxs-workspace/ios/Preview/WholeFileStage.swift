@@ -66,6 +66,10 @@ struct WholeFileStage: Sendable {
                     continuation.resume(with: Result {
                         let held = try reopen(expected, check: stop.check)
                         try stop.check()
+                        try syncDirectory(directory)
+                        try syncDirectory(directory.deletingLastPathComponent())
+                        try stop.check()
+                        try sameName(location(expected.id), fd: held.fileDescriptor, length: expected.length)
                         return Opened(identity: expected, handle: held)
                     })
                 }
@@ -142,7 +146,7 @@ struct WholeFileStage: Sendable {
         return prepared
     }
 
-    func publish(_ prepared: Prepared, check: () throws -> Void) throws -> Identity {
+    func publish(_ prepared: Prepared, check: () throws -> Void, afterLink: () throws -> Void = {}) throws -> Identity {
         guard prepared.directory == directory, !prepared.linked, prepared.temporaryExists
         else { throw Failure.invalidFile }
         let identity = prepared.identity
@@ -158,6 +162,7 @@ struct WholeFileStage: Sendable {
         do {
             try manager.removeItem(at: prepared.temporary)
             prepared.temporaryExists = false
+            try afterLink()
             try syncDirectory(directory)
             try syncDirectory(directory.deletingLastPathComponent())
             try sameName(final, fd: fd, length: identity.length)

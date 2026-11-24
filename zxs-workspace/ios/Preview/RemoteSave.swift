@@ -263,7 +263,7 @@ struct RemoteSaveConsent: Sendable {
 
 // Application-owned directory only. The operation record is immutable after
 // publication. A later sender must separately persist attempts before POST.
-struct RemoteSaveStore {
+struct RemoteSaveStore: Sendable {
     private static let maxRecord = 512 * 1024
     private let directory: URL
 

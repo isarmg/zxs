@@ -38,9 +38,18 @@ struct MobileSaveExchange: RemoteSaveExchange {
         return SHA256.hash(data: material).map { String(format: "%02x", $0) }.joined()
     }
 
+    var acceptsFrozenFiles: Bool { true }
+
     func once(_ request: RemoteSave.Request) async throws -> RemoteSavePacket {
-        guard request.frozenFile == nil else { throw RemoteSave.Failure.invalidIntent }
-        let message = R3Request(method: request.method, path: request.path, headers: request.headers, body: request.body)
+        let message: R3Request
+        if let file = request.frozenFile {
+            guard request.method == "POST", request.body == nil else { throw RemoteSave.Failure.invalidIntent }
+            let input = R3UploadSource(length: file.identity.length, sha256: file.identity.sha256,
+                                           read: { try file.readChunk(maximum: $0) })
+            message = .stagedSave(path: request.path, headers: request.headers, source: input)
+        } else {
+            message = R3Request(method: request.method, path: request.path, headers: request.headers, body: request.body)
+        }
         let response = try await read(message)
         return RemoteSavePacket(status: response.status, bytes: response.bytes)
     }
@@ -53,15 +62,17 @@ struct MobileSaveExchange: RemoteSaveExchange {
 @MainActor
 private final class MobileSaveSession {
     static let shared: Result<MobileSaveSession, Error> = Result {
-        try MobileSaveSession(store: .applicationStore())
+        try MobileSaveSession(store: .applicationStore(), files: .applicationStore())
     }
 
     let store: RemoteSaveStore
+    let files: WholeFileStage
     let coordinator: RemoteSaveCoordinator
 
-    private init(store: RemoteSaveStore) {
+    private init(store: RemoteSaveStore, files: WholeFileStage) {
         self.store = store
-        coordinator = RemoteSaveCoordinator(store: store)
+        self.files = files
+        coordinator = RemoteSaveCoordinator(store: store, wholeFiles: files)
     }
 }
 
@@ -92,24 +103,24 @@ final class RemoteDraftController: UIViewController {
         password.isSecureTextEntry = true
         configure(fileName, "新文件名")
         configure(operation, "原操作号")
-        fileName.isEnabled = draft != nil
 
-        let prepare = button("准备新文件", #selector(prepareNew))
+        let prepare = button("准备本地文本", #selector(prepareNew))
+        let importFile = button("从文件准备…", #selector(prepareFile))
         prepare.isEnabled = draft != nil
-        pick.setTitle("选取已准备记录", for: .normal)
+        pick.setTitle("选取本地操作记录", for: .normal)
         pick.showsMenuAsPrimaryAction = true
         let lookup = button("查原回执", #selector(lookupOnly))
         let submit = button("首次提交", #selector(submitFirst))
         let retry = button("按原号重试", #selector(retryOriginal))
         let browse = button("浏览服务器文件…", #selector(openBrowse))
-        controls = [prepare, pick, lookup, submit, retry, browse]
+        controls = [prepare, importFile, pick, lookup, submit, retry, browse]
         status.numberOfLines = 0
         status.font = .preferredFont(forTextStyle: .footnote)
         status.adjustsFontForContentSizeCategory = true
         status.text = draft == nil ? "可按原操作号查询或重试。" : "准备本地记录后，才可明确提交。"
 
         let scroll = UIScrollView()
-        let content = UIStackView(arrangedSubviews: [origin, user, password, fileName, prepare, operation,
+        let content = UIStackView(arrangedSubviews: [origin, user, password, fileName, prepare, importFile, operation,
                                                     pick, lookup, submit, retry, browse, status])
         content.axis = .vertical
         content.spacing = 10
@@ -193,6 +204,38 @@ final class RemoteDraftController: UIViewController {
         }
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        refreshPicker()
+    }
+
+    private func showPrepared(_ saved: RemoteSave, ready: Bool) {
+        operation.text = saved.operation
+        status.text = (ready ? "整份文件已暂存。请输入原服务器密码，再选择提交。"
+                             : "只确认了原操作记录，暂存文件未确认完整。请先查原回执。")
+            + "\n" + saved.summary
+        refreshPicker()
+        navigationController?.popToViewController(self, animated: true)
+    }
+
+    @objc private func prepareFile() {
+        guard job == nil, view.window?.windowScene?.activationState == .foregroundActive else { return }
+        do {
+            let (endpoint, account) = try selectedOrigin()
+            let session = try MobileSaveSession.shared.get()
+            let target = RemoteSave.Target.firstMain(name: fileName.text ?? "")
+            guard target.valid else { throw RemoteSave.Failure.invalidIntent }
+            let plan = WholeFileTarget(destination: MobileSaveExchange.identity(endpoint: endpoint, user: account),
+                container: Self.newID(), operation: Self.newID(), node: Self.newID(), base: 0, target: target)
+            let controller = WholeFileImportController(plan: plan, files: session.files, drafts: session.store) {
+                [weak self] saved, ready in self?.showPrepared(saved, ready: ready)
+            }
+            navigationController?.pushViewController(controller, animated: true)
+        } catch {
+            status.text = "请检查服务器、账号、新文件名和本机存储。"
+        }
+    }
+
     @objc private func openBrowse() {
         guard job == nil, view.window?.windowScene?.activationState == .foregroundActive else { return }
         do {
@@ -201,12 +244,8 @@ final class RemoteDraftController: UIViewController {
             let session = try MobileSaveSession.shared.get()
             password.text = nil
             let exchange = MobileSaveExchange(endpoint: endpoint, credential: credential, client: R3HTTPSClient())
-            let browser = RemoteBrowseController(exchange: exchange, store: session.store) { [weak self] saved in
-                guard let self else { return }
-                self.operation.text = saved.operation
-                self.status.text = "已准备完整文件。请输入原服务器密码，再明确提交。\n" + saved.summary
-                self.refreshPicker()
-                self.navigationController?.popToViewController(self, animated: true)
+            let browser = RemoteBrowseController(exchange: exchange, store: session.store, files: session.files) { [weak self] saved, ready in
+                self?.showPrepared(saved, ready: ready)
             }
             navigationController?.pushViewController(browser, animated: true)
         } catch {
