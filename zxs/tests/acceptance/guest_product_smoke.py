@@ -171,7 +171,8 @@ class Smoke:
             conn.close()
 
     def start(self):
-        self.server = subprocess.Popen([SERVER, "--listen", f"{HOST}:{PORT}"])
+        self.server = subprocess.Popen(["/usr/bin/setpriv", "--no-new-privs", SERVER,
+                                        "--listen", f"{HOST}:{PORT}"])
         deadline = time.monotonic() + 40
         while time.monotonic() < deadline:
             require(self.server.poll() is None, "ZXS exited during startup")
@@ -332,21 +333,25 @@ class Smoke:
         self.recycle(receipt, accepted, base, new)
 
 
-def run_workspace_fixture(smoke):
+def run_workspace_fixture(smoke, password, *, fuse):
     fixture = Path("/opt/zxs-fixture-workspace")
     workspace = fixture / "zxs-workspace"
     implementation = workspace / "tests/qualification/live_r3_loopback.py"
     cert = fixture / "certs"
     require(implementation.resolve(strict=True) == implementation and implementation.stat().st_uid == 0,
             "Workspace fixture source not on its exact root-owned path")
-    sys.path[:0] = [str(workspace), str(fixture / "packages")]
+    sys.path[:0] = [str(workspace), str(fixture / "packages"), str(implementation.parent)]
     spec = importlib.util.spec_from_file_location("workspace_live_r3_fixture", implementation)
     require(spec is not None and spec.loader is not None, "Workspace fixture could not be loaded")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module.run_live_r3(backend_port=PORT, fixture_authorization=smoke.authorization,
-                       certfile=cert / "server.pem", keyfile=cert / "server.key",
-                       ca_pem=(cert / "ca.pem").read_text(encoding="ascii"))
+    transport = dict(backend_port=PORT, fixture_authorization=smoke.authorization,
+                     certfile=cert / "server.pem", keyfile=cert / "server.key",
+                     ca_pem=(cert / "ca.pem").read_text(encoding="ascii"))
+    module.run_live_r3(**transport)
+    if fuse:
+        module.run_live_fuse_r3(**transport, fixture_login=ACCOUNT,
+                                fixture_password=password.decode("ascii"))
 
 
 def main():
@@ -359,7 +364,7 @@ def main():
             smoke.stop()
         print("ZXS-PRODUCT-SMOKE same service became ready after original DATA remount", flush=True)
         return
-    require(sys.argv[1:] in ([], ["--workspace-h2"]), "unknown fixture mode")
+    require(sys.argv[1:] in ([], ["--workspace-h2"], ["--workspace-fuse"]), "unknown fixture mode")
     guard()
     password = secrets.token_hex(24).encode("ascii")
     issue_setup(password)
@@ -367,8 +372,8 @@ def main():
     try:
         smoke.start()
         smoke.run()
-        if sys.argv[1:] == ["--workspace-h2"]:
-            run_workspace_fixture(smoke)
+        if sys.argv[1:]:
+            run_workspace_fixture(smoke, password, fuse=sys.argv[1:] == ["--workspace-fuse"])
     finally:
         smoke.stop()
     print("ZXS-PRODUCT-SMOKE setup, full append, two DATA disks, recycle and exact retries passed", flush=True)

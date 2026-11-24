@@ -8,6 +8,11 @@ on:
         type: boolean
         required: false
         default: false
+      workspace_fuse:
+        description: 'Also exercise the real editable Linux mount and explicit R3 submission'
+        type: boolean
+        required: false
+        default: false
 
 permissions: {}
 
@@ -99,6 +104,8 @@ jobs:
 
       - name: Verify the signed guest and prepare local QEMU tools
         shell: bash
+        env:
+          WORKSPACE_FUSE: ${{ inputs.workspace_fuse }}
         run: |
           set -euo pipefail
           umask 077
@@ -107,8 +114,16 @@ jobs:
           printf 'ZXS_GUEST_WORK=%s\n' "$work" >> "$GITHUB_ENV"
           cd "$work"
 
-          image=ubuntu-26.04-minimal-cloudimg-amd64.img
-          release=https://cloud-images.ubuntu.com/minimal/releases/resolute/release-20261118
+          if [[ "$WORKSPACE_FUSE" == true ]]; then
+            image=ubuntu-26.10-minimal-cloudimg-amd64.img
+            release=https://cloud-images.ubuntu.com/minimal/releases/stonking/release-20261105
+            pin=154b19deda3a6be396b6ddc65c38af7043ae695457038d61f3937023d2209890
+          else
+            image=ubuntu-26.04-minimal-cloudimg-amd64.img
+            release=https://cloud-images.ubuntu.com/minimal/releases/resolute/release-20261118
+            pin=f6c630c04d4fad012f2c4ed3a21a2b0c0f814f13f6873568da4c31d8df65c12e
+          fi
+          printf 'ZXS_GUEST_IMAGE=%s\n' "$image" >> "$GITHUB_ENV"
           fetch() {
             curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
               --connect-timeout 15 --max-time 240 --retry 2 --max-filesize 600000000 "$release/$1" -o "$1"
@@ -119,7 +134,6 @@ jobs:
           GNUPGHOME="$work/gnupg" gpgv --keyring /usr/share/keyrings/ubuntu-cloudimage-keyring.gpg \
             --status-fd 1 SHA256SUMS.gpg SHA256SUMS > image.signature
           grep -qF '[GNUPG:] VALIDSIG D2EB44626FDDC30B513D5BB71A5D6C4C7DB87C81 ' image.signature
-          pin=f6c630c04d4fad012f2c4ed3a21a2b0c0f814f13f6873568da4c31d8df65c12e
           grep -qxF "$pin *$image" SHA256SUMS
           fetch "$image"
           printf '%s *%s\n' "$pin" "$image" | sha256sum -c -
@@ -166,8 +180,67 @@ jobs:
           sha256sum apt/archives/*.deb
 
 
+      - name: Download the pinned Ubuntu FUSE guest inputs into a verified offline repository
+        if: ${{ inputs.workspace_fuse }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          cd "$ZXS_GUEST_WORK"
+          work="$PWD/fuse-download"
+          mkdir -p "$work"/{etc/empty,lists/partial,archives/partial,offline}
+          : > "$work/status"
+          export APT_CONFIG="$work/config"
+          cat > "$APT_CONFIG" <<EOF
+          Dir::Etc "$work/etc";
+          Dir::Etc::main "/dev/null";
+          Dir::Etc::parts "empty";
+          Dir::Etc::sourceparts "empty";
+          Dir::Etc::sourcelist "sources.list";
+          Dir::State "$work";
+          Dir::State::status "$work/status";
+          Dir::Cache "$work";
+          Dir::Log "$work";
+          Dir::Cache::pkgcache "";
+          Dir::Cache::srcpkgcache "";
+          Acquire::Languages "none";
+          Acquire::Retries "2";
+          Apt::Architecture "amd64";
+          APT::Get::Always-Include-Phased-Updates "true";
+          APT::Update::Error-Mode "any";
+          EOF
+          snapshot=https://snapshot.ubuntu.com/ubuntu/20261118T120000Z
+          archive_key=/etc/apt/trusted.gpg.d/ubuntu-keyring-2018-archive.gpg
+          for suite in stonking stonking-updates stonking-security; do
+            printf 'deb [arch=amd64 signed-by=%s] %s %s main universe\n' "$archive_key" "$snapshot" "$suite"
+          done > "$work/etc/sources.list"
+          /usr/bin/apt-get update
+          (
+            cd "$work/lists"
+            cat <<'PINS' | sha256sum -c -
+          432b0f2ad42b2a997e2b373f5b61cabb3e80b3c5348cd0ff4b9cfc4df2e3d8fb  snapshot.ubuntu.com_ubuntu_20261118T120000Z_dists_stonking_InRelease
+          f6ac982cb6a4f78a3b84eca852c3dad5f1b69f72987be7eb7db0dc6a708e7288  snapshot.ubuntu.com_ubuntu_20261118T120000Z_dists_stonking-updates_InRelease
+          53c81861dabda003a9c64e23b8b17b643c88e43d3bacea40317470689c6d2d6c  snapshot.ubuntu.com_ubuntu_20261118T120000Z_dists_stonking-security_InRelease
+          PINS
+          )
+          /usr/bin/apt-get --assume-yes --download-only --no-install-recommends install \
+            fuse3=3.18.3-1 libfuse3-4=3.18.3-1 python3-pyfuse3=3.5.0-3 python3-trio=0.34.0-1
+          shopt -s nullglob
+          packages=("$work"/archives/*.deb)
+          (( ${#packages[@]} > 0 && ${#packages[@]} <= 150 ))
+          for package in "${packages[@]}"; do
+            name=${package##*/}
+            case "$name" in *[!a-zA-Z0-9._+%~-]*) exit 1 ;; esac
+            install -m 0644 "$package" "$work/offline/$name"
+            dpkg-deb --info "$package" control
+            size=$(stat -c %s "$package")
+            sha=$(sha256sum < "$package")
+            printf 'Filename: ./%s\nSize: %s\nSHA256: %s\n\n' "$name" "$size" "${sha%% *}"
+          done > "$work/offline/Packages"
+          chmod 0644 "$work/offline/Packages"
+
       - name: Prepare the exact Workspace source and H2 runtime without installing on the runner
-        if: ${{ inputs.workspace_h2 }}
+        if: ${{ inputs.workspace_h2 || inputs.workspace_fuse }}
         shell: bash
         run: |
           set -euo pipefail
@@ -177,6 +250,7 @@ jobs:
           git --git-dir="$PAIR_BUILD/source.git" archive "$GITHUB_SHA" \
             zxs-workspace/zipworkspace \
             zxs-workspace/tests/qualification/live_r3_loopback.py \
+            zxs-workspace/tests/qualification/live_linux_edit_mount.py \
             zxs-workspace/packaging/network-r3/requirements.txt |
             tar -xf - -C workspace-h2 --no-same-owner --no-same-permissions
           printf 'Workspace source tree: %s\n' "$(git --git-dir="$PAIR_BUILD/source.git" rev-parse "$GITHUB_SHA:zxs-workspace")"
@@ -213,7 +287,8 @@ jobs:
       - name: Run the same-commit products in an isolated guest
         shell: bash
         env:
-          WORKSPACE_H2: ${{ inputs.workspace_h2 }}
+          WORKSPACE_H2: ${{ inputs.workspace_h2 || inputs.workspace_fuse }}
+          WORKSPACE_FUSE: ${{ inputs.workspace_fuse }}
         run: |
           set -euo pipefail
           umask 077
@@ -229,7 +304,9 @@ jobs:
               awk -v base="$tools/" '$2 == "=>" && index($3, base) != 1 {exit 1}'
           done
           mkdir -m 0755 empty seed
-          for role in data-a data-b recycle; do
+          roles=(data-a data-b recycle)
+          if [[ "$WORKSPACE_FUSE" == true ]]; then roles+=(workspace); fi
+          for role in "${roles[@]}"; do
             truncate -s 64M "$role.ext4"
             "${tool_env[@]}" "$tools/usr/sbin/mke2fs" -q -t ext4 -d empty -L "zxs-$role" "$role.ext4"
           done
@@ -241,7 +318,15 @@ jobs:
             install -m 0400 workspace-h2.tar seed/workspace-h2.tar
             seed_members+=(workspace-h2.tar)
           fi
-          (cd seed && sha256sum "${seed_members[@]}") | tee seed/SHA256SUMS
+          if [[ "$WORKSPACE_FUSE" == true ]]; then
+            install -d -m 0755 seed/fuse-deb
+            cp -t seed/fuse-deb fuse-download/offline/*
+          fi
+          (
+            cd seed
+            sha256sum "${seed_members[@]}"
+            if [[ "$WORKSPACE_FUSE" == true ]]; then sha256sum fuse-deb/*; fi
+          ) | tee seed/SHA256SUMS
           printf '%s\n' 'instance-id: zxs-acceptance-product-smoke' > seed/meta-data
           cat > seed/user-data <<'CLOUD'
           #cloud-config
@@ -283,6 +368,34 @@ jobs:
                   chown 23100:23100 "$key"
                   h2_args+=(--workspace-h2)
                 fi
+                user_flags=(--no-new-privs)
+                fuse_requested=false
+                if test -d fuse-deb; then
+                  stage=offline-fuse-inputs
+                  repo=/mnt/zxs-acceptance-payload/fuse-deb
+                  printf 'deb [trusted=yes] file://%s ./\n' "$repo" > /run/zxs-fuse-fixture.list
+                  install -d -m 0755 /run/zxs-fuse-fixture-lists
+                  opts=(-o Dir::Etc::main=/dev/null -o Dir::Etc::parts=-
+                        -o Dir::Etc::sourceparts=- -o Dir::Etc::sourcelist=/run/zxs-fuse-fixture.list
+                        -o Dir::State::lists=/run/zxs-fuse-fixture-lists
+                        -o Acquire::Languages=none -o APT::Update::Error-Mode=any)
+                  apt-get "${opts[@]}" update
+                  DEBIAN_FRONTEND=noninteractive apt-get "${opts[@]}" --yes --no-remove \
+                    --no-install-recommends install fuse3=3.18.3-1 libfuse3-4=3.18.3-1 \
+                    python3-pyfuse3=3.5.0-3 python3-trio=0.34.0-1
+                  [[ "$(dpkg-query -W -f='${Version}' fuse3)" == 3.18.3-1 ]]
+                  [[ "$(dpkg-query -W -f='${Version}' libfuse3-4)" == 3.18.3-1 ]]
+                  [[ "$(dpkg-query -W -f='${Version}' python3-pyfuse3)" == 3.5.0-3 ]]
+                  [[ "$(dpkg-query -W -f='${Version}' python3-trio)" == 0.34.0-1 ]]
+                  modprobe fuse
+                  udevadm settle --timeout=15
+                  test -c /dev/fuse
+                  test "$(stat -c '%u:%a' /usr/bin/fusermount3)" = 0:4755
+                  test "$(/usr/bin/fusermount3 --version)" = 'fusermount3 version: 3.18.3'
+                  fuse_requested=true
+                  user_flags=()
+                  h2_args=(--workspace-fuse)
+                fi
                 cd /
                 umount /mnt/zxs-acceptance-payload
                 install -d -m 0700 -o 23100 -g 23100 /zxs/state/headless /var/lib/zxs-acceptance-system
@@ -295,10 +408,20 @@ jobs:
                   chown 23100:23100 "$dest"
                   chmod 0700 "$dest"
                 done
+                if [[ "$fuse_requested" == true ]]; then
+                  stage=private-workspace-device
+                  dest=/mnt/zxs-acceptance-workspace
+                  mkdir -m 0755 "$dest"
+                  mount -t ext4 -o rw,nosuid,nodev,noexec /dev/disk/by-id/virtio-zxs-smoke-workspace "$dest"
+                  mount --make-private "$dest"
+                  rmdir "$dest/lost+found"
+                  chown 23100:23100 "$dest"
+                  chmod 0700 "$dest"
+                fi
                 printf '%s\n' same-sha-disposable-guest > /run/zxs-acceptance-fixture
                 chmod 0444 /run/zxs-acceptance-fixture
                 stage=ordinary-product-smoke
-                setpriv --reuid=23100 --regid=23100 --clear-groups --no-new-privs \
+                setpriv --reuid=23100 --regid=23100 --clear-groups "${user_flags[@]}" \
                   python3 -I -B /run/zxs-acceptance-smoke.py "${h2_args[@]}"
                 stage=cold-start-missing-data
                 umount /mnt/zxs-acceptance-data-a
@@ -323,6 +446,11 @@ jobs:
           "${tool_env[@]}" "$tools/usr/bin/genisoimage" -quiet -volid cidata -joliet -rock -output seed.iso seed
           firmware="$tools/usr/share/OVMF"
           cp "$firmware/OVMF_VARS_4M.fd" vars.fd
+          extra_drives=()
+          if [[ "$WORKSPACE_FUSE" == true ]]; then
+            extra_drives=(-drive if=none,id=workspace,format=raw,file=workspace.ext4
+                          -device virtio-blk-pci,drive=workspace,serial=zxs-smoke-workspace)
+          fi
           boot_status=0
           timeout -k 15s 12m "${tool_env[@]}" "$tools/usr/bin/qemu-system-x86_64" \
             -no-user-config -nodefaults -machine q35 -accel tcg,thread=multi -smp 2 -m 2048 \
@@ -330,7 +458,7 @@ jobs:
             -L "$tools/usr/share/qemu" \
             -drive if=pflash,format=raw,readonly=on,file="$firmware/OVMF_CODE_4M.fd" \
             -drive if=pflash,format=raw,file=vars.fd \
-            -drive if=virtio,format=qcow2,file=ubuntu-26.04-minimal-cloudimg-amd64.img \
+            -drive if=virtio,format=qcow2,file="$ZXS_GUEST_IMAGE" \
             -drive if=none,id=seed,format=raw,readonly=on,file=seed.iso \
             -device virtio-blk-pci,drive=seed,serial=zxs-seed \
             -drive if=none,id=dataa,format=raw,file=data-a.ext4 \
@@ -338,9 +466,9 @@ jobs:
             -drive if=none,id=datab,format=raw,file=data-b.ext4 \
             -device virtio-blk-pci,drive=datab,serial=zxs-smoke-data-b \
             -drive if=none,id=recycle,format=raw,file=recycle.ext4 \
-            -device virtio-blk-pci,drive=recycle,serial=zxs-smoke-recycle || boot_status=$?
+            -device virtio-blk-pci,drive=recycle,serial=zxs-smoke-recycle "${extra_drives[@]}" || boot_status=$?
           if test -f serial.log; then
-            tr -d '\r' < serial.log | grep -aE '^ZXS-(PRODUCT-SMOKE|WORKSPACE-H2) ' || true
+            tr -d '\r' < serial.log | grep -aE '^ZXS-(PRODUCT-SMOKE|WORKSPACE-H2|WORKSPACE-FUSE) ' || true
           fi
           test "$boot_status" -eq 0
           test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-PRODUCT-SMOKE setup, full append, two DATA disks, recycle and exact retries passed')" -eq 1
@@ -348,4 +476,7 @@ jobs:
           test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-PRODUCT-SMOKE same service became ready after original DATA remount')" -eq 1
           if [[ "$WORKSPACE_H2" == true ]]; then
             test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-WORKSPACE-H2 fixture negotiated TLS, saved, looked up, and read exact bytes')" -eq 1
+          fi
+          if [[ "$WORKSPACE_FUSE" == true ]]; then
+            test "$(tr -d '\r' < serial.log | grep -aFxc 'ZXS-WORKSPACE-FUSE original editable kernel mount, normal detach and exact full R3 submit passed')" -eq 1
           fi

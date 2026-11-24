@@ -11,6 +11,8 @@ from pathlib import Path
 import socket
 import ssl
 from concurrent.futures import ThreadPoolExecutor
+from queue import Empty, Queue
+from threading import Event
 
 from h2.config import H2Configuration
 from h2.connection import H2Connection
@@ -34,7 +36,7 @@ _RECEIPT = f"{_LEAF}/operations/{_OPERATION}"
 _DATA = f"{_LEAF}/nodes/{_NODE}/data"
 _REQUEST_FIELDS = {
     "accept", "accept-encoding", "authorization", "content-type", "content-length",
-    "zxs-base-node", "zxs-initial-name", "zxs-node", "zxs-operation", "zxs-sha256",
+    "zxs-base-node", "zxs-initial-name", "zxs-node", "zxs-operation", "zxs-sha256", "zxs-view",
 }
 _LIMIT = 16384
 _TIMEOUT = 15
@@ -54,13 +56,13 @@ def fields(rows):
     return result
 
 
-def upstream(method, target, headers, body, backend_port):
+def upstream(method, target, headers, body, backend_port, expected_status):
     connection = http.client.HTTPConnection(_HOST, backend_port, timeout=_TIMEOUT)
     try:
         connection.request(method, target, body if method == "POST" else None, headers)
         response = connection.getresponse()
         lengths = response.headers.get_all("Content-Length")
-        require(response.status == 200 and lengths is not None and len(lengths) == 1
+        require(response.status == expected_status and lengths is not None and len(lengths) == 1
                 and lengths[0].isascii() and lengths[0].isdecimal()
                 and int(lengths[0]) <= _LIMIT, "unexpected ZXS response status or extent")
         raw = response.read()
@@ -111,18 +113,19 @@ def exchange_one(sock, context, expected, backend_port, authority, authorization
             if ended:
                 break
         require(ended and head is not None, "no complete bounded H2 request")
-        method, target = expected
+        method, target, status, expected_body = expected
         require(head.pop(":method", None) == method and head.pop(":path", None) == target
                 and head.pop(":scheme", None) == "https" and head.pop(":authority", None) == authority,
                 "wrong original H2 endpoint")
         require(set(head) <= _REQUEST_FIELDS and head.get("authorization") == authorization,
                 "unexpected H2 fields or fixture authorization")
         if method == "POST":
-            require(head.get("content-length") == str(len(_BODY)) and body == _BODY,
+            require(expected_body is not None and head.get("content-length") == str(len(expected_body))
+                    and body == expected_body,
                     "H2 full body differs from the synthetic original")
         else:
             require(not body and head.get("content-length", "0") == "0", "unexpected H2 GET body")
-        response, raw = upstream(method, target, head, bytes(body), backend_port)
+        response, raw = upstream(method, target, head, bytes(body), backend_port, status)
         h2.send_headers(stream, response, end_stream=not raw)
         if raw:
             require(len(raw) <= min(h2.max_outbound_frame_size, h2.local_flow_control_window(stream)),
@@ -131,8 +134,8 @@ def exchange_one(sock, context, expected, backend_port, authority, authorization
         tls.sendall(h2.data_to_send())
 
 
-def serve(listener, context, backend_port, authority, authorization):
-    for expected in (("POST", _SAVE), ("GET", _RECEIPT), ("GET", _DATA)):
+def serve(listener, context, backend_port, authority, authorization, expected_requests):
+    for expected in expected_requests:
         conn, address = listener.accept()
         with conn:
             require(address[0] == _HOST, "non-loopback fixture client")
@@ -140,7 +143,7 @@ def serve(listener, context, backend_port, authority, authorization):
             exchange_one(conn, context, expected, backend_port, authority, authorization)
 
 
-def run_live_r3(*, backend_port, fixture_authorization, certfile, keyfile, ca_pem):
+def fixture_context(backend_port, fixture_authorization, certfile, keyfile):
     marker = Path("/run/zxs-acceptance-fixture")
     require(os.getuid() == os.geteuid() == 23100
             and marker.lstat().st_uid == 0 and not marker.is_symlink()
@@ -154,13 +157,19 @@ def run_live_r3(*, backend_port, fixture_authorization, certfile, keyfile, ca_pe
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.load_cert_chain(certfile, keyfile)
     context.set_alpn_protocols(["h2"])
+    return context
+
+
+def run_live_r3(*, backend_port, fixture_authorization, certfile, keyfile, ca_pem):
+    context = fixture_context(backend_port, fixture_authorization, certfile, keyfile)
+    expected = (("POST", _SAVE, 200, _BODY), ("GET", _RECEIPT, 200, None), ("GET", _DATA, 200, None))
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
         listener.bind((_HOST, 0))
         listener.listen(1)
         listener.settimeout(_TIMEOUT)
         authority = f"{_HOST}:{listener.getsockname()[1]}"
         with ThreadPoolExecutor(max_workers=1) as worker:
-            action = worker.submit(serve, listener, context, backend_port, authority, fixture_authorization)
+            action = worker.submit(serve, listener, context, backend_port, authority, fixture_authorization, expected)
             try:
                 client = HttpsExchange(f"https://{authority}", trusted_ca_pem=ca_pem,
                                        authorization=lambda: fixture_authorization, timeout=_TIMEOUT)
@@ -193,3 +202,52 @@ def run_live_r3(*, backend_port, fixture_authorization, certfile, keyfile, ca_pe
                 listener.close()
                 action.result(timeout=2 * _TIMEOUT)
     print("ZXS-WORKSPACE-H2 fixture negotiated TLS, saved, looked up, and read exact bytes", flush=True)
+
+def run_live_fuse_r3(*, backend_port, fixture_authorization, certfile, keyfile, ca_pem,
+                     fixture_login, fixture_password):
+    from live_linux_edit_mount import run_mounted_first_save
+
+    context = fixture_context(backend_port, fixture_authorization, certfile, keyfile)
+    planned = Queue(maxsize=1)
+    cancel = Event()
+    expected_count = 5
+    announced = 0
+
+    def shots():
+        for _ in range(expected_count):
+            while not cancel.is_set():
+                try:
+                    expected = planned.get(timeout=0.2)
+                except Empty:
+                    continue
+                yield expected
+                break
+            else:
+                return
+
+    def expect(method, path, status, body):
+        nonlocal announced
+        announced += 1
+        require(announced <= expected_count and path.startswith(_ROOT),
+                "unexpected mounted-volume transport count or route")
+        planned.put((method, path, status, body), timeout=1)
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind((_HOST, 0))
+        listener.listen(1)
+        listener.settimeout(_TIMEOUT)
+        authority = f"{_HOST}:{listener.getsockname()[1]}"
+        with ThreadPoolExecutor(max_workers=1) as worker:
+            action = worker.submit(serve, listener, context, backend_port, authority, fixture_authorization, shots())
+            try:
+                def connect(credentials):
+                    return HttpsExchange(f"https://{authority}", trusted_ca_pem=ca_pem,
+                                         authorization=credentials, timeout=_TIMEOUT)
+
+                run_mounted_first_save(exchange=connect, fixture_login=fixture_login,
+                                       fixture_password=fixture_password, expect=expect)
+                require(announced == expected_count, "not all mounted-volume requests were announced")
+                action.result(timeout=_TIMEOUT)
+            finally:
+                cancel.set()
+                listener.close()
