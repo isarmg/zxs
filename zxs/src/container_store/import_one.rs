@@ -170,7 +170,10 @@ impl OfflineImport {
         pool: Id,
         recycle_token: [u8; 32],
     ) -> io::Result<Self> {
-        let role = RecycleRole { pool, token: recycle_token };
+        let role = RecycleRole {
+            pool,
+            token: recycle_token,
+        };
         role.require()?;
         if data.iter().any(|volume| volume.token == recycle_token) {
             return Err(invalid("DATA and recycle cannot share an enrolled token"));

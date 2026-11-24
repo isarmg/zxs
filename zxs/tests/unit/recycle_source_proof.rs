@@ -2,7 +2,12 @@ use super::*;
 
 fn stamped(dev: u64) -> [u8; OPAQUE_STAMP_BYTES] {
     let mut row = [0; OPAQUE_STAMP_BYTES];
-    for (word, value) in row.as_chunks_mut::<8>().0.iter_mut().zip([dev, 3, 4, 5, 6, 7, 8]) {
+    for (word, value) in row
+        .as_chunks_mut::<8>()
+        .0
+        .iter_mut()
+        .zip([dev, 3, 4, 5, 6, 7, 8])
+    {
         *word = value.to_be_bytes();
     }
     row
@@ -23,7 +28,17 @@ fn durable_row_ignores_only_device_and_retains_live_mount_fence() {
     let witness = SourceRow::read(&mut before.bytes(), ProofFormat::Enrolled, true).unwrap();
     witness.require_directory(directory(19), true).unwrap();
     assert!(witness.require_directory(directory(19), false).is_err());
-    assert!(witness.require_directory(Entity { device: 19, inode: 42 }, true).is_err());
+    assert!(
+        witness
+            .require_directory(
+                Entity {
+                    device: 19,
+                    inode: 42
+                },
+                true
+            )
+            .is_err()
+    );
     assert!(SourceRow::read(&mut before.bytes(), ProofFormat::Enrolled, false).is_err());
     assert!(SourceRow::read(&mut before.bytes(), ProofFormat::Legacy, true).is_err());
     for byte in 8..56 {

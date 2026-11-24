@@ -1,12 +1,12 @@
 //! Directed whole-container move from ordinary storage to recycle storage.
 //! A small SYSTEM receipt selects exactly one qualified R installation.
+pub(crate) use super::recycle_receipt::RecycleReceipt;
 use super::{
     Change, DataRoot, Error, FlatStage, Id, Mutation, State, entry_leaf, hex, invalid, read_state,
     recycle_material::{self, ProofFormat, SourceRow},
     recycle_receipt::{ENROLLED_BYTES, LEGACY_BYTES, RecycleRole},
     volume::DataVolume,
 };
-pub(crate) use super::recycle_receipt::RecycleReceipt;
 use crate::{
     fs::{HeldDir, ReadAccess},
     hash::Sha256,
@@ -34,12 +34,13 @@ fn read_ready(
         parent.require_named()?;
         return Ok(None);
     };
-    let len = original.file.metadata()?.len();
-    if len != LEGACY_BYTES as u64 && len != ENROLLED_BYTES as u64 {
+    let len = usize::try_from(original.file.metadata()?.len())
+        .map_err(|_| invalid("invalid recycle receipt size"))?;
+    if !matches!(len, LEGACY_BYTES | ENROLLED_BYTES) {
         return Err(invalid("invalid recycle receipt size"));
     }
     let mut bytes = [0; ENROLLED_BYTES];
-    let raw = &mut bytes[..len as usize];
+    let raw = &mut bytes[..len];
     let mut input = &original.file;
     input.read_exact(raw)?;
     if input.read(&mut [0; 1])? != 0 {
@@ -94,7 +95,9 @@ fn qualified_envelope(
         .ok_or_else(|| invalid("selected recycle directory is absent"))?;
     ready.require_arrival(role, selected.entity)?;
     if read_ready(&selected, c"ready", access)? != Some(ready) {
-        return Err(invalid("recycle location differs from its original ready receipt"));
+        return Err(invalid(
+            "recycle location differs from its original ready receipt",
+        ));
     }
     selected.require_named()?;
     Ok(selected)
@@ -206,7 +209,11 @@ impl Recycle {
         Self::select_namespaces(system, recycle, role, true)
     }
 
-    pub(super) fn open_existing(system: HeldDir, recycle: HeldDir, role: RecycleRole) -> io::Result<Self> {
+    pub(super) fn open_existing(
+        system: HeldDir,
+        recycle: HeldDir,
+        role: RecycleRole,
+    ) -> io::Result<Self> {
         Self::select_namespaces(system, recycle, role, false)
     }
 
@@ -281,7 +288,12 @@ impl Recycle {
 
     fn qualify(&self, ready: RecycleReceipt) -> io::Result<HeldDir> {
         self.held()?;
-        qualify_arrival(&self.arrived_directory, ready, self.role, ReadAccess::Ordinary)
+        qualify_arrival(
+            &self.arrived_directory,
+            ready,
+            self.role,
+            ReadAccess::Ordinary,
+        )
     }
 
     pub(super) fn selected(&self, id: Id) -> io::Result<Option<(RecycleReceipt, HeldDir)>> {
@@ -317,26 +329,37 @@ impl Recycle {
         let destination = CString::new(arrived_leaf(mutation))
             .map_err(|_| invalid("invalid recycle arrival position"))?;
         if let Some(arrived) = self.held_arrived(mutation)? {
-            let old = read_ready(&arrived, c"ready", ReadAccess::Ordinary)?
-                .ok_or_else(|| invalid("recycle position is occupied without matching ready proof"))?;
+            let old = read_ready(&arrived, c"ready", ReadAccess::Ordinary)?.ok_or_else(|| {
+                invalid("recycle position is occupied without matching ready proof")
+            })?;
             if (old.mutation, old.original_sequence) != (mutation, state.sequence) {
                 return Err(super::Conflict::RequestReused.into());
             }
             if !old.is_enrolled() {
-                return Err(invalid("unselected legacy recycle material is preserved, not adopted").into());
+                return Err(invalid(
+                    "unselected legacy recycle material is preserved, not adopted",
+                )
+                .into());
             }
             old.require_source(ordinary.token, held.entity)?;
             let envelope = qualified_envelope(
-                &self.arrived_directory, old, self.role, ReadAccess::Ordinary,
+                &self.arrived_directory,
+                old,
+                self.role,
+                ReadAccess::Ordinary,
             )?;
             if envelope.entity != arrived.entity || !envelope.same_mount(&arrived)? {
                 return Err(invalid("original recycle arrival was replaced").into());
             }
-            let archive = envelope.child_directory(c"container")?
+            let archive = envelope
+                .child_directory(c"container")?
                 .ok_or_else(|| invalid("selected recycled container is absent"))?;
             let exact = read_state(&archive, mutation.container)?;
             if exact.sequence != state.sequence || exact.receipts != state.receipts {
-                return Err(invalid("prepared archive does not match the current original history").into());
+                return Err(invalid(
+                    "prepared archive does not match the current original history",
+                )
+                .into());
             }
             recycle_material::verify_recovered(&exact.receipts, &archive, &live)?;
             prove_source(old, state, &held, &envelope, true)?;
@@ -361,8 +384,12 @@ impl Recycle {
             })?;
         let into = candidate.directory.file.metadata()?;
         let proof = RecycleReceipt::enrolled(
-            mutation, state.sequence, self.role, ordinary.token,
-            (before.ino(), into.ino()), source_proof,
+            mutation,
+            state.sequence,
+            self.role,
+            ordinary.token,
+            (before.ino(), into.ino()),
+            source_proof,
         )?;
         candidate.write(c"ready", &proof.encode())?;
         candidate.directory.file.sync_all()?;
@@ -465,8 +492,12 @@ impl Recycle {
             return parent.confirm_absence(&leaf);
         };
         receipt.require_source(ordinary.token, original.entity)?;
-        let proof_root =
-            qualified_envelope(&self.arrived_directory, receipt, self.role, ReadAccess::Ordinary)?;
+        let proof_root = qualified_envelope(
+            &self.arrived_directory,
+            receipt,
+            self.role,
+            ReadAccess::Ordinary,
+        )?;
         // A recovery verifies the archived bodies only when this exact source
         // is still present. The same held source is used through retirement.
         verify_copy()?;
@@ -489,10 +520,15 @@ impl Recycle {
 }
 
 fn prove_source(
-    receipt: RecycleReceipt, known: &State, original: &HeldDir, proof_root: &HeldDir,
+    receipt: RecycleReceipt,
+    known: &State,
+    original: &HeldDir,
+    proof_root: &HeldDir,
     require_complete: bool,
 ) -> io::Result<Vec<SourceRow>> {
-    let entries = known.receipts.values()
+    let entries = known
+        .receipts
+        .values()
         .map(|r| entry_leaf(r.sequence, r.mutation.request))
         .collect::<BTreeSet<_>>();
     original.each_name(ReadAccess::Ordinary, |name| {
@@ -503,22 +539,33 @@ fn prove_source(
         }
     })?;
     original.require_named()?;
-    let proof = proof_root.opaque_pin(c"source-proof")?
+    let proof = proof_root
+        .opaque_pin(c"source-proof")?
         .ok_or_else(|| invalid("retirement evidence is absent"))?;
     let mut input = &proof.file;
     let mut digest = Sha256::new();
     let mut rows = Vec::new();
-    let format = if receipt.is_enrolled() { ProofFormat::Enrolled } else { ProofFormat::Legacy };
+    let format = if receipt.is_enrolled() {
+        ProofFormat::Enrolled
+    } else {
+        ProofFormat::Legacy
+    };
     rows.try_reserve_exact(known.receipts.len())
         .map_err(|_| io::Error::other("cannot retain exact retirement metadata"))?;
     for saved in known.receipts.values() {
-        let row = SourceRow::read(&mut input, format, matches!(saved.change, Change::Save { .. }))?;
+        let row = SourceRow::read(
+            &mut input,
+            format,
+            matches!(saved.change, Change::Save { .. }),
+        )?;
         digest.update(row.bytes())?;
         retire_entry(original, saved, &row, require_complete, None)?;
         rows.push(row);
     }
     if input.read(&mut [0; 1])? != 0 || digest.finish() != receipt.source_proof {
-        return Err(invalid("source retirement evidence does not bind the exact moved copy"));
+        return Err(invalid(
+            "source retirement evidence does not bind the exact moved copy",
+        ));
     }
     proof.require(proof_root, c"source-proof")?;
     Ok(rows)
@@ -539,7 +586,9 @@ fn retire_entry(
         .map_err(|_| invalid("invalid source member label"))?;
     let Some(entry) = original.child_directory(&leaf)? else {
         if require_complete {
-            return Err(invalid("a prepared unselected archive lost an original source entry"));
+            return Err(invalid(
+                "a prepared unselected archive lost an original source entry",
+            ));
         }
         return Ok(());
     };
@@ -559,7 +608,9 @@ fn retire_entry(
         None
     };
     if require_complete && (record.is_none() || body && payload.is_none()) {
-        return Err(invalid("a prepared unselected archive lost an original source member"));
+        return Err(invalid(
+            "a prepared unselected archive lost an original source member",
+        ));
     }
     row.require_members(record.as_ref(), payload.as_ref())?;
     if let Some(check) = before_unlink {

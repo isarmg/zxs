@@ -48,8 +48,15 @@ impl Fixture {
     fn initialize(&self) {
         let owner = self.system.opaque_owner(c"container-owner").unwrap();
         let store = Store::open_roster(&self.system, self.roster(), owner).unwrap();
-        let archive =
-            Recycle::open(hold(&self.system.path), hold(&self.recycle.path), RecycleRole { pool: POOL, token: RECYCLE }).unwrap();
+        let archive = Recycle::open(
+            hold(&self.system.path),
+            hold(&self.recycle.path),
+            RecycleRole {
+                pool: POOL,
+                token: RECYCLE,
+            },
+        )
+        .unwrap();
         drop((store, archive));
     }
 

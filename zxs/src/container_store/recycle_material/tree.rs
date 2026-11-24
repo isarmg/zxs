@@ -42,7 +42,9 @@ impl CopyTree {
     /// The original staging pathname is gone after its outer rename.
     pub(in crate::container_store) fn require_arrived(&self, arrived: &HeldDir) -> io::Result<()> {
         if arrived.entity != self.directory.entity || !arrived.same_mount(&self.directory)? {
-            return Err(invalid("arrived copy is not the original verified recycle directory"));
+            return Err(invalid(
+                "arrived copy is not the original verified recycle directory",
+            ));
         }
         arrived.require_named()
     }

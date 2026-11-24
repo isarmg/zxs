@@ -4,6 +4,14 @@ use crate::test_support::PrivateTemp;
 const POOL: Id = [7; 16];
 const RECYCLE_TOKEN: [u8; 32] = [0xA5; 32];
 
+struct UnexpectedRead;
+
+impl Read for UnexpectedRead {
+    fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+        panic!("a rejected first intake read request bytes");
+    }
+}
+
 fn id(n: u8) -> Id {
     [n; 16]
 }
@@ -454,7 +462,7 @@ fn recycle_selects_whole_container_and_retains_the_exact_receipt_without_f() {
     assert_eq!(store.routes.get(id(1)).unwrap(), Some([1; 32]));
     assert!(matches!(
         store.move_to_recycle(mutation(6), 4, || Ok(())),
-        Err(Error::CleanupPending { receipt, .. }) if receipt == recycled
+        Err(Error::CleanupPending { receipt, .. }) if *receipt == recycled
     ));
 }
 
@@ -552,7 +560,7 @@ fn retired_data_proof_settles_only_the_exact_recycled_retry() {
     let pending = |store: &Store| {
         assert!(matches!(
             store.move_to_recycle(mutation(6), 1, || Ok(())),
-            Err(Error::CleanupPending { receipt, .. }) if receipt == done
+            Err(Error::CleanupPending { receipt, .. }) if *receipt == done
         ));
     };
     let store = open(&remaining, 2, POOL);
@@ -575,12 +583,18 @@ fn retired_data_proof_settles_only_the_exact_recycled_retry() {
 
     let store = open(&remaining, 2, [8; 16]);
     assert!(store.operation_receipt(mutation(6)).is_err());
-    assert!(matches!(store.move_to_recycle(mutation(6), 1, || Ok(())), Err(Error::Io(_))));
+    assert!(matches!(
+        store.move_to_recycle(mutation(6), 1, || Ok(())),
+        Err(Error::Io(_))
+    ));
     drop(store);
     let store = open(&original, 1, POOL);
     fs::rename(&original, local.0.join("original-offline")).unwrap();
     // Known enrollment may report a selected R receipt while its DATA mount is absent.
-    assert_eq!(store.operation_receipt(mutation(6)).unwrap(), Some(OperationReceipt::Recycle(done)));
+    assert_eq!(
+        store.operation_receipt(mutation(6)).unwrap(),
+        Some(OperationReceipt::Recycle(done))
+    );
     pending(&store);
     drop(store);
 
@@ -668,7 +682,7 @@ fn a_replaced_descendant_leaves_the_entire_original_pending_without_any_unlink()
     };
     assert_eq!(
         store.operation_receipt(mutation(6)).unwrap(),
-        Some(OperationReceipt::Recycle(receipt))
+        Some(OperationReceipt::Recycle(*receipt))
     );
     assert!(store.detail_page(id(1), None, None).unwrap().is_none());
     assert_eq!(fs::read(first.join("payload")).unwrap(), b"one");
@@ -725,16 +739,98 @@ fn a_later_staging_substitution_cannot_redirect_a_whole_node_upload() {
     let result = store.save(
         mutation(2),
         first_node(id(10), body(b"one"), "first".into()),
-        &b"one"[..],
+        UnexpectedRead,
         || Ok(()),
     );
-    assert!(matches!(result,Err(Error::Io(ref e)) if e.to_string().contains("replaced")));
+    assert!(matches!(result, Err(Error::Io(ref e)) if e.to_string().contains("replaced")));
+    assert_eq!(store.routes.get(id(1)).unwrap(), None);
+    assert!(store.operation_receipt(mutation(2)).unwrap().is_none());
     for path in [
         staging.as_path(),
         displaced.as_path(),
         store.volumes[0].contents().path.as_path(),
     ] {
         assert!(fs::read_dir(path).unwrap().next().is_none());
+    }
+}
+
+#[test]
+fn capacity_prefers_identity_refusal_but_keeps_a_qualified_peer_usable() {
+    let temp = PrivateTemp::under(&std::env::temp_dir());
+    let system = temp.0.join("system");
+    let left = temp.0.join("left");
+    let right = temp.0.join("right");
+    for path in [&system, &left, &right] {
+        ensure_dir(path).unwrap();
+    }
+    let data = vec![held_data(&left, 1), held_data(&right, 2)];
+    let store = open_test_roster(&system, data).unwrap();
+    let absent = temp.0.join("left-absent");
+    let staging = right.join("staging");
+    let replaced = temp.0.join("old-right-staging");
+    let right_data = right.join("data");
+    fs::rename(&left, &absent).unwrap();
+    fs::rename(&staging, &replaced).unwrap();
+    ensure_dir(&staging).unwrap();
+
+    let save = || first_node(id(10), body(b"one"), "first".into());
+    let result = store.save(mutation(2), save(), UnexpectedRead, || Ok(()));
+    assert!(matches!(result, Err(Error::Io(ref e)) if e.to_string().contains("replaced")));
+    assert_eq!(store.routes.get(id(1)).unwrap(), None);
+    assert!(store.operation_receipt(mutation(2)).unwrap().is_none());
+    for untouched in [&staging, &replaced, &right_data] {
+        assert!(fs::read_dir(untouched).unwrap().next().is_none());
+    }
+
+    // The exact original lower token comes back. No holder state or route
+    // was fabricated and a merely prospective replaced peer is skipped.
+    fs::rename(&absent, &left).unwrap();
+    let receipt = store
+        .save(mutation(2), save(), &b"one"[..], || Ok(()))
+        .unwrap();
+    assert_eq!(store.routes.get(id(1)).unwrap(), Some([1; 32]));
+    assert_eq!(
+        store.operation_receipt(mutation(2)).unwrap(),
+        Some(OperationReceipt::Mutation(receipt))
+    );
+    assert_eq!(read_node(&store, 10), b"one");
+    for untouched in [&staging, &replaced, &right_data] {
+        assert!(fs::read_dir(untouched).unwrap().next().is_none());
+    }
+}
+
+#[test]
+fn a_reserved_route_refuses_a_replaced_staging_root_even_with_another_volume() {
+    let temp = PrivateTemp::under(&std::env::temp_dir());
+    let system = temp.0.join("system");
+    let routed = temp.0.join("routed");
+    let other = temp.0.join("other");
+    for path in [&system, &routed, &other] {
+        ensure_dir(path).unwrap();
+    }
+    let data = vec![held_data(&routed, 1), held_data(&other, 2)];
+    let store = open_test_roster(&system, data).unwrap();
+    store.routes.reserve(id(1), [1; 32]).unwrap();
+    let staging = routed.join("staging");
+    let retained = temp.0.join("retained-staging");
+    fs::rename(&staging, &retained).unwrap();
+    ensure_dir(&staging).unwrap();
+    let result = store.save(
+        mutation(2),
+        first_node(id(10), body(b"one"), "first".into()),
+        UnexpectedRead,
+        || Ok(()),
+    );
+    assert!(matches!(result, Err(Error::Io(ref e)) if e.to_string().contains("replaced")));
+    assert_eq!(store.routes.get(id(1)).unwrap(), Some([1; 32]));
+    for old in [
+        staging,
+        retained,
+        routed.join("data"),
+        other.join("staging"),
+        other.join("data"),
+    ] {
+        assert!(fs::read_dir(old).unwrap().next().is_none());
     }
 }
 
@@ -859,16 +955,29 @@ fn an_exact_unselected_rc2_can_resume_but_a_changed_proof_cannot_switch_visibili
         ensure_dir(path).unwrap();
     }
     let held = |p: &Path| HeldDir::trusted_storage(p).unwrap();
-    let open = || Store::open_with_recycle(
-        held(&system), vec![held_data(&ordinary, 1)], held(&recycle), POOL, RECYCLE_TOKEN,
-    ).unwrap();
+    let open = || {
+        Store::open_with_recycle(
+            held(&system),
+            vec![held_data(&ordinary, 1)],
+            held(&recycle),
+            POOL,
+            RECYCLE_TOKEN,
+        )
+        .unwrap()
+    };
     let store = open();
-    store.save(
-        mutation(2), first_node(id(10), body(b"one"), "name".into()), &b"one"[..], || Ok(()),
-    ).unwrap();
+    store
+        .save(
+            mutation(2),
+            first_node(id(10), body(b"one"), "name".into()),
+            &b"one"[..],
+            || Ok(()),
+        )
+        .unwrap();
     leave_prepared_recycle_unselected(&store);
     drop(store);
-    let envelope = recycle.join("containers")
+    let envelope = recycle
+        .join("containers")
         .join(format!("{}-{}", hex(id(1)), hex(id(6))));
     let proof = envelope.join("source-proof");
     let original = fs::read(&proof).unwrap();
@@ -884,7 +993,10 @@ fn an_exact_unselected_rc2_can_resume_but_a_changed_proof_cannot_switch_visibili
     assert_eq!(read_node(&store, 10), b"one");
     assert!(store.operation_receipt(mutation(6)).unwrap().is_none());
     fs::write(&proof, original).unwrap();
-    let r_body = envelope.join("container").join(entry_leaf(1, id(2))).join("payload");
+    let r_body = envelope
+        .join("container")
+        .join(entry_leaf(1, id(2)))
+        .join("payload");
     let hidden = envelope.join("fixture-held-body");
     fs::rename(&r_body, &hidden).unwrap();
     assert!(store.move_to_recycle(mutation(6), 1, || Ok(())).is_err());
@@ -899,56 +1011,93 @@ fn an_exact_unselected_rc2_can_resume_but_a_changed_proof_cannot_switch_visibili
     }
     fs::write(&r_body, b"one").unwrap();
 
-    // Publish the exact prepared receipt, simulate a stop before original cleanup,
-    // then lose R body integrity. The durable selector remains visible but no F entry is removed.
     let selected = RecycleReceipt::decode(&stamp).unwrap();
-    {
-        let archive = store.archive.as_ref().unwrap();
-        let object = store.object(id(1)).unwrap();
-        let mut memory = object.lock().unwrap();
-        let volume = &store.volumes[0];
-        let state = volume.load(id(1), &mut memory).unwrap();
-        let mut incoming = store.flat_stage_at(archive.staging().unwrap()).unwrap();
-        let prepared = archive
-            .prepare(mutation(6), volume, state, &mut incoming, || Ok(()))
-            .unwrap();
-        assert_eq!(prepared.receipt, selected);
-
-        // An unselected recovery must not publish if the exact hashed R child
-        // is swapped under the same receipt/envelope before the selector cut.
-        let archived = envelope.join("container");
-        let outside_cut = envelope.join("fixture-held-container");
-        fs::rename(&archived, &outside_cut).unwrap();
-        ensure_dir(&archived).unwrap();
-        {
-            let mut cut = store.flat_stage_at(archive.moves().unwrap()).unwrap();
-            assert!(archive.choose(&prepared, &mut cut, || Ok(())).is_err());
-        }
-        assert!(archive.selected(id(1)).unwrap().is_none());
-        assert_eq!(
-            fs::read(volume.container(id(1)).join(entry_leaf(1, id(2))).join("payload"))
-                .unwrap(),
-            b"one"
-        );
-        fs::remove_dir(&archived).unwrap();
-        fs::rename(&outside_cut, &archived).unwrap();
-        let mut cut = store.flat_stage_at(archive.moves().unwrap()).unwrap();
-        archive.choose(&prepared, &mut cut, || Ok(())).unwrap();
-    }
+    choose_exact_rc2_after_child_swap(&store, &envelope, selected);
     drop(store);
     let store = open();
-    fs::rename(&r_body, &hidden).unwrap();
-    assert!(matches!(store.move_to_recycle(mutation(6), 1, || Ok(())), Err(Error::CleanupPending { .. })));
-    assert_eq!(store.operation_receipt(mutation(6)).unwrap(), Some(OperationReceipt::Recycle(selected)));
-    assert!(store.volumes[0].container(id(1)).join(entry_leaf(1, id(2))).join("payload").is_file());
-    fs::rename(&hidden, &r_body).unwrap();
-    for bad in [b"x".as_slice(), b"two"] {
-        fs::write(&r_body, bad).unwrap();
-        assert!(matches!(store.move_to_recycle(mutation(6), 1, || Ok(())), Err(Error::CleanupPending { .. })));
-        assert!(store.volumes[0].container(id(1)).join(entry_leaf(1, id(2))).join("payload").is_file());
-    }
-    fs::write(&r_body, b"one").unwrap();
+    assert_selected_rc2_retains_source_on_damage(&store, &r_body, &hidden, selected);
+    assert_rc2_rechecks_authority_after_archive_verification(&store, selected);
 
+    let completed = store.move_to_recycle(mutation(6), 1, || Ok(())).unwrap();
+    assert_eq!(completed.encode(), stamp);
+    assert_eq!(
+        store.operation_receipt(mutation(6)).unwrap(),
+        Some(OperationReceipt::Recycle(completed))
+    );
+    assert!(!store.volumes[0].container(id(1)).exists());
+}
+
+fn rc2_source_entry(store: &Store) -> PathBuf {
+    let container = store.volumes[0].container(id(1));
+    container.join(entry_leaf(1, id(2)))
+}
+
+fn choose_exact_rc2_after_child_swap(store: &Store, envelope: &Path, selected: RecycleReceipt) {
+    let archive = store.archive.as_ref().unwrap();
+    let object = store.object(id(1)).unwrap();
+    let mut memory = object.lock().unwrap();
+    let volume = &store.volumes[0];
+    let state = volume.load(id(1), &mut memory).unwrap();
+    let mut incoming = store.flat_stage_at(archive.staging().unwrap()).unwrap();
+    let prepared = archive
+        .prepare(mutation(6), volume, state, &mut incoming, || Ok(()))
+        .unwrap();
+    assert_eq!(prepared.receipt, selected);
+
+    // Do not publish an unselected recovery whose exact verified R child
+    // was swapped under the same envelope before the selector cut.
+    let archived = envelope.join("container");
+    let outside_cut = envelope.join("fixture-held-container");
+    fs::rename(&archived, &outside_cut).unwrap();
+    ensure_dir(&archived).unwrap();
+    {
+        let mut cut = store.flat_stage_at(archive.moves().unwrap()).unwrap();
+        assert!(archive.choose(&prepared, &mut cut, || Ok(())).is_err());
+    }
+    assert!(archive.selected(id(1)).unwrap().is_none());
+    let source = rc2_source_entry(store);
+    assert_eq!(fs::read(source.join("payload")).unwrap(), b"one");
+    fs::remove_dir(&archived).unwrap();
+    fs::rename(&outside_cut, &archived).unwrap();
+    let mut cut = store.flat_stage_at(archive.moves().unwrap()).unwrap();
+    archive.choose(&prepared, &mut cut, || Ok(())).unwrap();
+}
+
+fn assert_selected_rc2_retains_source_on_damage(
+    store: &Store,
+    r_body: &Path,
+    hidden: &Path,
+    selected: RecycleReceipt,
+) {
+    // After a stop between selection and cleanup, damage cannot invalidate
+    // the original selector or authorize destructive cleanup of DATA.
+    let source = rc2_source_entry(store);
+    let refused = || {
+        assert!(matches!(
+            store.move_to_recycle(mutation(6), 1, || Ok(())),
+            Err(Error::CleanupPending { receipt, .. }) if *receipt == selected
+        ));
+        assert_eq!(
+            store.operation_receipt(mutation(6)).unwrap(),
+            Some(OperationReceipt::Recycle(selected))
+        );
+        assert_eq!(fs::read(source.join("payload")).unwrap(), b"one");
+        assert!(source.join("receipt").is_file());
+    };
+    fs::rename(r_body, hidden).unwrap();
+    refused();
+    fs::rename(hidden, r_body).unwrap();
+    for bad in [b"x".as_slice(), b"two"] {
+        fs::write(r_body, bad).unwrap();
+        refused();
+    }
+    fs::write(r_body, b"one").unwrap();
+}
+
+fn assert_rc2_rechecks_authority_after_archive_verification(
+    store: &Store,
+    selected: RecycleReceipt,
+) {
     // Recovery can lose authority after the archived copy is verified but
     // before original retirement. No original member may be unlinked.
     let archive = store.archive.as_ref().unwrap();
@@ -976,18 +1125,13 @@ fn an_exact_unselected_rc2_can_resume_but_a_changed_proof_cannot_switch_visibili
         .unwrap_err();
     assert_eq!(revoked.kind(), io::ErrorKind::PermissionDenied);
     assert!(verified.get());
-    let source = store.volumes[0].container(id(1)).join(entry_leaf(1, id(2)));
+    let source = rc2_source_entry(store);
     assert_eq!(fs::read(source.join("payload")).unwrap(), b"one");
     assert!(source.join("receipt").is_file());
     assert_eq!(
         store.operation_receipt(mutation(6)).unwrap(),
         Some(OperationReceipt::Recycle(selected))
     );
-
-    let completed = store.move_to_recycle(mutation(6), 1, || Ok(())).unwrap();
-    assert_eq!(completed.encode(), stamp);
-    assert_eq!(store.operation_receipt(mutation(6)).unwrap(), Some(OperationReceipt::Recycle(completed)));
-    assert!(!store.volumes[0].container(id(1)).exists());
 }
 
 #[test]
@@ -1185,13 +1329,6 @@ fn first_save_reserves_only_on_valid_intake_and_reuses_reserved_disk_after_reope
 
 #[test]
 fn a_first_body_that_cannot_fit_never_reads_input_or_reserves_disk() {
-    struct UnexpectedRead;
-    impl Read for UnexpectedRead {
-        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
-            panic!("a rejected first intake read request bytes");
-        }
-    }
-
     let (_temp, root, store) = fixture();
     let mut impossible = body(b"one");
     impossible.length = u64::MAX;

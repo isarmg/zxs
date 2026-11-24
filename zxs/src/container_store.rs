@@ -22,7 +22,7 @@ use crate::hash::Sha256;
 pub(crate) use model::{Body, Change, Conflict, Id, MAIN, Mutation, Node, NodeId, Receipt, Target};
 use model::{Decision, State};
 pub(crate) use operation::OperationReceipt;
-use placement::{Intake, Placement};
+use placement::{Intake, Placement, Sample};
 pub(crate) use recycle::RecycleReceipt;
 use routes::Routes;
 use stage::FlatStage;
@@ -58,7 +58,7 @@ pub(crate) enum Error {
     WrongDigest,
     Uncertain(io::Error),
     CleanupPending {
-        receipt: RecycleReceipt,
+        receipt: Box<RecycleReceipt>,
         error: io::Error,
     },
 }
@@ -271,7 +271,10 @@ impl Store {
         pool: Id,
         recycle_token: [u8; 32],
     ) -> io::Result<Self> {
-        let role = recycle_receipt::RecycleRole { pool, token: recycle_token };
+        let role = recycle_receipt::RecycleRole {
+            pool,
+            token: recycle_token,
+        };
         role.require()?;
         if data.iter().any(|volume| volume.token == recycle_token) {
             return Err(invalid("DATA and recycle cannot share an enrolled token"));
@@ -367,23 +370,15 @@ impl Store {
     ) -> Result<(&DataVolume, Option<Intake<'_>>), Error> {
         for _ in 0..PLACEMENT_ATTEMPTS {
             let generation = self.placement.generation()?;
-            let samples: Vec<_> = self
-                .volumes
-                .iter()
-                .filter_map(|volume| {
-                    volume
-                        .available_bytes()
-                        .ok()
-                        .map(|free| (volume.token, free))
-                })
-                .collect();
+            let samples = self.qualified_capacity();
 
             // A concurrent first save can make the durable route decisive
             // during the native queries or as this provisional slot is issued.
             if let Some(volume) = self.routed(id)? {
                 return Ok((volume, None));
             }
-            let proposed = self.placement.reserve(generation, id, bytes, &samples);
+            let proposed =
+                samples.and_then(|points| self.placement.reserve(generation, id, bytes, &points));
             if let Some(volume) = self.routed(id)? {
                 let matching = proposed
                     .ok()
@@ -396,7 +391,7 @@ impl Store {
                     let volume = self.enrolled(lease.token).ok_or_else(unenrolled_data)?;
                     return Ok((volume, Some(lease)));
                 }
-                Ok(None) => continue,
+                Ok(None) => {}
                 Err(error) => {
                     authorize()?;
                     return Err(error.into());
@@ -407,6 +402,34 @@ impl Store {
         Err(io::Error::from(io::ErrorKind::WouldBlock).into())
     }
 
+    fn qualified_capacity(&self) -> io::Result<Vec<Sample>> {
+        let mut samples = Vec::new();
+        let mut identity_failure = None;
+        let mut other_failure = None;
+        for volume in &self.volumes {
+            match volume.available_bytes() {
+                Ok(free) => samples.push((volume.token, free)),
+                Err(error) => {
+                    let failure = match error.kind() {
+                        io::ErrorKind::InvalidInput | io::ErrorKind::InvalidData => {
+                            &mut identity_failure
+                        }
+                        _ => &mut other_failure,
+                    };
+                    failure.get_or_insert(error);
+                }
+            }
+        }
+        if samples.is_empty() {
+            // An earlier missing or read-only disk must not hide a later
+            // held-identity refusal. Neither error substitutes another path.
+            return Err(identity_failure
+                .or(other_failure)
+                .unwrap_or_else(unenrolled_data));
+        }
+        Ok(samples)
+    }
+
     fn recycled(&self, id: Id) -> io::Result<Option<(RecycleReceipt, HeldDir)>> {
         let Some(archive) = self.archive.as_ref() else {
             return Ok(None);
@@ -415,7 +438,9 @@ impl Store {
         if let Some((receipt, _)) = &selected
             && receipt.is_enrolled()
         {
-            let token = self.routes.get(id)?
+            let token = self
+                .routes
+                .get(id)?
                 .ok_or_else(|| invalid("selected recycle record has no original DATA route"))?;
             receipt.require_data(token)?;
             // A configured DATA token is valid even if its held mount is now offline.
@@ -724,7 +749,7 @@ impl Store {
             }
             if let Err(error) = self.finish_recycle(archive, done, &at, &authorize) {
                 return Err(Error::CleanupPending {
-                    receipt: done,
+                    receipt: Box::new(done),
                     error,
                 });
             }
@@ -759,7 +784,9 @@ impl Store {
                 .map_err(|_| invalid("container name selection unavailable"))?;
             archive.choose(&prepared, &mut selector, || {
                 volume.require_named()?;
-                let token = self.routes.get(mutation.container)?
+                let token = self
+                    .routes
+                    .get(mutation.container)?
                     .ok_or_else(|| invalid("selected recycle record has no original DATA route"))?;
                 done.require_data(token)?;
                 authorize()
@@ -776,7 +803,7 @@ impl Store {
             },
         ) {
             return Err(Error::CleanupPending {
-                receipt: done,
+                receipt: Box::new(done),
                 error,
             });
         }

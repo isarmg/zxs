@@ -1,6 +1,7 @@
 //! Existing-only live-name view under the original offline state lease.
 use super::{
-    DataRoot, Id, hex, invalid, recycle, recycle_receipt::RecycleRole, replay_selected_entries, routes,
+    DataRoot, Id, hex, invalid, recycle, recycle_receipt::RecycleRole, replay_selected_entries,
+    routes,
 };
 use crate::fs::{HeldDir, ReadAccess};
 use std::{
@@ -63,7 +64,15 @@ pub(crate) fn live_names(
 ) -> io::Result<BTreeSet<String>> {
     require_original()?;
     recycle::Recycle::require_roles(system, recycle_root, data)?;
-    let names = read_live_names(system, recycle_root, data, RecycleRole { pool, token: recycle_token })?;
+    let names = read_live_names(
+        system,
+        recycle_root,
+        data,
+        RecycleRole {
+            pool,
+            token: recycle_token,
+        },
+    )?;
     recycle::Recycle::require_roles(system, recycle_root, data)?;
     require_original()?;
     Ok(names)
@@ -82,7 +91,8 @@ fn read_live_names(
     let mut volumes = BTreeMap::new();
     for volume in data {
         let directory = Namespace::open(&volume.root, c"data")?;
-        if volume.token == [0; 32] || volume.token == role.token
+        if volume.token == [0; 32]
+            || volume.token == role.token
             || volumes.insert(volume.token, directory).is_some()
         {
             return Err(invalid("offline catalog sees an invalid DATA token"));
@@ -141,7 +151,11 @@ fn require_fresh(
 }
 
 fn archived(
-    moves: &Namespace<'_>, arrived: &Namespace<'_>, id: Id, token: [u8; 32], role: RecycleRole,
+    moves: &Namespace<'_>,
+    arrived: &Namespace<'_>,
+    id: Id,
+    token: [u8; 32],
+    role: RecycleRole,
 ) -> io::Result<bool> {
     let Some(moves) = &moves.selected else {
         return Ok(false);

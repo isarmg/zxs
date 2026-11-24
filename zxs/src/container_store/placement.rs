@@ -4,7 +4,7 @@ use super::Id;
 use std::{collections::BTreeMap, io, sync::Mutex};
 
 type Token = [u8; 32];
-type Sample = (Token, u64);
+pub(super) type Sample = (Token, u64);
 
 const MAX_INTAKES: usize = 64;
 const HEADROOM: u64 = 1024 * 1024;
@@ -63,7 +63,13 @@ impl Placement {
         if active.generation != generation {
             return Ok(None);
         }
-        if active.containers.values().map(|row| row.leases).sum::<usize>() >= MAX_INTAKES {
+        if active
+            .containers
+            .values()
+            .map(|row| row.leases)
+            .sum::<usize>()
+            >= MAX_INTAKES
+        {
             return Err(busy());
         }
         let needed = bytes.checked_add(HEADROOM).ok_or_else(full)?;

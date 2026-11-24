@@ -190,7 +190,12 @@ impl SelectedStart {
         require_state: impl Fn(&HeldDir) -> io::Result<()>,
     ) -> io::Result<BTreeSet<String>> {
         offline_catalog::live_names(
-            &self.system, &self.recycle, &self.data, self.pool, self.recycle_token, || {
+            &self.system,
+            &self.recycle,
+            &self.data,
+            self.pool,
+            self.recycle_token,
+            || {
                 require_state(&self.state)?;
                 self.require_named()
             },
@@ -283,7 +288,9 @@ impl SelectedStart {
             recycle_token,
             ..
         } = self;
-        let writer = OfflineImport::open(system, recycle, data, pool, recycle_token, || require_state(&state))?;
+        let writer = OfflineImport::open(system, recycle, data, pool, recycle_token, || {
+            require_state(&state)
+        })?;
         Ok((writer, state))
     }
 

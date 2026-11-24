@@ -261,7 +261,7 @@ fn recycle(
     let (selected, source_cleanup_pending) =
         match store.move_to_recycle(op, scope.revision, authorize) {
             Ok(receipt) => (receipt, false),
-            Err(core::Error::CleanupPending { receipt, .. }) => (receipt, true),
+            Err(core::Error::CleanupPending { receipt, .. }) => (*receipt, true),
             Err(error) => return Err(failed(&error)),
         };
     if selected.mutation != op || selected.original_sequence != scope.revision {

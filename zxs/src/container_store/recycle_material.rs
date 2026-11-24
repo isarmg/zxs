@@ -53,12 +53,21 @@ pub(super) struct SourceRow {
     format: ProofFormat,
 }
 impl SourceRow {
-    pub(super) fn read(input: &mut impl Read, format: ProofFormat, payload: bool) -> io::Result<Self> {
-        let mut row = Self { raw: [0; LEGACY_ROW], format };
+    pub(super) fn read(
+        input: &mut impl Read,
+        format: ProofFormat,
+        payload: bool,
+    ) -> io::Result<Self> {
+        let mut row = Self {
+            raw: [0; LEGACY_ROW],
+            format,
+        };
         input.read_exact(&mut row.raw[..format.width()])?;
         if matches!(format, ProofFormat::Enrolled) {
             let (receipt, body) = row.members();
-            if row.raw[..8] == [0; 8] || receipt[..8] == [0; 8] || (body[..8] != [0; 8]) != payload
+            if row.raw[..8] == [0; 8]
+                || receipt[..8] == [0; 8]
+                || (body[..8] != [0; 8]) != payload
                 || !payload && body.iter().any(|b| *b != 0)
             {
                 return Err(invalid("noncanonical enrolled recycle source proof row"));
@@ -68,7 +77,10 @@ impl SourceRow {
     }
 
     fn enrolled(directory: Entity, receipt: &[u8; OPAQUE_STAMP_BYTES]) -> Self {
-        let mut row = Self { raw: [0; LEGACY_ROW], format: ProofFormat::Enrolled };
+        let mut row = Self {
+            raw: [0; LEGACY_ROW],
+            format: ProofFormat::Enrolled,
+        };
         row.raw[..8].copy_from_slice(&directory.inode.to_be_bytes());
         row.raw[8..8 + STABLE_STAMP].copy_from_slice(row.format.stamp(receipt));
         row
@@ -90,21 +102,31 @@ impl SourceRow {
 
     pub(super) fn require_directory(&self, observed: Entity, same_mount: bool) -> io::Result<()> {
         let start = self.format.directory_bytes() - 8;
-        if !same_mount || self.raw[start..start + 8] != observed.inode.to_be_bytes()
-            || matches!(self.format, ProofFormat::Legacy) && self.raw[..8] != observed.device.to_be_bytes()
+        if !same_mount
+            || self.raw[start..start + 8] != observed.inode.to_be_bytes()
+            || matches!(self.format, ProofFormat::Legacy)
+                && self.raw[..8] != observed.device.to_be_bytes()
         {
-            return Err(invalid("source member is not the same copied original directory"));
+            return Err(invalid(
+                "source member is not the same copied original directory",
+            ));
         }
         Ok(())
     }
 
-    pub(super) fn require_members(&self, receipt: Option<&OpaquePin>, body: Option<&OpaquePin>) -> io::Result<()> {
+    pub(super) fn require_members(
+        &self,
+        receipt: Option<&OpaquePin>,
+        body: Option<&OpaquePin>,
+    ) -> io::Result<()> {
         let (expected_receipt, expected_body) = self.members();
         if receipt.is_some_and(|pin| self.format.stamp(&pin.stamp()) != expected_receipt)
             || body.is_some_and(|pin| self.format.stamp(&pin.stamp()) != expected_body)
             || receipt.is_none() && body.is_some()
         {
-            return Err(invalid("old source names no longer identify equal copied originals"));
+            return Err(invalid(
+                "old source names no longer identify equal copied originals",
+            ));
         }
         Ok(())
     }
@@ -191,8 +213,12 @@ pub(super) fn verify_recovered(
             continue;
         };
         live()?;
-        let entry = held_entry(archive, &entry_leaf(receipt.sequence, receipt.mutation.request))?;
-        let original = entry.opaque_pin(c"payload")?
+        let entry = held_entry(
+            archive,
+            &entry_leaf(receipt.sequence, receipt.mutation.request),
+        )?;
+        let original = entry
+            .opaque_pin(c"payload")?
             .ok_or_else(|| invalid("prepared archive is missing a selected payload"))?;
         if original.file.metadata()?.len() != body.length {
             return Err(invalid("prepared archived payload differs in length"));
