@@ -3,6 +3,7 @@ mod adoption;
 mod journal;
 mod material;
 mod native;
+mod proof;
 mod record;
 
 use super::{
@@ -35,10 +36,15 @@ enum Failure {
     Conflict,
     OldEpoch,
     InvalidBody,
+    Expired,
 }
 impl From<io::Error> for Failure {
     fn from(error: io::Error) -> Self {
-        Self::Io(error)
+        if proof::is_expiry(&error) {
+            Self::Expired
+        } else {
+            Self::Io(error)
+        }
     }
 }
 
@@ -74,7 +80,7 @@ pub(super) struct Shared {
     gates: Mutex<BTreeMap<Id, Weak<Gate>>>,
     admission: Gate,
     readers: AtomicUsize,
-    verifiers: AtomicUsize,
+    full_proofs: proof::Bank,
 }
 
 struct Uploads<'a> {

@@ -8,7 +8,7 @@ use crate::{
     container_store::{
         Body, Conflict, Error, Receipt, Store, codec, hex, invalid, volume::DataVolume,
     },
-    fs::{HeldDir, OpaquePin, ReadAccess},
+    fs::{HeldDir, OPAQUE_STAMP_BYTES, OpaquePin, ReadAccess},
 };
 use std::{
     ffi::{CStr, CString},
@@ -110,6 +110,23 @@ pub(super) struct Stage<'a> {
     directory_birth: Birth,
     payload_birth: Birth,
     draft: Option<DraftReceipt>,
+}
+
+pub(super) struct HeldBytes {
+    custody: Custody,
+    stamp: [u8; OPAQUE_STAMP_BYTES],
+}
+
+impl HeldBytes {
+    pub(super) fn require(&self, staged: &Stage<'_>) -> io::Result<()> {
+        self.custody.require(staged)?;
+        if self.stamp != staged.pin.stamp() {
+            return Err(invalid(
+                "raw upload bytes differ from the original full proof",
+            ));
+        }
+        Ok(())
+    }
 }
 
 pub(super) struct Custody {
@@ -268,6 +285,28 @@ impl<'a> Stage<'a> {
         self.pin.require(&self.directory, c"payload")
     }
 
+    pub(super) fn held_bytes(&self) -> io::Result<HeldBytes> {
+        self.require()?;
+        let retained = HeldBytes {
+            custody: Custody {
+                directory: HeldDir {
+                    file: self.directory.file.try_clone()?,
+                    path: self.directory.path.clone(),
+                    entity: self.directory.entity,
+                },
+                payload: self.pin.file.try_clone()?,
+            },
+            stamp: self.pin.stamp(),
+        };
+        retained.require(self)?;
+        Ok(retained)
+    }
+
+    pub(super) fn read_held_at(&self, target: &mut [u8], offset: u64) -> io::Result<usize> {
+        self.pin.file.read_at(target, offset)
+    }
+
+    #[cfg(test)]
     pub(super) fn verify_whole(
         &self,
         body: &Body,

@@ -249,6 +249,22 @@ impl Next<'_> {
 }
 
 impl Slot {
+    pub(super) fn duplicate(&self, directory: &HeldDir) -> io::Result<Self> {
+        let current = read(directory, self.record.intent.mutation.container)?
+            .ok_or_else(|| invalid("original upload control disappeared"))?;
+        self.require_same(directory, &current)?;
+        Ok(current)
+    }
+
+    pub(super) fn require_same(&self, directory: &HeldDir, current: &Self) -> io::Result<()> {
+        self.require(directory)?;
+        current.require(directory)?;
+        if self.record != current.record {
+            return Err(invalid("upload proof's exact control bytes changed"));
+        }
+        require_same(directory, &self.pin.file, &current.pin.file)
+    }
+
     pub(super) fn settle(&self, directory: &HeldDir) -> io::Result<()> {
         let name = slot_name(self.record.intent.mutation.container)?;
         self.pin.require(directory, &name)?;
