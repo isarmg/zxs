@@ -4,11 +4,22 @@ import NIOCore
 import NIOHPACK
 import NIOHTTP2
 
+public struct R3UploadSource: Sendable {
+    public let length: Int
+    public let sha256: String
+    let read: @Sendable (Int) throws -> Data?
+
+    public init(length: Int, sha256: String, read: @escaping @Sendable (Int) throws -> Data?) {
+        self.length = length; self.sha256 = sha256; self.read = read
+    }
+}
+
 public struct R3Request: Sendable {
     let method: String
     let path: String
     let headers: [String: String]
     let body: Data?
+    let disk: R3UploadSource?
     enum Mode: Sendable { case receipt, metadata, node(length: Int, digest: String) }
     let mode: Mode
 
@@ -16,12 +27,18 @@ public struct R3Request: Sendable {
         self.init(method: method, path: path, headers: headers, body: body, mode: .receipt)
     }
 
-    private init(method: String, path: String, headers: [String: String], body: Data?, mode: Mode) {
+    private init(method: String, path: String, headers: [String: String], body: Data?, mode: Mode,
+                 disk: R3UploadSource? = nil) {
         self.method = method
         self.path = path
         self.headers = headers
         self.body = body
         self.mode = mode
+        self.disk = disk
+    }
+
+    public static func stagedSave(path: String, headers: [String: String], source: R3UploadSource) -> Self {
+        Self(method: "POST", path: path, headers: headers, body: nil, mode: .receipt, disk: source)
     }
 
     private static let root = "/zxs/v1/containers"
@@ -88,7 +105,7 @@ public struct R3Request: Sendable {
             fields.add(name: name.lowercased(), value: value)
         }
 
-        let empty = body?.isEmpty ?? true
+        let empty = disk == nil && (body?.isEmpty ?? true)
         let head = HTTP2Frame.FramePayload.headers(.init(headers: fields, endStream: empty))
         guard !empty, let body else { return [head] }
         var buffer = ByteBufferAllocator().buffer(capacity: body.count)
@@ -105,12 +122,23 @@ public struct R3Request: Sendable {
 
         if method == "GET" {
             guard fields.count == 7, fields[5] == "operations", Self.validID(fields[6]),
-                  headers.isEmpty, body == nil else { throw TransportFailure.invalidRequest }
+                  headers.isEmpty, body == nil, disk == nil else { throw TransportFailure.invalidRequest }
             return
         }
         guard method == "POST", fields.count == 8, fields[5] == "branches", fields[7] == "nodes",
-              fields[6] == "main" || Self.validID(fields[6]),
-              let body, body.count <= 256 * 1024 else { throw TransportFailure.invalidRequest }
+              fields[6] == "main" || Self.validID(fields[6]) else { throw TransportFailure.invalidRequest }
+        let length: Int, digest: String
+        switch (body, disk) {
+        case let (body?, nil):
+            guard body.count <= 256 * 1024 else { throw TransportFailure.invalidRequest }
+            length = body.count
+            digest = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
+        case let (nil, source?):
+            guard source.length >= 0, source.sha256.utf8.count == 64, Self.hex(source.sha256.utf8)
+            else { throw TransportFailure.invalidRequest }
+            length = source.length; digest = source.sha256
+        default: throw TransportFailure.invalidRequest
+        }
 
         let required: Set<String> = ["content-type", "content-length", "zxs-operation", "zxs-node", "zxs-sha256"]
         let optional: Set<String> = ["zxs-base-node", "zxs-initial-name", "zxs-fork-from-main"]
@@ -121,9 +149,8 @@ public struct R3Request: Sendable {
                   normalized.updateValue(value, forKey: name) == nil, Self.headerText(value)
             else { throw TransportFailure.invalidRequest }
         }
-        let digest = SHA256.hash(data: body).map { String(format: "%02x", $0) }.joined()
         guard normalized["content-type"] == "application/octet-stream",
-              normalized["content-length"] == String(body.count), normalized["zxs-sha256"] == digest,
+              normalized["content-length"] == String(length), normalized["zxs-sha256"] == digest,
               let operation = normalized["zxs-operation"], Self.validID(operation[...]),
               let node = normalized["zxs-node"], Self.validID(node[...]) else { throw TransportFailure.invalidRequest }
         let from = normalized["zxs-fork-from-main"]
@@ -226,11 +253,12 @@ final class R3ResponseReceiver: ChannelInboundHandler {
     typealias InboundIn = HTTP2Frame.FramePayload
 
     private let result: EventLoopPromise<R3Response>
+    private let fileProof: FileSendProof?
     private var pending: R3ResponseAccumulator
     private(set) var finished = false
 
-    init(result: EventLoopPromise<R3Response>, mode: R3Request.Mode) {
-        self.result = result
+    init(result: EventLoopPromise<R3Response>, mode: R3Request.Mode, fileProof: FileSendProof? = nil) {
+        self.result = result; self.fileProof = fileProof
         self.pending = R3ResponseAccumulator(mode: mode)
     }
 
@@ -239,7 +267,13 @@ final class R3ResponseReceiver: ChannelInboundHandler {
         do {
             let resolved: R3Response?
             switch unwrapInboundIn(data) {
-            case let .headers(head): resolved = try pending.head(head.headers, end: head.endStream)
+            case let .headers(head):
+                // An early error can inform the caller, but an early 200 is
+                // not a receipt for this transfer. Retrying uses an independent GET.
+                if let fileProof, !fileProof.completed, head.headers[":status"].contains("200") {
+                    throw TransportFailure.invalidResponse
+                }
+                resolved = try pending.head(head.headers, end: head.endStream)
             case let .data(payload):
                 guard case let .byteBuffer(block) = payload.data else { throw TransportFailure.invalidResponse }
                 resolved = try pending.data(block, end: payload.endStream)

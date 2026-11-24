@@ -106,22 +106,31 @@ struct NegotiatedHTTP2 {
                 }
             }
             return prepared.flatMap { frames in
-                connection.exchange(frames: frames, mode: request.mode, permission: permission)
+                connection.exchange(frames: frames, mode: request.mode, disk: request.disk, permission: permission)
             }.always { _ in
                 connection.channel.close(promise: nil)
             }
         }
     }
 
-    private func exchange(frames: [HTTP2Frame.FramePayload], mode: R3Request.Mode, permission: SendPermission) -> EventLoopFuture<R3Response> {
+    private func exchange(frames: [HTTP2Frame.FramePayload], mode: R3Request.Mode, disk: R3UploadSource?,
+                          permission: SendPermission) -> EventLoopFuture<R3Response> {
         let loop = channel.eventLoop
         let promise = loop.makePromise(of: R3Response.self)
-        let receiver = R3ResponseReceiver(result: promise, mode: mode)
+        let proof = disk.map { _ in FileSendProof() }
+        let receiver = R3ResponseReceiver(result: promise, mode: mode, fileProof: proof)
+        let pump: FrozenFilePump?
+        if let disk, let proof {
+            pump = FrozenFilePump(source: disk, permission: permission, receiver: receiver, proof: proof)
+        } else { pump = nil }
         let timeout = loop.scheduleTask(in: .seconds(30)) {
             receiver.fail(TransportFailure.timeout)
         }
         multiplexer.createStreamChannel { stream in
-            stream.pipeline.addHandler(receiver)
+            if let pump {
+                return stream.pipeline.addHandler(pump).flatMap { stream.pipeline.addHandler(receiver) }
+            }
+            return stream.pipeline.addHandler(receiver)
         }.whenComplete { outcome in
             switch outcome {
             case let .failure(error): receiver.fail(error)
@@ -130,15 +139,21 @@ struct NegotiatedHTTP2 {
                 do {
                     try permission.use {
                         guard stream.isActive else { throw TransportFailure.interrupted }
+                        if let pump { timeout.cancel(); pump.armIdleTimeout() }
                         for frame in frames.dropLast() { stream.write(frame, promise: nil) }
                         if let last = frames.last {
-                            stream.writeAndFlush(last).whenFailure { receiver.fail($0) }
+                            stream.writeAndFlush(last).whenComplete { result in
+                                switch result {
+                                case .success: pump?.start()
+                                case let .failure(error): receiver.fail(error)
+                                }
+                            }
                         }
                     }
                 } catch { receiver.fail(error) }
             }
         }
-        return promise.futureResult.always { _ in timeout.cancel() }
+        return promise.futureResult.always { _ in timeout.cancel(); pump?.stop() }
     }
 
     func close() -> EventLoopFuture<Void> { channel.close() }

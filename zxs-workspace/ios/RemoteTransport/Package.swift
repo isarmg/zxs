@@ -22,6 +22,7 @@ let package = Package(
         ]),
         .testTarget(name: "RemoteTransportTests", dependencies: [
             "RemoteTransport",
+            .product(name: "NIOEmbedded", package: "swift-nio"),
             .product(name: "NIOCore", package: "swift-nio"),
             .product(name: "NIOHPACK", package: "swift-nio-http2"),
             .product(name: "NIOHTTP2", package: "swift-nio-http2"),
