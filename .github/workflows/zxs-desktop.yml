@@ -1,0 +1,95 @@
+name: ZXS optional Linux desktop
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'zxs-core/desktop/**'
+      - 'zxs-core/Cargo.toml'
+      - 'zxs-core/src/**'
+      - '!zxs-core/src/bin/**'
+      - '.github/workflows/zxs-desktop.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'zxs-core/desktop/**'
+      - 'zxs-core/Cargo.toml'
+      - 'zxs-core/src/**'
+      - '!zxs-core/src/bin/**'
+      - '.github/workflows/zxs-desktop.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+        working-directory: zxs-core/desktop
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: zxs-core
+      - name: Use disposable desktop build paths
+        run: |
+          printf 'RUSTUP_HOME=%s\nCARGO_HOME=%s\nCARGO_TARGET_DIR=%s\n' \
+            "${RUNNER_TEMP:?}/zxs-desktop-rustup" \
+            "${RUNNER_TEMP:?}/zxs-desktop-cargo" \
+            "${RUNNER_TEMP:?}/zxs-desktop-target" >> "${GITHUB_ENV:?}"
+      - name: Verify toolchain and fetch only the desktop lock
+        run: |
+          test "$(uname -m)" = x86_64
+          test -f Cargo.lock
+          rustup toolchain install 1.100.0 --profile minimal --component rustfmt --component clippy
+          rustc +1.100.0 --version --verbose
+          test "$(rustc +1.100.0 --version --verbose | sed -n 's/^commit-hash: //p')" = 0ef1bc386059596dada8fb65b50425aab2ea637a
+          sha256sum Cargo.lock
+          cargo +1.100.0 fetch --locked --target x86_64-unknown-linux-gnu
+      - name: Verify locked active Linux features
+        run: |
+          graph="${RUNNER_TEMP:?}/zxs-desktop-features.txt"
+          cargo +1.100.0 tree --locked --offline --target x86_64-unknown-linux-gnu \
+            --edges features --prefix none > "$graph"
+          grep -E '^(eframe|egui-winit) v0\.37\.0([[:space:]]|$)|^(eframe|egui-winit|log) feature "' "$graph"
+          grep -Eq '^eframe v0\.37\.0([[:space:]]|$)' "$graph"
+          grep -Eq '^egui-winit v0\.37\.0([[:space:]]|$)' "$graph"
+          features="$(sed -n 's/^eframe feature "\([^"]*\)".*$/\1/p' "$graph" | LC_ALL=C sort -u)"
+          test "$features" = $'default_fonts\nglow\nwayland\nx11'
+          grep -Fq 'log feature "max_level_off"' "$graph"
+          if grep -E '^(arboard|smithay-clipboard|webbrowser|accesskit_(unix|winit)|wgpu|egui-wgpu|env_logger|tracing-subscriber) v|^(eframe|egui|egui-winit|egui_glow) feature "(clipboard|links|accesskit|persistence|inspection|screenshot|wgpu)"' "$graph"; then
+            echo 'Unexpected active desktop input, renderer or diagnostic feature'
+            exit 1
+          fi
+      - name: Check format, compile and lint offline
+        run: |
+          unset LIBSQLITE3_SYS_USE_PKG_CONFIG LIBSQLITE3_FLAGS
+          cargo +1.100.0 fmt -- --check
+          cargo +1.100.0 check --locked --offline --all-targets
+          cargo +1.100.0 clippy --locked --offline --all-targets -- -D warnings
+      - name: Run only the named pure desktop model tests
+        run: |
+          unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
+          unset LIBSQLITE3_SYS_USE_PKG_CONFIG LIBSQLITE3_FLAGS
+          cases=(
+            actor::tests::prewire_cancel_during_sender_ready_refuses_the_first_auth_cut
+            actor::tests::revocation_and_acceptance_are_single_original_decisions
+            secret::tests::only_previously_armed_direct_text_survives_in_fixed_secret_storage
+            secret::tests::coalesced_focus_loss_or_paste_never_leaves_a_partial_credential
+            secret::tests::minimize_close_or_escape_scrub_the_complete_batch
+            secret::tests::overlong_batch_is_not_truncated_and_left_available
+            view::tests::a_card_needs_prior_native_visibility_and_the_same_exact_claim
+            view::tests::close_event_wins_over_an_old_or_a_new_card_in_that_frame
+          )
+          output="$(cargo +1.100.0 test --locked --offline --bin zxs-desktop -- \
+            --exact --color never --format pretty --test-threads=1 "${cases[@]}" 2>&1)" || {
+              printf '%s\n' "$output"
+              exit 1
+          }
+          printf '%s\n' "$output"
+          for case in "${cases[@]}"; do
+            grep -Fxq "test $case ... ok" <<< "$output"
+          done
