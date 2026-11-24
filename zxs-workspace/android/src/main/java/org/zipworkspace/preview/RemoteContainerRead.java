@@ -44,8 +44,17 @@ final class RemoteContainerRead {
     record Head(String branch, String node) {}
     record Detail(Item item, List<String> tags, List<Head> heads, String next) {}
     record Revision(String node, String parent, BigInteger sequence, BigInteger length, String sha256) {}
+    record History(Selection anchor, List<Revision> nodes, Cursor next) {
+        Selection select(int index) {
+            return new Selection(anchor.authority(), anchor.item(), anchor.mainHead(), nodes.get(index));
+        }
+    }
+    private record Slice(List<Revision> nodes, String next, BigInteger ceiling) {}
+    record Cursor(RemoteSaveJournal.Authority authority, Item item, String head, String next, BigInteger ceiling) {}
 
-    record Selection(RemoteSaveJournal.Authority authority, Item item, Revision revision) {
+    record Selection(RemoteSaveJournal.Authority authority, Item item, String mainHead, Revision revision) {
+        boolean historical() { return !mainHead.equals(revision.node()); }
+
         boolean differs(ByteBuffer bytes) {
             if (!revision.length().equals(BigInteger.valueOf(bytes.remaining()))) return true;
             var digest = ArchiveIndex.sha256();
@@ -54,13 +63,21 @@ final class RemoteContainerRead {
         }
 
         RemoteSaveJournal.Plan changedMain(String operation, String node, byte[] bytes) {
+            return changedMain(operation, node, null, bytes);
+        }
+
+        RemoteSaveJournal.Plan changedMain(String operation, String node, String newBranch, byte[] bytes) {
             String digest = ArchiveIndex.hex(ArchiveIndex.sha256().digest(bytes));
             if (bytes.length > PlainText.LIMIT || (BigInteger.valueOf(bytes.length).equals(revision.length())
                     && digest.equals(revision.sha256()))) {
                 throw new IllegalArgumentException("no changed bounded body");
             }
+            if (historical() != (newBranch != null)) throw new IllegalArgumentException("exact branch choice is required");
+            RemoteSaveContract.Target target = historical()
+                    ? new RemoteSaveContract.HistoricalMain(newBranch, revision.node())
+                    : new RemoteSaveContract.BranchHead("main", revision.node());
             var save = new RemoteSaveContract.Save(item.container(), operation, node, item.sequence(),
-                    new RemoteSaveContract.BranchHead("main", revision.node()), bytes.length, digest);
+                    target, bytes.length, digest);
             return new RemoteSaveJournal.Plan(authority, save);
         }
 
@@ -123,7 +140,33 @@ final class RemoteContainerRead {
         byte[] history = peer.metadata(path + "/branches/main/nodes", Map.of("Zxs-History-Head", main));
         require(exact.equals(peer.authority()));
         var revision = currentRevision(history, main, selected.sequence());
-        return new Selection(exact, selected, revision);
+        return new Selection(exact, selected, main, revision);
+    }
+
+    /** Obtain one exact page of the already selected branch, without changing its head. */
+    static History mainHistory(Reader peer, Selection anchor, Cursor after) throws IOException {
+        require(anchor != null && !anchor.historical() && anchor.authority().equals(peer.authority())
+                && id(anchor.item().container()) && id(anchor.mainHead()));
+        String first = anchor.mainHead();
+        BigInteger ceiling = anchor.item().sequence().add(BigInteger.ONE);
+        var headers = new HashMap<String, String>();
+        headers.put("Zxs-History-Head", anchor.mainHead());
+        if (after != null) {
+            require(anchor.authority().equals(after.authority()) && anchor.item().equals(after.item())
+                    && anchor.mainHead().equals(after.head()) && id(after.next()) && !after.next().equals(first)
+                    && after.ceiling().signum() > 0 && after.ceiling().compareTo(ceiling) < 0);
+            first = after.next();
+            ceiling = after.ceiling();
+            headers.put("Zxs-History-Next", first);
+        }
+        String path = ROOT + "/" + anchor.item().container() + "/branches/main/nodes";
+        byte[] bytes = peer.metadata(path, Map.copyOf(headers));
+        require(anchor.authority().equals(peer.authority()));
+        Slice page = historySlice(bytes, anchor.mainHead(), first, ceiling);
+        if (after == null) require(anchor.revision().equals(page.nodes().get(0)));
+        Cursor next = page.next() == null ? null
+                : new Cursor(anchor.authority(), anchor.item(), anchor.mainHead(), page.next(), page.ceiling());
+        return new History(anchor, page.nodes(), next);
     }
 
     static Detail detail(byte[] bytes, String after) throws IOException {
@@ -154,15 +197,19 @@ final class RemoteContainerRead {
     }
 
     static Revision currentRevision(byte[] bytes, String head, BigInteger ownerSequence) throws IOException {
-        require(id(head));
+        return historySlice(bytes, head, head, ownerSequence.add(BigInteger.ONE)).nodes().get(0);
+    }
+
+    private static Slice historySlice(byte[] bytes, String head, String firstNode, BigInteger ceiling)
+            throws IOException {
+        require(id(head) && id(firstNode));
         var raw = object(parse(bytes), Set.of("head", "nodes", "next"));
         require(head.equals(raw.get("head")));
         var rows = list(raw.get("nodes"));
         require(!rows.isEmpty());
         var seen = new HashSet<String>();
-        Revision first = null;
-        String expected = head;
-        BigInteger ceiling = ownerSequence.add(BigInteger.ONE);
+        var revisions = new ArrayList<Revision>(rows.size());
+        String expected = firstNode;
         for (Object entry : rows) {
             var row = object(entry, NODE);
             String node = string(row.get("node_id"));
@@ -174,14 +221,14 @@ final class RemoteContainerRead {
             BigInteger length = uint(row.get("length"));
             require(id(operation) && branch(origin) && node.equals(expected) && seen.add(node)
                     && SHA.matcher(sha256).matches() && sequence.signum() > 0 && sequence.compareTo(ceiling) < 0);
-            if (first == null) first = new Revision(node, parent, sequence, length, sha256);
+            revisions.add(new Revision(node, parent, sequence, length, sha256));
             expected = parent;
             ceiling = sequence;
         }
         String next = nullableId(raw.get("next"));
         require(java.util.Objects.equals(next, expected)
                 && (next == null || (rows.size() == PAGE && !seen.contains(next))));
-        return first;
+        return new Slice(List.copyOf(revisions), next, ceiling);
     }
 
     private static Item item(Map<?, ?> row) throws IOException {

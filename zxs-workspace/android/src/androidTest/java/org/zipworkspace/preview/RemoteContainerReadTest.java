@@ -57,6 +57,25 @@ public final class RemoteContainerReadTest {
     }
 
     @Test
+    public void explicitOlderMainChoiceCreatesNewBranchAtThatExactNode() throws Exception {
+        var peer = new Fake();
+        peer.showHistory = true;
+        var original = RemoteContainerRead.catalog(peer, peer.authority, null).items().get(0);
+        var anchor = RemoteContainerRead.selectMain(peer, peer.authority, original);
+        var older = RemoteContainerRead.mainHistory(peer, anchor, null).select(1);
+        assertFalse(anchor.historical());
+        assertTrue(older.historical());
+        assertEquals(OTHER, older.revision().node());
+        String fork = "66".repeat(16);
+        String newNode = "77".repeat(16);
+        byte[] edited = bytes("Changed");
+        assertThrows(IllegalArgumentException.class, () -> older.changedMain(OPERATION, newNode, edited));
+        assertThrows(IllegalArgumentException.class, () -> anchor.changedMain(OPERATION, newNode, fork, edited));
+        assertEquals(new RemoteSaveContract.HistoricalMain(fork, OTHER),
+                older.changedMain(OPERATION, newNode, fork, edited).save().target());
+    }
+
+    @Test
     public void changedOwnerSequenceCannotSelectOrDownloadAnotherRevision() throws Exception {
         var peer = new Fake();
         var original = RemoteContainerRead.catalog(peer, peer.authority, null).items().get(0);
@@ -98,7 +117,7 @@ public final class RemoteContainerReadTest {
     private static final class Fake implements RemoteContainerRead.Reader {
         final RemoteSaveJournal.Authority authority = new RemoteSaveJournal.Authority("55".repeat(32), "alice");
         int metadataReads, bodyReads;
-        boolean move, wrongBody;
+        boolean move, wrongBody, showHistory;
         @Override public RemoteSaveJournal.Authority authority() { return authority; }
 
         @Override public byte[] metadata(String path, Map<String, String> headers) {
@@ -117,6 +136,13 @@ public final class RemoteContainerReadTest {
             }
             assertEquals(detail + "/branches/main/nodes", path);
             assertEquals(Map.of("Zxs-History-Head", NODE), headers);
+            if (showHistory) {
+                String nested = history().replace("\"sequence\":1", "\"sequence\":2")
+                        .replace("\"parent_node\":null", "\"parent_node\":\"" + OTHER + "\"");
+                String previous = history().substring(history().indexOf("[{") + 1, history().indexOf("]"))
+                        .replace(NODE, OTHER);
+                return bytes(nested.replace("}],\"next\":null}", "}," + previous + "],\"next\":null}"));
+            }
             return bytes(history());
         }
 

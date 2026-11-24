@@ -180,8 +180,11 @@ final class RemoteH2Exchange implements RemoteSaveSubmit.AuthenticatedExchange, 
                     && (headers.size() == 2 || (headers.size() == 3
                     && ("main".equals(after) || RemoteContainerRead.id(after)))));
         } else {
-            require(MAIN_HISTORY.matcher(path).matches() && headers.size() == 1
-                    && RemoteContainerRead.id(headers.get("Zxs-History-Head")));
+            String head = headers.get("Zxs-History-Head");
+            String next = headers.get("Zxs-History-Next");
+            require(MAIN_HISTORY.matcher(path).matches() && RemoteContainerRead.id(head)
+                    && (headers.size() == 1 || (headers.size() == 2
+                    && RemoteContainerRead.id(next) && !next.equals(head))));
         }
         return exchange("GET", path, headers, null, METADATA).data();
     }

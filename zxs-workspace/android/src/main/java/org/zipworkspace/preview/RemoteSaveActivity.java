@@ -147,7 +147,7 @@ public final class RemoteSaveActivity extends Activity {
                 save = new RemoteSaveContract.Save(id(), id(), id(), BigInteger.ZERO, target, raw.length,
                         ArchiveIndex.hex(ArchiveIndex.sha256().digest(raw)));
             } else {
-                save = selectedFile.changedMain(id(), id(), raw).save();
+                save = selectedFile.changedMain(id(), id(), selectedFile.historical() ? id() : null, raw).save();
             }
         } catch (IllegalArgumentException | IOException invalid) {
             status.setText(selectedFile == null ? "请检查文件名、文本格式和长度。"
@@ -230,38 +230,68 @@ public final class RemoteSaveActivity extends Activity {
     }
 
     private void confirmDownload(RemoteH2Exchange exactPeer, RemoteContainerRead.Selection choice) {
-        if (choice.revision().length().compareTo(BigInteger.valueOf(PlainText.LIMIT)) > 0) {
-            status.setText("该文件超过当前的全文编辑上限。未下载。");
-            releasePeer(exactPeer);
-            return;
+        var rev = choice.revision();
+        boolean supported = rev.length().compareTo(BigInteger.valueOf(PlainText.LIMIT)) <= 0;
+        String rule = choice.historical() ? "提交修改会建立新分支，不改 main。"
+                : "提交修改会追加到已选 main 头。";
+        String details = choice.item().name() + "\nmain · " + rev.node() + "\n" + rev.length() + " 字节\n"
+                + (supported ? rule : "该文件超过当前全文编辑上限。");
+        var builder = new AlertDialog.Builder(this).setTitle("原节点")
+                .setMessage(details).setNegativeButton("取消", null);
+        if (!choice.historical()) {
+            builder.setNeutralButton("查看 main 历史", (dialog, which) -> {
+                if (dialog == decision) browseHistory(exactPeer, choice, null);
+            });
         }
-        var confirm = new AlertDialog.Builder(this).setTitle("读取此原节点并编辑？")
-                .setMessage(choice.item().name() + "\nmain · " + choice.revision().node()
-                        + "\n" + choice.revision().length() + " 字节")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("读取并编辑", (dialog, which) -> {
-                    if (dialog != decision || !owns(exactPeer)) return;
-                    readRemote(exactPeer, () -> {
-                        byte[] raw = choice.readExact(exactPeer);
-                        try {
-                            String content = StandardCharsets.UTF_8.newDecoder()
-                                    .decode(java.nio.ByteBuffer.wrap(raw)).toString();
-                            if (PlainText.scanPages(content, () -> {}, null) < 0)
-                                throw new IOException("not editable text");
-                            return content;
-                        } finally {
-                            Arrays.fill(raw, (byte) 0);
-                        }
-                    }, content -> {
-                        selectedFile = choice;
-                        name.setText(choice.item().name());
-                        body.setText(content);
-                        status.setText("已打开原节点。修改后可提交到 main。\n" + choice.revision().node());
-                        showControls();
-                        releasePeer(exactPeer);
-                    });
-                }).create();
-        showPeerDialog(confirm, exactPeer);
+        if (supported) {
+            builder.setPositiveButton("读取并编辑", (dialog, which) -> {
+                if (dialog != decision || !owns(exactPeer)) return;
+                readRemote(exactPeer, () -> {
+                    byte[] raw = choice.readExact(exactPeer);
+                    try {
+                        String content = StandardCharsets.UTF_8.newDecoder()
+                                .decode(java.nio.ByteBuffer.wrap(raw)).toString();
+                        if (PlainText.scanPages(content, () -> {}, null) < 0)
+                            throw new IOException("not editable text");
+                        return content;
+                    } finally {
+                        Arrays.fill(raw, (byte) 0);
+                    }
+                }, content -> {
+                    selectedFile = choice;
+                    name.setText(choice.item().name());
+                    body.setText(content);
+                    status.setText((choice.historical() ? "已打开历史节点。提交修改会建立新分支。"
+                            : "已打开原节点。修改后可提交到 main。") + "\n" + rev.node());
+                    showControls();
+                    releasePeer(exactPeer);
+                });
+            });
+        }
+        showPeerDialog(builder.create(), exactPeer);
+    }
+
+    private void browseHistory(RemoteH2Exchange exactPeer, RemoteContainerRead.Selection anchor,
+                               RemoteContainerRead.Cursor after) {
+        readRemote(exactPeer, () -> RemoteContainerRead.mainHistory(exactPeer, anchor, after), page -> {
+            var nodes = page.nodes();
+            String[] labels = new String[nodes.size()];
+            for (int index = 0; index < nodes.size(); index++) {
+                var node = nodes.get(index);
+                labels[index] = "版本 " + node.sequence() + " · " + node.length() + " 字节\n" + node.node();
+            }
+            var builder = new AlertDialog.Builder(this).setTitle("main 原历史")
+                    .setItems(labels, (dialog, index) -> {
+                        if (dialog != decision || !owns(exactPeer)) return;
+                        confirmDownload(exactPeer, page.select(index));
+                    }).setNegativeButton("取消", null);
+            if (page.next() != null) {
+                builder.setNeutralButton("下一页", (dialog, which) -> {
+                    if (dialog == decision) browseHistory(exactPeer, anchor, page.next());
+                });
+            }
+            showPeerDialog(builder.create(), exactPeer);
+        });
     }
 
     private void showPeerDialog(AlertDialog chooser, RemoteH2Exchange exactPeer) {
@@ -583,7 +613,8 @@ public final class RemoteSaveActivity extends Activity {
 
     private void showControls() {
         create.setEnabled(!running && !lockedNew);
-        create.setText(selectedFile == null ? "提交新文件…" : "提交完整修改…");
+        create.setText(selectedFile == null ? "提交新文件…" : selectedFile.historical()
+                ? "提交完整修改到新分支…" : "提交完整修改…");
         browse.setEnabled(!running && !lockedNew && selectedFile == null);
         clearEdit.setVisibility(selectedFile == null ? View.GONE : View.VISIBLE);
         clearEdit.setEnabled(!running && !lockedNew);
