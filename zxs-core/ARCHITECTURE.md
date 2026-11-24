@@ -1,8 +1,41 @@
 # zxs-core 架构
 
-- `r3` 是冻结协议的强类型边界，由当前服务端路由与回执定义派生，不依赖服务端源码编译。既有 R3 路径和头字段保持原样，不提前启用未来协议。
-- `session` 保留同一条 TLS 验证与 ALPN 已确认为 H2 的连接。只有认证过该信道才构造敏感 Basic 头；口令和连接不进 SQLite。不接受跳过证书、HTTP/1.1 回退、重定向或环境覆盖根证书。下一阶段才接 Bearer。
-- `native` 让 Linux 适配器持有原目录与原文件描述符，先验证普通文件，再读正文；完整另存先校验并读回匿名文件，原子不覆盖发布，随后同步父目录。普通编辑操作由用户自己的应用承担。
-- `workspace` 私用 SQLite 只保存原认证配置摘要、路径绑定、服务器基线、原操作/回执与代码目录清单。只保留未确认的完整冻结正文；收到精确匹配回执后，事务内更新基线与原状态，再核对并清理已发副本。不把暂存文件当本地历史。启动恢复只会 GET。不同路径/容器由待决记录和容器租约约束；所有发送须由壳明确确认。
-- `bundle` 只处理普通代码/碎片目录。显式读取根 `.zxsignore`，固定排序/时刻/权限，用标准 ZIP32 raw Deflate。清单存本机数据库、不嵌入压缩包。完成并刷回 ZIP 后才从头算整包 SHA-256；只实际支持 384 MiB 档的代码包。本阶段不解包和上传 ZIP，不增加任何服务端 ZIP 感知。
-- `zxs-client` 只是第一条 Linux CLI，不再维护另一套传输/状态实现。API 与平台入口分开；没有工作树、ZIP 版本库、第三方内核虚拟盘或跨项目依赖。
+供维护客户端核心与薄壳的人阅读。只画当前 Linux 普通文件路径；安装、平台和真实服务资格见[任务清单](TASKS.md)。
+
+```mermaid
+flowchart LR
+    A["Linux CLI 薄壳"] --> W["workspace：核对、原意图与恢复"]
+    W --> N["native：所持目录和文件"]
+    N --> F["普通文件和目录"]
+    W --> S["本机 workspace.sqlite"]
+    W --> B["bundle：目录清单与 ZIP32"]
+    B --> N
+    W --> H["session：验证 TLS + H2"]
+    H --> R["r3：请求与回执类型"]
+    H --> Z["外部 HTTPS 入口 / ZXS R3"]
+```
+
+## 所有权与数据流
+
+| 层 | 只负责什么 |
+| --- | --- |
+| CLI | 接受明确选择和确认。带地址的入口须认证；本地核对、打包和离线打开不建会话。 |
+| 原生适配 | 不挂接虚拟盘。先在持有的目录中鉴定普通文件，再打开原 inode；匿名暂存校验后不覆盖发布。 |
+| 工作区 | 私用 SQLite 绑定普通编辑路径、原服务器基线、待决意图与原回执。只留待决正文，不建立本机版本历史。 |
+| 会话与协议 | 证书和 ALPN 均通过才构造敏感认证头。在已选 H2 信道使用现有 R3，回执与服务端冻结字段逐项匹配。 |
+| 代码包 | 按[确定性 ZIP32 规格](docs/specs/zip32-bundle.md)打包。目录清单只存本机，当前无远端 ZIP 端点。 |
+
+原内容先由用户正常编辑，再显式冻结。重开与重查分别见[本机回执边界](docs/invariants/receipt-recovery.md)。服务端版本仍归 ZXS；客户端不读、写或接管旧 Workspace 的 STATE、STORE 或归档历史。
+
+## 源码导航
+
+| 路径 | 职责 |
+| --- | --- |
+| [src/bin/zxs-client.rs](src/bin/zxs-client.rs) | Linux 命令行、确认与只读恢复入口。 |
+| [src/workspace.rs](src/workspace.rs) | 本机基线、去向、原号和冷恢复；只在明确确认后尝试写入。 |
+| [src/native.rs](src/native.rs) | Linux 文件/目录描述符、私有租约与原子不覆盖发布。 |
+| [src/session.rs](src/session.rs) · [src/r3.rs](src/r3.rs) | 同一验证过的 HTTPS/2 信道、完整正文流及准确 R3 语义。 |
+| [src/bundle.rs](src/bundle.rs) | 本机扫描、忽略规则、清单比较和标准 ZIP32 写入。 |
+| [tests/linux_zip.rs](tests/linux_zip.rs) · [src/native_tests.rs](src/native_tests.rs) · [src/workspace_tests.rs](src/workspace_tests.rs) | 离线 CLI、独立 ZIP 读取和真实 ext4 文件、原操作保护边界。 |
+
+目录独立构建，不引用同仓服务器、Helper 或旧客户端。Bearer、Range、续传和上层 GUI 不计入这张图。
