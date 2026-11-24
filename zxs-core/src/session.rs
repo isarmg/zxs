@@ -62,7 +62,7 @@ impl H2Channel {
     async fn connect(
         (host, port, origin): Origin,
         account: &str,
-        bound: Option<&Principal>,
+        require_peer_identity: impl FnOnce(&Principal) -> Result<()>,
     ) -> Result<Self> {
         if std::env::var_os("SSL_CERT_FILE").is_some() || std::env::var_os("SSL_CERT_DIR").is_some()
         {
@@ -88,7 +88,7 @@ impl H2Channel {
             account: account.to_owned(),
             trust: hex(&trust.finalize()),
         };
-        require_original_principal(bound, &principal)?;
+        require_peer_identity(&principal)?;
         let mut store = RootCertStore::empty();
         if store.add_parsable_certificates(root.certs).0 == 0 {
             return Err(invalid("no usable native TLS trust roots"));
@@ -156,15 +156,6 @@ impl H2Channel {
     }
 }
 
-fn require_original_principal(bound: Option<&Principal>, observed: &Principal) -> Result<()> {
-    if bound.is_some_and(|original| original != observed) {
-        return Err(invalid(
-            "the original client authority or native trust changed",
-        ));
-    }
-    Ok(())
-}
-
 fn validate_account(account: &str) -> Result<()> {
     if account.is_empty()
         || account.len() > 64
@@ -216,7 +207,7 @@ impl Session {
         let original = approved_origin(spelling)?;
         validate_account(account)?;
         validate_password(&password)?;
-        let channel = H2Channel::connect(original, account, None).await?;
+        let channel = H2Channel::connect(original, account, |_| Ok(())).await?;
         let auth = basic_header(account, &password)?;
         Ok(Self { channel, auth })
     }

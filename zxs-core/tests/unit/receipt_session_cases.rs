@@ -1,8 +1,8 @@
 use super::{Duration, Instant, Ordering, check_login_header, decode_token, login_request};
-use super::{Principal, bound_origin};
-use crate::session::require_original_principal;
+use super::{Principal, ReadPurpose, SelectedWorkspace, bound_origin};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
+use std::sync::Arc;
 
 #[test]
 fn credential_bootstrap_is_exactly_empty_and_origin_bound() {
@@ -39,12 +39,67 @@ fn credential_bootstrap_is_exactly_empty_and_origin_bound() {
     ] {
         assert!(bound_origin(&original, origin, account).is_err());
     }
-    require_original_principal(Some(&original), &original).unwrap();
-    let next = Principal {
-        trust: "changed native digest".to_owned(),
+}
+
+#[test]
+fn current_native_receipt_identity_does_not_change_local_custody_or_payload_scope() {
+    let enrolled = r#"{"origin":"https://example.invalid:443","account":"selected","trust":"original digest"}"#;
+    let original: Principal = serde_json::from_str(enrolled).unwrap();
+    let current = Principal {
+        trust: "current OS observation".to_owned(),
         ..original.clone()
     };
-    assert!(require_original_principal(Some(&original), &next).is_err());
+    let owner = Arc::new(());
+    let workspace = SelectedWorkspace {
+        owner: Arc::clone(&owner),
+        saved: original.clone(),
+    };
+
+    assert_ne!(original, current);
+    // This covers binding policy only, not the mandatory TLS/ALPN handshake.
+    assert!(
+        ReadPurpose::Receipt
+            .require_peer_identity(&original, &current)
+            .is_ok()
+    );
+    assert!(
+        ReadPurpose::Payload
+            .require_peer_identity(&original, &original)
+            .is_ok()
+    );
+    assert!(
+        ReadPurpose::Payload
+            .require_peer_identity(&original, &current)
+            .is_err()
+    );
+    for changed in [
+        Principal {
+            origin: "https://example.invalid:444".to_owned(),
+            ..current.clone()
+        },
+        Principal {
+            origin: "https://other.invalid:443".to_owned(),
+            ..current.clone()
+        },
+        Principal {
+            account: "other-user".to_owned(),
+            ..current
+        },
+    ] {
+        assert!(
+            ReadPurpose::Receipt
+                .require_peer_identity(&original, &changed)
+                .is_err()
+        );
+    }
+    let changed_saved = Principal {
+        trust: "not the exact saved record".to_owned(),
+        ..original.clone()
+    };
+    assert!(workspace.matches(&owner, &original));
+    assert!(!workspace.matches(&owner, &changed_saved));
+    assert!(!workspace.matches(&Arc::new(()), &original));
+    assert_eq!(serde_json::to_string(&workspace.saved).unwrap(), enrolled);
 }
 
 #[test]

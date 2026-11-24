@@ -79,6 +79,23 @@ pub(super) enum ReadPurpose {
 }
 
 impl ReadPurpose {
+    fn require_peer_identity(self, saved: &Principal, current: &Principal) -> Result<()> {
+        let allowed = match self {
+            // Receipt recovery uses current native trust on the same endpoint.
+            // The live TLS check is separate and always required.
+            Self::Receipt => {
+                saved.origin() == current.origin() && saved.account() == current.account()
+            }
+            Self::Payload => saved == current,
+        };
+        if !allowed {
+            return Err(invalid(
+                "the original client authority or native trust changed",
+            ));
+        }
+        Ok(())
+    }
+
     fn name(self) -> &'static str {
         match self {
             Self::Receipt => "receipt",
@@ -129,10 +146,22 @@ impl ReadPurpose {
     }
 }
 
+// Scheme admission does not edit or weaken the exact prior local selection.
+struct SelectedWorkspace {
+    owner: Arc<()>,
+    saved: Principal,
+}
+
+impl SelectedWorkspace {
+    fn matches(&self, owner: &Arc<()>, original: &Principal) -> bool {
+        Arc::ptr_eq(&self.owner, owner) && &self.saved == original
+    }
+}
+
 pub(super) struct BoundBearer {
     channel: H2Channel,
     token: Bearer,
-    owner: Arc<()>,
+    original: SelectedWorkspace,
     purpose: ReadPurpose,
 }
 
@@ -148,9 +177,12 @@ impl BoundBearer {
     ) -> Result<Self> {
         let origin = bound_origin(original, spelling, account)?;
         still_bound()?;
-        // Compare the original trust-set digest before TCP. Prompt only after
-        // the same selected channel has passed TLS hostname/chain and ALPN h2.
-        let channel = H2Channel::connect(origin, account, Some(original)).await?;
+        // Preflight the selected authority, then obtain a same-channel native TLS
+        // chain/hostname and ALPN h2 proof before prompting for any credential.
+        let channel = H2Channel::connect(origin, account, |current| {
+            purpose.require_peer_identity(original, current)
+        })
+        .await?;
         still_bound()?;
         let basic = prompt_bound_basic(prompt, &still_bound, |password| {
             basic_header(account, password)
@@ -166,13 +198,20 @@ impl BoundBearer {
         Ok(Self {
             channel,
             token,
-            owner,
+            original: SelectedWorkspace {
+                owner,
+                saved: original.clone(),
+            },
             purpose,
         })
     }
 
     pub(super) fn belongs_to(&self, owner: &Arc<()>, original: &Principal) -> bool {
-        Arc::ptr_eq(&self.owner, owner) && &self.channel.principal == original
+        self.original.matches(owner, original)
+            && self
+                .purpose
+                .require_peer_identity(original, &self.channel.principal)
+                .is_ok()
     }
 
     fn require_live(&self) -> Result<()> {
