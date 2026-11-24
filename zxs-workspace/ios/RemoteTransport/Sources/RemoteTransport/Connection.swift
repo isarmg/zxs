@@ -106,17 +106,17 @@ struct NegotiatedHTTP2 {
                 }
             }
             return prepared.flatMap { frames in
-                connection.exchange(frames: frames, permission: permission)
+                connection.exchange(frames: frames, mode: request.mode, permission: permission)
             }.always { _ in
                 connection.channel.close(promise: nil)
             }
         }
     }
 
-    private func exchange(frames: [HTTP2Frame.FramePayload], permission: SendPermission) -> EventLoopFuture<R3Response> {
+    private func exchange(frames: [HTTP2Frame.FramePayload], mode: R3Request.Mode, permission: SendPermission) -> EventLoopFuture<R3Response> {
         let loop = channel.eventLoop
         let promise = loop.makePromise(of: R3Response.self)
-        let receiver = R3ResponseReceiver(result: promise)
+        let receiver = R3ResponseReceiver(result: promise, mode: mode)
         let timeout = loop.scheduleTask(in: .seconds(30)) {
             receiver.fail(TransportFailure.timeout)
         }

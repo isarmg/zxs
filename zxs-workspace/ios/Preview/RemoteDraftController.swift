@@ -25,7 +25,7 @@ struct MobileSaveCredential: Sendable {
     func basic() -> String { "Basic " + Data((username + ":" + password).utf8).base64EncodedString() }
 }
 
-private struct MobileSaveExchange: RemoteSaveExchange {
+struct MobileSaveExchange: RemoteSaveExchange {
     let endpoint: R3HTTPSOrigin
     let credential: MobileSaveCredential
     let client: R3HTTPSClient
@@ -40,10 +40,12 @@ private struct MobileSaveExchange: RemoteSaveExchange {
 
     func once(_ request: RemoteSave.Request) async throws -> RemoteSavePacket {
         let message = R3Request(method: request.method, path: request.path, headers: request.headers, body: request.body)
-        let response = try await client.once(message, to: endpoint, authorization: {
-            credential.basic()
-        })
+        let response = try await read(message)
         return RemoteSavePacket(status: response.status, bytes: response.bytes)
+    }
+
+    func read(_ request: R3Request) async throws -> R3Response {
+        try await client.once(request, to: endpoint, authorization: { credential.basic() })
     }
 }
 
@@ -98,7 +100,8 @@ final class RemoteDraftController: UIViewController {
         let lookup = button("查原回执", #selector(lookupOnly))
         let submit = button("首次提交", #selector(submitFirst))
         let retry = button("按原号重试", #selector(retryOriginal))
-        controls = [prepare, pick, lookup, submit, retry]
+        let browse = button("浏览服务器文件…", #selector(openBrowse))
+        controls = [prepare, pick, lookup, submit, retry, browse]
         status.numberOfLines = 0
         status.font = .preferredFont(forTextStyle: .footnote)
         status.adjustsFontForContentSizeCategory = true
@@ -106,7 +109,7 @@ final class RemoteDraftController: UIViewController {
 
         let scroll = UIScrollView()
         let content = UIStackView(arrangedSubviews: [origin, user, password, fileName, prepare, operation,
-                                                    pick, lookup, submit, retry, status])
+                                                    pick, lookup, submit, retry, browse, status])
         content.axis = .vertical
         content.spacing = 10
         scroll.keyboardDismissMode = .interactive
@@ -189,7 +192,28 @@ final class RemoteDraftController: UIViewController {
         }
     }
 
-    private static func newID() -> String { UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "") }
+    @objc private func openBrowse() {
+        guard job == nil, view.window?.windowScene?.activationState == .foregroundActive else { return }
+        do {
+            let (endpoint, account) = try selectedOrigin()
+            let credential = try MobileSaveCredential(username: account, password: password.text ?? "")
+            let session = try MobileSaveSession.shared.get()
+            password.text = nil
+            let exchange = MobileSaveExchange(endpoint: endpoint, credential: credential, client: R3HTTPSClient())
+            let browser = RemoteBrowseController(exchange: exchange, store: session.store) { [weak self] saved in
+                guard let self else { return }
+                self.operation.text = saved.operation
+                self.status.text = "已准备完整文件。请输入原服务器密码，再明确提交。\n" + saved.summary
+                self.refreshPicker()
+                self.navigationController?.popToViewController(self, animated: true)
+            }
+            navigationController?.pushViewController(browser, animated: true)
+        } catch {
+            status.text = "请检查服务器、账号与密码。"
+        }
+    }
+
+    static func newID() -> String { UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "") }
 
     @objc private func lookupOnly() { offer(.lookup) }
     @objc private func submitFirst() { offer(.submitFirst) }

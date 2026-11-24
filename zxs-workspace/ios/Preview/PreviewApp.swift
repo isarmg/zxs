@@ -29,7 +29,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         shield.accessibilityViewIsModal = true
         window.addSubview(shield)
         draftShield = shield
-        (sheet.topViewController as? RemoteDraftController)?.leaveForeground()
+        for item in sheet.viewControllers {
+            (item as? RemoteDraftController)?.leaveForeground()
+            (item as? RemoteBrowseController)?.leaveForeground()
+        }
     }
     func sceneDidEnterBackground(_ scene: UIScene) {
         coverDraft()

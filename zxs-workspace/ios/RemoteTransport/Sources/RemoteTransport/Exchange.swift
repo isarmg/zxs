@@ -9,12 +9,63 @@ public struct R3Request: Sendable {
     let path: String
     let headers: [String: String]
     let body: Data?
+    enum Mode: Sendable { case receipt, metadata, node(length: Int, digest: String) }
+    let mode: Mode
 
     public init(method: String, path: String, headers: [String: String], body: Data?) {
+        self.init(method: method, path: path, headers: headers, body: body, mode: .receipt)
+    }
+
+    private init(method: String, path: String, headers: [String: String], body: Data?, mode: Mode) {
         self.method = method
         self.path = path
         self.headers = headers
         self.body = body
+        self.mode = mode
+    }
+
+    private static let root = "/zxs/v1/containers"
+
+    public static func catalog(after: String?) throws -> Self {
+        var headers = ["zxs-view": "compact"]
+        if let after {
+            guard validID(after[...]) else { throw TransportFailure.invalidRequest }
+            headers["zxs-after"] = after
+        }
+        return Self(method: "GET", path: root, headers: headers, body: nil, mode: .metadata)
+    }
+
+    public static func detail(container: String, sequence: UInt64?, after: String?) throws -> Self {
+        guard validID(container[...]) else { throw TransportFailure.invalidRequest }
+        var headers = ["zxs-detail": "paged"]
+        if let sequence {
+            guard sequence > 0 else { throw TransportFailure.invalidRequest }
+            headers["zxs-detail-sequence"] = String(sequence)
+        }
+        if let after {
+            guard sequence != nil, after == "main" || validID(after[...]) else { throw TransportFailure.invalidRequest }
+            headers["zxs-detail-after"] = after
+        }
+        return Self(method: "GET", path: root + "/" + container, headers: headers, body: nil, mode: .metadata)
+    }
+
+    public static func history(container: String, branch: String, head: String, next: String?) throws -> Self {
+        guard validID(container[...]), branch == "main" || validID(branch[...]), validID(head[...])
+        else { throw TransportFailure.invalidRequest }
+        var headers = ["zxs-history-head": head]
+        if let next {
+            guard validID(next[...]), next != head else { throw TransportFailure.invalidRequest }
+            headers["zxs-history-next"] = next
+        }
+        return Self(method: "GET", path: root + "/" + container + "/branches/" + branch + "/nodes",
+                    headers: headers, body: nil, mode: .metadata)
+    }
+
+    public static func textNode(container: String, node: String, length: Int, sha256: String) throws -> Self {
+        guard validID(container[...]), validID(node[...]), (0...256 * 1024).contains(length),
+              sha256.utf8.count == 64, hex(sha256.utf8) else { throw TransportFailure.invalidRequest }
+        return Self(method: "GET", path: root + "/" + container + "/nodes/" + node + "/data",
+                    headers: [:], body: nil, mode: .node(length: length, digest: sha256))
     }
 
     func frames(authority: String, authorization: () throws -> String) throws -> [HTTP2Frame.FramePayload] {
@@ -23,9 +74,14 @@ public struct R3Request: Sendable {
         guard (1...8192).contains(credential.utf8.count), Self.headerText(credential) else {
             throw TransportFailure.invalidRequest
         }
+        let accepted: String
+        switch mode {
+        case .node: accepted = "application/octet-stream"
+        case .receipt, .metadata: accepted = "application/json"
+        }
         var fields = HPACKHeaders([
             (":method", method), (":scheme", "https"), (":authority", authority), (":path", path),
-            ("accept", "application/json"), ("accept-encoding", "identity"),
+            ("accept", accepted), ("accept-encoding", "identity"),
         ])
         fields.add(name: "authorization", value: credential, indexing: .neverIndexed)
         for (name, value) in headers.sorted(by: { $0.key < $1.key }) {
@@ -41,6 +97,8 @@ public struct R3Request: Sendable {
     }
 
     private func validateRequest() throws {
+        // Non-receipt reads are only constructed by the typed route builders above.
+        guard case .receipt = mode else { return }
         let fields = path.split(separator: "/", omittingEmptySubsequences: false)
         guard fields.count >= 7, fields[0] == "", fields[1] == "zxs", fields[2] == "v1",
               fields[3] == "containers", Self.validID(fields[4]) else { throw TransportFailure.invalidRequest }
@@ -100,6 +158,9 @@ public struct R3Response: Equatable, Sendable {
 }
 
 struct R3ResponseAccumulator {
+    let mode: R3Request.Mode
+    init(mode: R3Request.Mode = .receipt) { self.mode = mode }
+
     private var status: Int?
     private var size = 0
     private var bytes = Data()
@@ -121,10 +182,20 @@ struct R3ResponseAccumulator {
         }), let statuses = all[":status"], statuses.count == 1, let value = Int(statuses[0]),
               String(value) == statuses[0], (200...599).contains(value),
               let lengths = all["content-length"], lengths.count == 1,
-              lengths[0].utf8.count <= 4, let length = Int(lengths[0]), String(length) == lengths[0],
-              (0...2048).contains(length) else { throw TransportFailure.invalidResponse }
-        if value == 200 || value == 404 {
-            guard all["content-type"] == ["application/json"] else { throw TransportFailure.invalidResponse }
+              lengths[0].utf8.count <= 7, let length = Int(lengths[0]), String(length) == lengths[0],
+              length >= 0 else { throw TransportFailure.invalidResponse }
+        switch (mode, value) {
+        case let (.node(expectedLength, digest), 200):
+            guard length == expectedLength, all["content-type"] == ["application/octet-stream"],
+                  all["zxs-sha256"] == [digest] else { throw TransportFailure.invalidResponse }
+        case (.metadata, 200):
+            guard length <= 1024 * 1024, all["content-type"] == ["application/json"]
+            else { throw TransportFailure.invalidResponse }
+        case (.receipt, 200), (.receipt, 404):
+            guard length <= 2048, all["content-type"] == ["application/json"]
+            else { throw TransportFailure.invalidResponse }
+        default:
+            guard length <= 2048 else { throw TransportFailure.invalidResponse }
         }
         self.status = value
         self.size = length
@@ -142,6 +213,10 @@ struct R3ResponseAccumulator {
     private mutating func complete(_ end: Bool) throws -> R3Response? {
         guard end else { return nil }
         guard let status, bytes.count == size else { throw TransportFailure.invalidResponse }
+        if status == 200, case let .node(_, digest) = mode {
+            let actual = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+            guard digest == actual else { throw TransportFailure.invalidResponse }
+        }
         ended = true
         return R3Response(status: status, bytes: bytes)
     }
@@ -151,10 +226,13 @@ final class R3ResponseReceiver: ChannelInboundHandler {
     typealias InboundIn = HTTP2Frame.FramePayload
 
     private let result: EventLoopPromise<R3Response>
-    private var pending = R3ResponseAccumulator()
+    private var pending: R3ResponseAccumulator
     private(set) var finished = false
 
-    init(result: EventLoopPromise<R3Response>) { self.result = result }
+    init(result: EventLoopPromise<R3Response>, mode: R3Request.Mode) {
+        self.result = result
+        self.pending = R3ResponseAccumulator(mode: mode)
+    }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         guard !finished else { return }
