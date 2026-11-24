@@ -117,8 +117,7 @@ final class RemoteSaveJournal {
         var save = plan.save();
         need(stage.equals(new OrdinaryFileStage.Staged(save.operation(), save.length(), save.sha256())));
         try (InputStream verified = OrdinaryFileStage.openBody(context, stage)) {
-            writeRecord(context, nameFor(save.operation(), ".plan"), encodeMarker(plan, PLAN_MAGIC, null));
-            writeRecord(context, fileName(save.operation()), encodeMarker(plan, STAGED_MAGIC, null));
+            writeRecord(context, nameFor(save.operation(), ".plan"), encodeMarker(plan, STAGED_MAGIC, null));
         }
     }
 
@@ -170,9 +169,10 @@ final class RemoteSaveJournal {
                     if (after != null && operation.compareTo(after) <= 0) continue;
                     if (page.size() > PAGE_LIMIT && operation.compareTo(page.lastKey()) >= 0) continue;
                     target.check();
-                    byte[] raw = readNamed(target, new File(target.path, leaf), 4096);
+                    var selected = readSelector(target, leaf, operation, null, false);
                     target.check();
-                    Plan checked = decodeMarker(raw, null, operation, PLAN_MAGIC).plan();
+                    if (selected == null) continue;
+                    Plan checked = selected.plan();
                     if (!authority.equals(checked.authority())) continue;
                     page.put(operation, checked);
                     if (page.size() > PAGE_LIMIT + 1) page.pollLastEntry();
@@ -302,17 +302,91 @@ final class RemoteSaveJournal {
     /** Reopen this exact original operation, not an arbitrary path or latest draft. */
     static synchronized Prepared reopen(Context context, Authority authority, String operation)
             throws IOException {
+        String leaf = nameFor(operation, ".plan");
+        var selector = inStore(context, false, (home, local, target) -> {
+            var recovered = readSelector(target, leaf, operation, authority, true);
+            if (recovered != null) {
+                local.sync();
+                home.sync();
+            }
+            return recovered;
+        });
+        if (selector != null && selector.staged()) {
+            need(readRecord(context, fileName(operation), true) == null);
+            return stagedPrepared(selector.plan());
+        }
         byte[] bytes = readRecord(context, fileName(operation), false);
-        need(bytes.length >= Integer.BYTES);
-        if (java.nio.ByteBuffer.wrap(bytes).getInt() == STAGED_MAGIC) {
+        if (recordKind(bytes) == STAGED_MAGIC) {
+            // Read existing two-record ordinary operations without rewriting them.
             Plan checked = decodeMarker(bytes, authority, operation, STAGED_MAGIC).plan();
-            byte[] selector = readRecord(context, nameFor(operation, ".plan"), false);
-            need(checked.equals(decodeMarker(selector, authority, operation, PLAN_MAGIC).plan()));
-            var save = checked.save();
-            return new Prepared(checked.authority(), save, null,
-                    new OrdinaryFileStage.Staged(operation, save.length(), save.sha256()));
+            need(selector != null && checked.equals(selector.plan()));
+            return stagedPrepared(checked);
         }
         return decode(bytes, operation, authority);
+    }
+
+    private static Prepared stagedPrepared(Plan plan) {
+        var save = plan.save();
+        return new Prepared(plan.authority(), save, null,
+                new OrdinaryFileStage.Staged(save.operation(), save.length(), save.sha256()));
+    }
+
+    private record Selector(Plan plan, boolean staged) {}
+
+    private static int recordKind(byte[] record) throws IOException {
+        need(record.length >= Integer.BYTES);
+        return java.nio.ByteBuffer.wrap(record).getInt();
+    }
+
+    private static Selector readSelector(LocalWorkspaceStore.Directory target, String leaf,
+                                         String operation, Authority authority, boolean repair)
+            throws ErrnoException, IOException {
+        File published = new File(target.path, leaf);
+        File pending = new File(target.path, stageName(leaf));
+        StructStat named;
+        try {
+            named = Os.lstat(published.getPath());
+        } catch (ErrnoException absent) {
+            if (absent.errno != OsConstants.ENOENT) throw absent;
+            // A lone pending name was never published and cannot qualify.
+            return null;
+        }
+        long links = named.st_nlink;
+        need(links == 1 || links == 2);
+        if (links == 1) {
+            byte[] bytes = readNamed(target, published, named, 4096);
+            int kind = recordKind(bytes);
+            need(kind == PLAN_MAGIC || kind == STAGED_MAGIC);
+            if (repair) target.sync();
+            return new Selector(decodeMarker(bytes, authority, operation, kind).plan(), kind == STAGED_MAGIC);
+        }
+
+        // The one recoverable publish window is two names for the already
+        // checked staged marker inode. Text and attempted/receipt records are unchanged.
+        checkFile(named, named, target, 2);
+        need(named.st_size > 0 && named.st_size <= 4096);
+        try (var held = new LocalWorkspaceStore.Handle(published, READ, 0)) {
+            unchanged(Os.fstat(held.fd), named, target, 2);
+            unchanged(Os.lstat(pending.getPath()), named, target, 2);
+            byte[] bytes = readExact(held.fd, named.st_size);
+            Plan exact = decodeMarker(bytes, authority, operation, STAGED_MAGIC).plan();
+            target.check();
+            unchanged(Os.fstat(held.fd), named, target, 2);
+            unchanged(Os.lstat(published.getPath()), named, target, 2);
+            unchanged(Os.lstat(pending.getPath()), named, target, 2);
+            if (repair) {
+                try (var names = target.openNames()) {
+                    unchanged(Os.lstat(pending.getPath()), named, target, 2);
+                    names.deleteFile(pending.toPath().getFileName());
+                }
+                Os.fsync(held.fd);
+                target.sync();
+                var after = Os.fstat(held.fd);
+                checkFile(after, named, target, 1);
+                unchanged(Os.lstat(published.getPath()), after, target);
+            }
+            return new Selector(exact, true);
+        }
     }
 
     private static byte[] readRecord(Context context, String name, boolean optional) throws IOException {
@@ -426,7 +500,12 @@ final class RemoteSaveJournal {
 
     private static void unchanged(StructStat seen, StructStat original, LocalWorkspaceStore.Directory target)
             throws IOException {
-        checkFile(seen, original, target, 1);
+        unchanged(seen, original, target, 1);
+    }
+
+    private static void unchanged(StructStat seen, StructStat original, LocalWorkspaceStore.Directory target,
+                                  int links) throws IOException {
+        checkFile(seen, original, target, links);
         need(seen.st_mtim.compareTo(original.st_mtim) == 0 && seen.st_ctim.compareTo(original.st_ctim) == 0);
     }
 
