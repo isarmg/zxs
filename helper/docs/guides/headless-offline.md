@@ -87,8 +87,8 @@ helper setup-headless init-data /mnt/archive/zxs-data /system /recycle /data-one
 helper setup-headless retire-data TARGET SYSTEM RECYCLE DATA [DATA ...]
 ```
 
-当前清单须包含 `TARGET`，并至少保留一块 DATA。目标仍须可访问；其 `data` 和 `staging` 必须为空。
-指向该盘的旧路由须有[选定回执及对应回收原件](../specs/recycle-retirement-receipts.md)。
+当前清单须包含 `TARGET`，并至少保留一块 DATA。目标仍须可访问。
+仅有角色标记的盘不得有容器路由。已初始化的盘则要求 `data` 和 `staging` 都为空；指向该盘的旧路由须有[选定回执及对应回收原件](../specs/recycle-retirement-receipts.md)。
 
 命令只更新 SYSTEM 和清单，不擦盘、不改目标角色标记。中断用相同参数重试；旧角色标记不可用于再次加入。
 

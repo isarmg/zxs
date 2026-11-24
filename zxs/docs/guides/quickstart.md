@@ -42,7 +42,7 @@ helper setup-headless new "$SYSTEM" "$RECYCLE" "$DATA" operator
 
 如需连接 Workspace，由你配置 HTTPS 入口并启用 HTTP/2。反代须保留真实请求路径和凭据，正文按原长度转发；ZXS 仍核对自己的登录，不接受代理身份头。[反代和运行细节](../headless-activation.md)。
 
-在 Workspace 的「存储容器」页点「连接…」，填 HTTPS 地址及刚设置的账号、口令，再点「连接并读取列表」。新池的列表为空是正常的。读取列表不上传文件；查看、保存或回查原提交按[容器页指南](../../../zxs-workspace/docs/container-management.md)操作。
+在 Workspace 的「存储容器」页点「连接…」，填 HTTPS 地址及刚设置的账号、口令，再点「连接并读取列表」。新池的列表为空是正常的。读取列表不上传文件；查看、保存或回查原提交按[容器页指南](../../../zxs-workspace/docs/guides/remote-files.md)操作。
 
 ## 验证范围
 

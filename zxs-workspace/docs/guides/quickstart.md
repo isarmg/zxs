@@ -49,7 +49,7 @@ zip-workspace-desktop
 
 点「打开 .zxs 快照」，选定示例归档后按提示只读核验。可浏览文件和空目录，或和另一份选定的快照做只读比较。普通 ZIP 走独立的核验入口。
 
-若要读远程文件，在「存储容器」页另行输入已配置的 HTTPS 地址和账号。需服务端入口支持 HTTP/2，桌面环境需[锁定的传输组件](../../packaging/network-r3/README.md)。查看不上传；[各平台的显式提交与恢复范围](../container-management.md)另见说明。
+若要读远程文件，在「存储容器」页另行输入已配置的 HTTPS 地址和账号。需服务端入口支持 HTTP/2，桌面环境需[锁定的传输组件](../../packaging/network-r3/README.md)。查看不上传；[各平台的显式提交与恢复范围](remote-files.md)另见说明。
 
 ## 可选：Linux 只读挂载
 

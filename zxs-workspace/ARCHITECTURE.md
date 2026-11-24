@@ -48,7 +48,7 @@ flowchart LR
 | CLI、Qt | [`cli.py`](zipworkspace/cli.py) 与 [`desktop/`](zipworkspace/desktop/)；接收选择和明确确认，不把界面当成协议。 |
 | 归档准入、索引、历史 | [`model.py`](zipworkspace/model.py)、[`archive.py`](zipworkspace/archive.py)、[`browser.py`](zipworkspace/browser.py)、[`refs.py`](zipworkspace/refs.py)。 |
 | 工作树、冻结和发布 | [`worktree.py`](zipworkspace/worktree.py)、[`opening.py`](zipworkspace/opening.py)、[`freeze.py`](zipworkspace/freeze.py)、[`publish.py`](zipworkspace/publish.py)、[`lifecycle.py`](zipworkspace/lifecycle.py)。 |
-| 旧的远程收发 | [Qt 容器页](zipworkspace/desktop/container_panel.py)、[TLS/H2](zipworkspace/container_https.py)、[原计划](zipworkspace/container_plan.py)、[原回执](zipworkspace/container_http.py)。操作见[远程容器页](docs/container-management.md)。 |
+| 旧的远程收发 | [Qt 容器页](zipworkspace/desktop/container_panel.py)、[TLS/H2](zipworkspace/container_https.py)、[原计划](zipworkspace/container_plan.py)、[原回执](zipworkspace/container_http.py)。操作见[远程容器页](docs/guides/remote-files.md)。 |
 | 原生平台适配 | [Linux 只读卷](zipworkspace/linux_mount.py)、[Linux 编辑卷](zipworkspace/linux_edit_mount.py)、[WinFsp](winfsp/) 和 [FSKit](macos-fskit/)，各自受[发行门槛](TASKS.md)限制。 |
 | 移动预览与草稿 | [Android](android/) 和 [iOS](ios/) 的原生代码。中央目录声明、单项 CRC 和整份 `.zxs` 核验不是同一证据；预览不授予写入。 |
 

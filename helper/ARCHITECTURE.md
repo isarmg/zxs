@@ -1,43 +1,50 @@
 # Helper 架构
 
-Helper 是独立的按需本机程序。宿主诊断可在业务服务运行时使用；
-离线部署和维护只在取得原状态目录排他锁后写入。Helper 不常驻，
-不代理业务连接，不提供业务管理页面。
+供维护者阅读。Helper 是 Linux x86_64 上按需运行的命令行工具，不是存储服务。
+用户入口见[使用说明](README.md)；证据和待验收范围见[状态表](TASKS.md)。
 
-## 首次设置与密码重置
+## 数据流
 
-- 首设和重置只在同一前台终端确认；口令不回显，不走参数或网络。
-- 启动、设置和维护分别处理受保护的角色路径。Helper 以原服务账号
-  核对已挂载目录、实体、所有权和角色，使用与业务端共同的原目录租约。
-- 首设先发布角色标记，最后写入原状态目录的 `server.conf`。
-  重置只更换该文件的账号验证值和代次，保留登录名、池和角色。
-- Helper 不启动服务。首设后以同一非 root 服务账号运行 `zxs --listen IP:PORT`，详见 [ZXS 部署说明](../zxs/docs/headless-activation.md)。
+```mermaid
+flowchart LR
+  A[Helper 命令] --> B[选择并固定原角色目录]
+  B --> C[原状态目录排他锁]
+  C --> D[首设、重置、加盘与退盘]
+  C --> E[核对受保护的已安装 ZXS]
+  E --> F[ZXS 离线名称查询、DATA 初始化与导入]
+  G[原外部文件] -->|Helper 核对后交只读 FD| F
+  A --> H[独立的只读宿主观察]
+```
 
-见[操作表](docs/guides/headless-offline.md)。历史 SQLite/SMB 流程不再交付，
-不用于当前格式，也不作为旧池迁移入口。
+检查与服务单元预览只检查原目录的资格，不走写入分支。
 
-## 当前格式的权限边界
+- **首设与本地维护：**首设先写角色标记，最后发布 `server.conf`。重置仅更新原账号代次、密码盐和验证值，不换登录名、池或角色。
+- **固定离线交接：**只使用由 root 保护的 `/zxs/bin/zxs`。查询、初始化和导入使用各自的私有入口，不走业务 HTTP 监听。
+- **导入：**Helper 绑定原文件、摘要、目标名和已登记 DATA；ZXS 发布首节点并给出原回执。批量只启动一个配套写入进程，先查回执，所需时才交源文件。
+- **输出与恢复：**每项回执输出前后重验原件，确认后才开始下一项；整批还需确切结束和正常退出。批量不是事务，只重放原计划，不删除来源。
 
-`SelectedRoles` 只持有本次选中的目录和宿主挂载证据，不发行池 ID、盘令牌或配置。首设和只读就绪检查共享同一目录拓扑校验；只有实际首设取得排他锁后才为新池分配身份。维护旧有当前格式池时，`OfflineSession` 持有固定状态目录的排他锁、原 `server.conf` 与按顺序核过的角色。重置、增退盘、初始化和导入都在这同一个边界内重核原件；重试所用的登记身份来自原文件而不是新生成的值。受保护的已安装 `/zxs/bin/zxs` 的选择与前后核验由会话统一负责，名称查询、初始化、导入仍是不同工作协议。
+[首设、重置与盘管理](docs/guides/headless-offline.md)和[导入指南](docs/guides/offline-imports.md)说明操作前提。
+首设之后的监听与部署见 [ZXS 部署说明](../zxs/docs/headless-activation.md)。
 
-CLI 以互斥动作区分检查、可选单元预览、首设、口令重置和三种盘操作。均不启动服务或打开网页。
+## 核心不变量
 
-## 非空源文件导入
-
-单文件和批量命令都在本机独占停机清单。Helper 绑定原始源文件、摘要、明确的目标名和登记 DATA；存储程序负责发布完整首节点和查询原收据。批量计划包含有序的原始单文件票据。Helper 只启动一次配套 ZXS 写入进程；仅按需交出原文件只读 FD。每项回执和输出确认后才继续，不另建写入引擎或 Helper 数据库。整批可凭原计划重放，不跨文件原子提交，不删除来源。整目录选择复用预检的固定目录遍历，在取文件正文前后比对同一根下所有路径、目录和文件元数据；只在准备阶段做全树清点。应用和重放只使用原计划，不扫描新的源项。
-
-## 宿主观察
-
-磁盘、挂载、CPU、内存和速率来自[只读宿主观察](docs/guides/host-diagnostics.md)。缺失的观测报告为未知。卷镜像工具和本机网页已[退出交付](docs/archive/retired-volume-tools.md)。
+- 首设与维护使用原专用非 root 账号。角色身份绑定持有的目录、实际挂载和标记，不能通过同名路径、同设备号或任意目录替换。
+- 修改配置之前持有原状态目录排他锁；后续每次跨边界核对原清单和角色。详见[原件与离线权限](docs/invariants/offline-authority.md)。
+- 退空 DATA 只更新 SYSTEM 和清单。仍有原路由时必须核对[选中回收回执](docs/specs/recycle-retirement-receipts.md)，不以其代替正文校验。
 
 ## 源码导航
 
-| 位置 | 职责 |
+| 位置 | 负责的边界 |
 | --- | --- |
-| `src/headless_setup.rs`、`src/headless_setup/offline/` | 角色、原目录与离线排他锁，首设、盘管理、口令及导入 |
-| `src/pinned.rs`、`src/maintenance/` | 原路径、挂载和宿主权限证据 |
-| `src/local_worker/`、`linux-evidence/` | 固定私有描述符交接与当前 Linux 内核取证 |
+| [主入口](src/main.rs)、[终端动作](src/headless_setup_command.rs) | 子命令、前台确认、不回显的凭据与互斥动作 |
+| [首设与角色](src/headless_setup.rs)、[路径原件](src/pinned.rs) | 初始登记、按原角色核对路径和挂载 |
+| [离线会话](src/headless_setup/offline.rs)、[盘操作](src/headless_setup/offline/) | 原清单、排他锁、受控发布及中断证据 |
+| [原票和来源](src/headless_setup/offline/import_one.rs)、[批量交接](src/headless_setup/offline/import_one/batch/worker.rs) | 持有原件，批量原回执优先及逐项确认 |
+| [本地工作进程](src/local_worker/)、[Linux 证据库](linux-evidence/) | 固定可执行文件、来源描述符和真实进程退出 |
+| [宿主观察](src/block_tools.rs)、[可选发布器](src/embedded_image/) | 两条旁路，不提供池或账号写入权 |
 
-## 可选单文件发布
+## 独立能力
 
-默认 Helper 不含业务程序映像。编译时显式启用 `embedded-zxs` 才从同一前台 root 终端将经过独立摘要核验的完整 ELF 无覆盖发布。此命令独占原空 `/zxs/state`，绑定受保护的宿主、目录和已发布的同一 inode，不发行账户或启动服务。离线维护仍只调用固定安装位置的业务文件。宿主证据与[映像发布](docs/guides/embedded-image.md)不依赖旧安装或共享协议；各子项目独立构建。
+[宿主观察](docs/guides/host-diagnostics.md)不代替池登记和数据核验。
+[可选 ELF 发布](docs/guides/embedded-image.md)需要独立启用，默认不内嵌 ZXS，不启动服务。
+旧 SQLite/SMB 和[镜像工具、网页](docs/archive/retired-volume-tools.md)不在当前交付中。

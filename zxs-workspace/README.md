@@ -12,7 +12,7 @@
 2. 像平常一样编辑文件，停掉写入者后用 `commit --writers-stopped` 保存整棵目录。
 3. 用 `browse` 查看返回的快照，或用 `checkout` 签出到新目录。
 
-想用窗口，可按指南装 Qt，启动 `zip-workspace-desktop` 并选择「打开 .zxs 快照」。需要读取远程文件时，按[容器页指南](docs/container-management.md#连接所选服务器)单独连接服务器；打开容器不提交、不下载正文。
+想用窗口，可按指南装 Qt，启动 `zip-workspace-desktop` 并选择「打开 .zxs 快照」。需要读取远程文件时，按[容器页指南](docs/guides/remote-files.md#连接所选服务器)单独连接服务器；打开容器不提交、不下载正文。
 
 ## 空间估算
 
@@ -36,7 +36,7 @@
 
 ## 进一步阅读
 
-- **操作**：[CLI、桌面与只读挂载](docs/guides/quickstart.md) · [远程容器页](docs/container-management.md) · [Android](android/README.md) · [iOS](ios/README.md)。
+- **操作**：[CLI、桌面与只读挂载](docs/guides/quickstart.md) · [远程容器页](docs/guides/remote-files.md) · [Android](android/README.md) · [iOS](ios/README.md)。
 - **设计与证据**：[架构](ARCHITECTURE.md) · [归档格式](docs/specs/archive-format.md) · [交付清单](TASKS.md) · [本机安全与恢复](docs/invariants/local-worktree.md)。
 - **打包配方**：[Ubuntu](packaging/ubuntu-26.10/README.md) · [Windows](packaging/windows-amd64/README.md) · [macOS](packaging/macos-arm64/README.md)。
 - **旧版长说明**：[改写前的完整 README 与原有命令、限制和验收线索](https://github.com/isarmg/zxs/blob/37734daef96e41baafa88f82ebccbaeacc5e7a91/zxs-workspace/README.md)。

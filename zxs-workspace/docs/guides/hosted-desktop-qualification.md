@@ -27,7 +27,7 @@ python -I -B -X utf8 tests/qualification/windows_node_qualification.py 'C:\路�
 
 ## macOS 原节点另存
 
-[仅静态] 严格路线要真实读回原下载 URL，不因隔离类型存在便放行。[macOS 26 的真实作业](https://github.com/isarmg/zxs/actions/runs/45298114940/job/138123553971)中两种表示都未读回 URL。合成来源测试仅证明错误摘要和晚占名不发布，不改变严格门槛。
+[仅静态] 严格路线要真实读回原下载 URL，不因隔离类型存在便放行。[macOS 26 的真实作业](https://github.com/isarmg/zxs/actions/runs/45298114940/job/138123553971)中两种表示都未读回 URL。同一作业另有两个 `test_synthetic_provenance_*` 用例通过：错误摘要不发布、晚占名不覆盖。严格来源用例另因 URL 缺失而失败，不可用合成结果替代。
 
 独立的显式另存路线用真实 APFS 和系统隔离；源码用例的同意和传输是合成输入，不能替代用户在前台签名应用中的真实同意。未读回 URL 时必须如实显示，发行入口仍关闭。
 
