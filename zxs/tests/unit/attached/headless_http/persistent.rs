@@ -187,12 +187,12 @@ fn valid_bearer_cannot_authorize_legacy_writes_or_data_or_drain_their_body() {
                 true,
             )
         },
-        |auth| control_write(auth, &format!("{CONTAINER}/tags"), "[]", true),
+        |auth| control_write(auth, &format!("{CONTAINER}/tags"), "{\"tags\":[]}", true),
         |auth| {
             control_write(
                 auth,
                 &format!("{CONTAINER}/branches/44444444444444444444444444444444"),
-                &format!("{{\"from\":\"{NODE}\"}}"),
+                &format!("{{\"from_node\":\"{NODE}\"}}"),
                 false,
             )
         },
