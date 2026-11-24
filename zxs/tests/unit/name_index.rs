@@ -1,11 +1,14 @@
 use super::*;
 use crate::{
     container_store::{
-        Body, Change, Mutation, Receipt, Target, ensure_dir, entry_leaf, hex, write_file,
+        Body, Change, DataRoot, Mutation, Receipt, Target, ensure_dir, entry_leaf, hex, write_file,
     },
     test_support::PrivateTemp,
 };
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 const TOKEN: [u8; 32] = [0x35; 32];
 const POOL: Id = [0xab; 16];
@@ -42,48 +45,50 @@ struct Fixture {
     store: Store,
     system: HeldDir,
     temp: PrivateTemp,
+    recycle_temp: Option<PrivateTemp>,
+}
+
+fn fixture_dir(root: &PrivateTemp, name: &str) -> HeldDir {
+    let path = root.0.join(name);
+    ensure_dir(&path).unwrap();
+    HeldDir::trusted_storage(&path).unwrap()
 }
 
 impl Fixture {
     fn open(with_recycle: bool) -> Self {
         let temp = PrivateTemp::under(&std::env::temp_dir());
-        let dir = |name| {
-            let at = temp.0.join(name);
-            ensure_dir(&at).unwrap();
-            HeldDir::trusted_storage(&at).unwrap()
+        let system = fixture_dir(&temp, "system");
+        let data = DataRoot {
+            token: TOKEN,
+            root: fixture_dir(&temp, "data_disk"),
         };
-        let system = dir("system");
-        let owner = system.opaque_owner(c"container-owner").unwrap();
-        let data = dir("data_disk");
-        let mut store = Store::open_roster(
-            &system,
-            vec![super::super::DataRoot {
-                token: TOKEN,
-                root: data,
-            }],
-            owner,
-        )
-        .unwrap();
-        if with_recycle {
-            // Real post-admission namespace semantics on sibling fake roots,
-            // not qualification of independently mounted media.
-            store.archive = Some(
-                super::super::recycle::Recycle::open(
-                    HeldDir::trusted_storage(&system.path).unwrap(),
-                    dir("recycle"),
-                    super::super::recycle_receipt::RecycleRole {
-                        pool: POOL,
-                        token: RECYCLE,
-                    },
-                )
-                .unwrap(),
-            );
-        }
+        // The actual recycle path intentionally rejects a same-filesystem
+        // copy. Require the same distinct, privately leased roots used by
+        // the existing Linux recycle fixtures.
+        let recycle_temp = with_recycle.then(|| PrivateTemp::under(Path::new("/dev/shm")));
+        let store = if let Some(remote) = &recycle_temp {
+            Store::open_with_recycle(
+                HeldDir::trusted_storage(&system.path).unwrap(),
+                vec![data],
+                fixture_dir(remote, "recycle"),
+                POOL,
+                RECYCLE,
+            )
+            .unwrap()
+        } else {
+            let owner = system.opaque_owner(c"container-owner").unwrap();
+            Store::open_roster(&system, vec![data], owner).unwrap()
+        };
         Self {
             store,
             system,
             temp,
+            recycle_temp,
         }
+    }
+
+    fn recycle_scratch(&self, name: &str) -> PathBuf {
+        self.recycle_temp.as_ref().unwrap().0.join(name)
     }
 
     fn view(&self, previous: Option<&View>) -> io::Result<View> {
@@ -252,7 +257,7 @@ fn prior_recycled_requires_original_selector_and_named_archived_child() {
     let recycled = f.view(None).unwrap();
     let archive = f.store.archive.as_ref().unwrap();
     let (_, at) = archive.selected(ONE).unwrap().unwrap();
-    let keep = f.temp.0.join("archive_child");
+    let keep = f.recycle_scratch("archive_child");
     fs::rename(&at.path, &keep).unwrap();
     ensure_dir(&at.path).unwrap();
     let entry = at.path.join(entry_leaf(1, [11; 16]));
@@ -263,7 +268,7 @@ fn prior_recycled_requires_original_selector_and_named_archived_child() {
     )
     .unwrap();
     assert!(f.view(Some(&recycled)).is_err());
-    fs::rename(&at.path, f.temp.0.join("archive_substitute")).unwrap();
+    fs::rename(&at.path, f.recycle_scratch("archive_substitute")).unwrap();
     fs::rename(&keep, &at.path).unwrap();
     assert!(f.view(Some(&recycled)).unwrap().vacant(TWO, "Archive.bin"));
 
@@ -408,7 +413,7 @@ fn a_canonical_recycled_ledger_cannot_reuse_its_selected_delete_op() {
     let entry = at.path.join(entry_leaf(1, remove.request));
     fs::rename(at.path.join(entry_leaf(1, [11; 16])), &entry).unwrap();
     let control = entry.join("receipt");
-    fs::rename(&control, f.temp.0.join("original_control")).unwrap();
+    fs::rename(&control, f.recycle_scratch("original_control")).unwrap();
     write_file(
         &control,
         &codec::encode(&Receipt {
