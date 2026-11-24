@@ -1,6 +1,7 @@
 use super::{
     APP, DB, DB_SIDECARS, DisplayName, Id, Intent, Lookup, PayloadWorkspace, Permissions, Target,
-    VERSION, Workspace, payload, validate_workspace_header,
+    VERSION, Workspace, can_arm_original, payload, preserve_original_conflict,
+    validate_workspace_header,
 };
 use crate::{native_test_support as support, session::Principal};
 use std::{
@@ -180,4 +181,82 @@ fn payload_reader_leaves_wal_marker_and_sidecars_untouched() {
     assert!(error.to_string().contains("rollback-mode"));
     assert_eq!(names(), bare);
     assert_eq!(fs::read(raw).unwrap(), wal_marked);
+}
+
+#[test]
+fn conflict_cannot_be_cleared_by_any_nonreceipt_observation() {
+    for seen in [Lookup::Absent, Lookup::Unknown, Lookup::Conflict] {
+        assert_eq!(
+            preserve_original_conflict("conflict", seen),
+            Lookup::Conflict
+        );
+    }
+    assert!(!can_arm_original("conflict"));
+    assert!(!can_arm_original("confirmed"));
+    assert!(!can_arm_original("unrecognized"));
+    let exact = Lookup::Confirmed { sequence: 2 };
+    assert_eq!(preserve_original_conflict("conflict", exact), exact);
+    for phase in ["prepared", "attempted", "unknown", "absent"] {
+        assert!(can_arm_original(phase));
+        for seen in [Lookup::Absent, Lookup::Unknown, Lookup::Conflict] {
+            assert_eq!(preserve_original_conflict(phase, seen), seen);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires newly allocated unprivileged ext4 fixture scratch"]
+fn sticky_conflict_preserves_the_original_until_its_exact_receipt() {
+    let (mut ws, _, file, _) = scratch_workspace("sticky-conflict");
+    let review = ws
+        .review(&file, Some(DisplayName::parse("first").unwrap()))
+        .unwrap();
+    let intent = ws.prepare(&review, true).unwrap().unwrap();
+    let op = &intent.operation_id;
+    let (original, _, _) = ws.original(op).unwrap();
+    let lease = ws.hold_container(&intent.container_id).unwrap();
+    let staged = ws.root.source(Path::new(&payload(op))).unwrap();
+
+    for observation in [Lookup::Unknown, Lookup::Absent] {
+        assert_eq!(
+            ws.settle(&original, observation, &lease).unwrap().status,
+            observation
+        );
+        assert_eq!(ws.original(op).unwrap().1, "prepared");
+    }
+    ws.arm_attempt(&original, &staged, &lease).unwrap();
+    for observation in [Lookup::Unknown, Lookup::Absent] {
+        assert_eq!(
+            ws.settle(&original, observation, &lease).unwrap().status,
+            observation
+        );
+        assert_eq!(ws.original(op).unwrap().1, "attempted");
+    }
+
+    assert_eq!(
+        ws.settle(&original, Lookup::Conflict, &lease)
+            .unwrap()
+            .status,
+        Lookup::Conflict
+    );
+    for observation in [Lookup::Unknown, Lookup::Absent, Lookup::Conflict] {
+        assert_eq!(
+            ws.settle(&original, observation, &lease).unwrap().status,
+            Lookup::Conflict
+        );
+        assert_eq!(ws.original(op).unwrap().1, "conflict");
+        assert!(ws.arm_attempt(&original, &staged, &lease).is_err());
+        assert_eq!(ws.pending().unwrap(), vec![op.clone()]);
+        assert!(ws.basis(&file).unwrap().is_none());
+        staged.check().unwrap();
+    }
+    fs::write(&file, b"later unsent local edit").unwrap();
+    let receipt = Lookup::Confirmed { sequence: 1 };
+    assert_eq!(
+        ws.settle(&original, receipt, &lease).unwrap().status,
+        receipt
+    );
+    assert_eq!(ws.basis(&file).unwrap().unwrap().body, intent.body);
+    assert_eq!(fs::read(file).unwrap(), b"later unsent local edit");
+    ws.root.absent(payload(op).as_ref()).unwrap();
 }

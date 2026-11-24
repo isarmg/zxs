@@ -668,12 +668,17 @@ impl Workspace {
         self.same_principal(session)?;
         let (initial, _, _) = self.original(op)?;
         let lease = self.hold_container(&initial.intent.container_id)?;
-        let (original, _, prior) = self.original(op)?;
+        let (original, phase, prior) = self.original(op)?;
         if original != initial {
             return Err(invalid("the selected original record changed"));
         }
         if let Some(sequence) = prior {
             return self.settle(&original, Lookup::Confirmed { sequence }, &lease);
+        }
+        if !can_arm_original(&phase) {
+            return Err(invalid(
+                "this original has a saved conflict; check its receipt without submitting",
+            ));
         }
         let receipt = session.lookup(&original.intent).await;
         if receipt != Lookup::Absent {
@@ -705,16 +710,23 @@ impl Workspace {
 
     fn arm_attempt(&self, original: &Original, source: &Source, lease: &Lease) -> Result<()> {
         source.check()?;
-        let (retained, _, _) = self.original(&original.intent.operation_id)?;
-        if retained != *original || db_basis(&self.db, &original.path)? != original.prior {
+        let (retained, phase, _) = self.original(&original.intent.operation_id)?;
+        if retained != *original
+            || !can_arm_original(&phase)
+            || db_basis(&self.db, &original.path)? != original.prior
+        {
             return Err(invalid(
-                "authorization or original basis changed before arming",
+                "authorization, conflict state or original basis changed before arming",
             ));
         }
         held_lease_at(&self.root, self.db_id, lease)?;
         if self.db.execute(
-            "UPDATE original SET phase='attempted' WHERE op=?1 AND record=?2 AND phase!='confirmed'",
-            params![original.intent.operation_id.as_str(), serde_json::to_string(original)?],
+            "UPDATE original SET phase='attempted' WHERE op=?1 AND record=?2 AND phase=?3",
+            params![
+                original.intent.operation_id.as_str(),
+                serde_json::to_string(original)?,
+                phase
+            ],
         )? != 1
         {
             return Err(invalid("the exact original no longer permits sending"));
@@ -748,13 +760,14 @@ impl Workspace {
         let recheck = || held_lease_at(root, db_id, lease);
         recheck()?;
         let op = &original.intent.operation_id;
-        let (selected, _, prior) = self.original(op)?;
+        let (selected, phase, prior) = self.original(op)?;
         if &selected != original {
             return Err(invalid("original local pending changed during network"));
         }
         if let Some(sequence) = prior {
             status = Lookup::Confirmed { sequence };
         }
+        let status = preserve_original_conflict(&phase, status);
         if let Lookup::Confirmed { sequence } = status {
             if prior.is_none() {
                 let tx = self
@@ -805,20 +818,20 @@ impl Workspace {
                 local_cleanup_pending: !cleaned,
             });
         }
-        let phase = match status {
-            Lookup::Absent => "absent",
-            Lookup::Conflict => "conflict",
-            _ => "unknown",
-        };
-        recheck()?;
-        if self.db.execute(
-            "UPDATE original SET phase=?2 WHERE op=?1 AND record=?3 AND phase!='confirmed'",
-            params![op.as_str(), phase, serde_json::to_string(original)?],
-        )? != 1
-        {
-            return Err(invalid(
-                "the exact pending original changed before settlement",
-            ));
+        // A receipt observation is not the original's durable ability to send.
+        // Keep evidence that an original was never armed, could have been sent,
+        // or already conflicts. A missing receipt cannot revoke any of that.
+        if status == Lookup::Conflict && phase != "conflict" {
+            recheck()?;
+            if self.db.execute(
+                "UPDATE original SET phase='conflict' WHERE op=?1 AND record=?2 AND phase=?3",
+                params![op.as_str(), serde_json::to_string(original)?, phase],
+            )? != 1
+            {
+                return Err(invalid(
+                    "the exact pending original changed before recording conflict",
+                ));
+            }
         }
         recheck()?;
         Ok(Resolution {
@@ -1085,6 +1098,18 @@ fn inspect_payload_database<T>(
     let result = inspect();
     check()?;
     result
+}
+
+fn can_arm_original(phase: &str) -> bool {
+    matches!(phase, "prepared" | "attempted" | "unknown" | "absent")
+}
+
+fn preserve_original_conflict(phase: &str, observation: Lookup) -> Lookup {
+    if phase == "conflict" && !matches!(observation, Lookup::Confirmed { .. }) {
+        Lookup::Conflict
+    } else {
+        observation
+    }
 }
 
 fn held_database_at(root: &Folder, db_id: (u64, u64)) -> Result<()> {

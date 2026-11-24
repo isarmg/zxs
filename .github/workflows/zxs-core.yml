@@ -60,4 +60,5 @@ jobs:
           cargo +1.100.0 test --locked --offline --lib native::tests:: -- --ignored --nocapture
           cargo +1.100.0 test --locked --offline --lib workspace::tests::detached_lease_refuses_local_and_wire_custody -- --ignored --nocapture
           cargo +1.100.0 test --locked --offline --lib workspace::tests::payload_reader_leaves_wal_marker_and_sidecars_untouched -- --ignored --nocapture
+          cargo +1.100.0 test --locked --offline --lib workspace::tests::sticky_conflict_preserves_the_original_until_its_exact_receipt -- --ignored --nocapture
           cargo +1.100.0 test --locked --offline --test linux_zip deterministic_native_zip -- --ignored --nocapture
