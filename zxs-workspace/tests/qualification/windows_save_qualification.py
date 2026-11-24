@@ -90,6 +90,45 @@ class OriginalSave(LocalWorkingFile):
                          (Phase.CONFIRMED, ticket, "main", None))
         self.assertEqual(len(seen), 1)
 
+    def test_first_local_post_lost_reply_is_reconciled_by_original_key(self):
+        prior, _ = self.choose_draft(b"only establish the original account")
+        conn = prior._connection
+        source = self.destination / "incoming.bin"
+        whole = b"first complete payload"
+        source.write_bytes(whole)
+        with WindowsFirstLocalChoice(conn, str(source), self.staging, "Client spelling.bin") as choice:
+            key = choice.capture(choice.review, confirmed=True)
+        calls, effect = [], None
+
+        def wire(message):
+            nonlocal effect
+            calls.append(message.method)
+            if message.method == "GET":
+                self.assertEqual(message.target, f"/zxs/v1/containers/{key.container}/operations/{key.operation}")
+                if effect is None:
+                    return Reply(ReplyKind.ABSENT)
+                return project_reply(200, json.dumps(effect).encode(), lookup=True)
+            self.assertEqual(message.target, f"/zxs/v1/containers/{key.container}/branches/main/nodes")
+            headers = dict(message.headers)
+            self.assertEqual((headers["Zxs-Base-Node"], headers["Zxs-Initial-Name"]),
+                             ("0", "Client spelling.bin".encode().hex()))
+            self.assertTrue((self.staging / (key.submission + ".zsa")).exists())
+            self.assertEqual(b"".join(message.body), whole)
+            effect = dict(container_id=key.container, operation_id=key.operation, kind="save_node",
+                          sequence=1, node_id=headers["Zxs-Node"], length=len(whole), sha256=headers["Zxs-Sha256"],
+                          target={"kind": "first_main", "name": "Client spelling.bin"})
+            return Reply(ReplyKind.UNKNOWN)
+
+        conn._exchange.request = wire
+        selected = WindowsOriginalSaveChoice(conn, self.staging, key)
+        self.assertEqual(selected.apply(selected.review, confirmed=True).phase, Phase.UNKNOWN)
+        key_again = saves.load_original_windows_key(conn, self.staging, key.container, confirmed=True)
+        self.assertEqual(key_again, key)
+        status = receipts.lookup_original_windows_receipt(conn, self.staging, key_again, confirmed=True)
+        self.assertEqual((status.phase, status.ticket, status.receipt.revision),
+                         (Phase.CONFIRMED, selected.review.ticket, 1))
+        self.assertEqual(calls, ["GET", "POST", "GET"])
+
     def test_first_local_file_refuses_extra_stream_before_capturing(self):
         prior, _ = self.choose_draft(b"only the established account")
         source = self.destination / "local.bin"
