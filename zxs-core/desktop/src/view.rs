@@ -9,6 +9,7 @@ use tokio::sync::{mpsc, watch};
 use zxs_core::{
     Result,
     r3::{Branch, DisplayName, Lookup},
+    workspace::NEW_WORKSPACE_DIRECTORY,
 };
 
 use crate::{
@@ -20,7 +21,7 @@ use crate::{
 
 enum Gate {
     Idle,
-    Review,
+    Review { create_under: Option<PathBuf> },
     Verifying(Claim),
     Prompt { claim: Claim, shown: bool },
     WaitingForCatalog(Claim),
@@ -159,6 +160,7 @@ impl Desktop {
     fn retire(&mut self) {
         if let Some(claim) = self.gate.claim() {
             claim.revoke();
+            claim.revoke_creation();
         }
         self.password.clear();
         self.rejected_input = false;
@@ -250,6 +252,12 @@ impl Desktop {
             self.branch = None;
         }
         if next.epoch != self.view.epoch {
+            if next.connected
+                && self.gate.claim().is_some_and(Claim::creation_admitted)
+                && let Some(path) = &next.path
+            {
+                self.state_path = path.display().to_string();
+            }
             self.approvals.seen = None;
             self.chooser = None;
             self.local_notice = None;
@@ -302,10 +310,19 @@ impl Desktop {
 
     fn protective_panel(&mut self, ui: &mut Ui) {
         match &self.gate {
-            Gate::Review => {
-                ui.heading("Review the original connection");
-                if let Some(path) = &self.view.path {
-                    ui.label(path.display().to_string());
+            Gate::Review { create_under } => {
+                if let Some(parent) = create_under {
+                    ui.heading("Review new workspace");
+                    ui.label(format!(
+                        "New private directory: {}",
+                        parent.join(NEW_WORKSPACE_DIRECTORY).display()
+                    ));
+                    ui.label("Creates one new local folder after sign-in. Never changes an existing one.");
+                } else {
+                    ui.heading("Review the original connection");
+                    if let Some(path) = &self.view.path {
+                        ui.label(path.display().to_string());
+                    }
                 }
                 ui.label(format!("HTTPS origin: {}", self.origin));
                 ui.label(format!("Account: {}", self.account));
@@ -316,10 +333,11 @@ impl Desktop {
                     .add_enabled(self.approvals.admitted, egui::Button::new("Verify HTTPS/2"))
                     .clicked_by(PointerButton::Primary)
                 {
-                    let claim = Claim::new();
+                    let claim = Claim::connection(create_under.is_some());
                     if self.send(Action::Begin {
                         origin: self.origin.clone(),
                         account: self.account.clone(),
+                        create_under: create_under.clone(),
                         claim: claim.clone(),
                     }) {
                         self.gate = Gate::Verifying(claim);
@@ -345,6 +363,10 @@ impl Desktop {
                 ui.heading("Protected password entry");
                 ui.label(format!("Verified HTTPS origin: {}", ready.authority));
                 ui.label(format!("Account: {}", ready.account));
+                let creating = ready.new_path.is_some();
+                if let Some(path) = &ready.new_path {
+                    ui.label(format!("New private directory: {}", path.display()));
+                }
                 ui.label(
                     "Type or deliberately paste here. Enter signs in after composition finishes.",
                 );
@@ -382,8 +404,14 @@ impl Desktop {
                     && was_shown
                     && self.password.ready_to_submit()
                     && !self.waiting;
-                let sign_in =
-                    ui.add_enabled(ready, egui::Button::new("Sign in to this exact workspace"));
+                let sign_in = ui.add_enabled(
+                    ready,
+                    egui::Button::new(if creating {
+                        "Sign in and create this workspace"
+                    } else {
+                        "Sign in to this exact workspace"
+                    }),
+                );
                 if ui.button("Cancel").clicked() {
                     self.retire();
                 } else if ready
@@ -414,7 +442,24 @@ impl Desktop {
                         self.retire();
                     }
                 } else if claim.accepted() {
-                    ui.label("The first request was admitted. Waiting for the authorized catalog.");
+                    if claim.can_cancel_creation() {
+                        ui.label("Waiting for the authorized catalog before creating the local workspace.");
+                        if ui
+                            .button("Cancel workspace creation")
+                            .clicked_by(PointerButton::Primary)
+                            && claim.revoke_creation()
+                        {
+                            self.retire();
+                        }
+                    } else if claim.creation_admitted() {
+                        ui.label(
+                            "Creating the selected private workspace. No file is being uploaded.",
+                        );
+                    } else {
+                        ui.label(
+                            "The first request was admitted. Waiting for the authorized catalog.",
+                        );
+                    }
                 } else {
                     ui.label("Sign-in was canceled before sending.");
                 }
@@ -549,6 +594,38 @@ impl Desktop {
         }
     }
 
+    fn review_connection(&mut self, ui: &Ui, create: bool) {
+        let create_under = if create {
+            let parent = Path::new(&self.state_path);
+            if !parent.is_absolute() {
+                self.local_notice =
+                    Some("Select an existing local parent folder using an absolute path.");
+                return;
+            }
+            Some(parent.to_owned())
+        } else {
+            if self.view.path.is_none() {
+                self.local_notice = Some("Open the existing private workspace first.");
+                return;
+            }
+            None
+        };
+        if !self.origin.starts_with("https://") || self.account.is_empty() {
+            self.local_notice = Some("Enter the original HTTPS origin and account.");
+            return;
+        }
+        self.local_notice = None;
+        // Leave ordinary input before displaying the protected connection review.
+        self.password.clear();
+        ui.ctx().memory_mut(|memory| {
+            if let Some(editable) = memory.focused() {
+                memory.surrender_focus(editable);
+            }
+        });
+        self.gate = Gate::Review { create_under };
+        ui.ctx().request_repaint();
+    }
+
     fn normal(&mut self, ui: &mut Ui) {
         let mut action = None;
         ui.heading("ZXS Desktop");
@@ -580,7 +657,7 @@ impl Desktop {
                 ui.label(format!("Original private workspace: {}", path.display()));
             }
             ui.horizontal(|ui| {
-                ui.label("Existing state directory:");
+                ui.label("Local directory:");
                 let edit = ui.text_edit_singleline(&mut self.state_path);
                 if ui.button("Choose folder").clicked() {
                     pick = Some(Field::Workspace);
@@ -594,7 +671,6 @@ impl Desktop {
                 }
             });
             if !self.view.connected {
-                ui.label("This app opens existing enrolled workspaces. It does not create a new one.");
                 ui.horizontal(|ui| {
                     ui.label("Original HTTPS origin");
                     let origin = ui.text_edit_singleline(&mut self.origin);
@@ -603,25 +679,14 @@ impl Desktop {
                     if ui.button("Review connection").clicked()
                         || field_enter(&origin, enter) || field_enter(&account, enter)
                     {
-                        if self.view.path.is_none() {
-                            self.local_notice = Some("Open the existing private workspace first.");
-                            return;
-                        }
-                        if !self.origin.starts_with("https://") || self.account.is_empty() {
-                            self.local_notice = Some("Enter the original HTTPS origin and account.");
-                            return;
-                        }
-                        self.local_notice = None;
-                        // The next frame is read-only and scrubbed, before Verify.
-                        self.password.clear();
-                        ui.ctx().memory_mut(|memory| {
-                            if let Some(editable) = memory.focused() {
-                                memory.surrender_focus(editable);
-                            }
-                        });
-                        self.gate = Gate::Review;
-                        ui.ctx().request_repaint();
+                        self.review_connection(ui, false);
                     }
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Create new workspace").clicked_by(PointerButton::Primary) {
+                        self.review_connection(ui, true);
+                    }
+                    ui.label("For a new workspace, select a parent folder above.");
                 });
             } else {
                 ui.horizontal(|ui| {

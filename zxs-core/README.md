@@ -25,6 +25,8 @@ cargo install --locked --path .
 
 原操作冲突时可[手动归档并从当前分支头继续](docs/guides/conflict-archive.md)，旧文件不会被替换。
 
+[Linux 桌面](docs/guides/desktop-shell.md)可直接创建或打开私用工作区，不需先运行 CLI。
+
 ## 本机代码包
 
 `bundle-diff /绝对/目录` 与 `bundle-pack /绝对/目录 /绝对/新文件.zip` 都用离线前缀。支持根 `.zxsignore`；当前只比对和生成标准 Deflate ZIP，不解包或提交 ZIP。

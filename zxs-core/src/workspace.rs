@@ -25,10 +25,12 @@ use zeroize::Zeroizing;
 mod browse;
 mod checkout;
 mod conflicts;
+mod creation;
 mod prepared;
 mod uploads;
 pub use checkout::CheckoutChoice;
 pub use conflicts::ConflictArchiveChoice;
+pub use creation::{NEW_WORKSPACE_DIRECTORY, NewWorkspace};
 pub use prepared::PreparedSubmission;
 pub use uploads::{UploadObservation, UploadSelection};
 
@@ -171,17 +173,33 @@ impl Review {
 
 impl Workspace {
     pub fn initialize(directory: &Path, principal: &Principal) -> Result<Self> {
-        let root = Folder::open(directory, true)?;
+        Self::initialize_held(Folder::open(directory, true)?, principal, Arc::new(()))
+    }
+
+    fn initialize_held(root: Folder, principal: &Principal, owner: Arc<()>) -> Result<Self> {
         if !root.names(Path::new(""))?.is_empty() {
             return Err(invalid(
                 "an explicitly chosen independent empty 0700 directory is required",
             ));
         }
         let bin = root.new_private(DB)?;
+        Self::enroll_created_db(root, &bin, principal, owner).map_err(|error| format!(
+            "the new workspace database may already exist; check the original directory before retrying: {error}",
+        ).into())
+    }
+
+    fn enroll_created_db(
+        root: Folder,
+        bin: &File,
+        principal: &Principal,
+        owner: Arc<()>,
+    ) -> Result<Self> {
+        let minted = native::stamp(&bin.metadata()?);
         bin.sync_all()?;
         root.sync()?;
-        drop(bin);
-        let mut opened = Self::connect(root, Some(principal))?;
+        require_only_db(&root)?;
+        let mut opened = Self::connect(root, Some((principal, minted)))?;
+        opened.read_session_owner = owner;
         let transaction = opened
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -192,8 +210,10 @@ impl Workspace {
             "INSERT INTO profile VALUES(1,?1)",
             [serde_json::to_string(principal)?],
         )?;
+        held_database_at(&opened.root, opened.db_id)?;
         transaction.commit()?;
         opened.root.sync()?;
+        require_only_db(&opened.root)?;
         opened.validate()?;
         Ok(opened)
     }
@@ -212,7 +232,7 @@ impl Workspace {
         Ok(opened)
     }
 
-    fn connect(root: Folder, enrolled: Option<&Principal>) -> Result<Self> {
+    fn connect(root: Folder, enrolled: Option<(&Principal, Stamp)>) -> Result<Self> {
         let (opened, _original_file) =
             Self::connect_with_access(root, enrolled, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         Ok(opened)
@@ -220,7 +240,7 @@ impl Workspace {
 
     fn connect_with_access(
         root: Folder,
-        enrolled: Option<&Principal>,
+        enrolled: Option<(&Principal, Stamp)>,
         access: OpenFlags,
     ) -> Result<(Self, Source)> {
         let db_file = root.source(Path::new(DB))?;
@@ -228,19 +248,27 @@ impl Workspace {
             return Err(invalid("workspace SQLite file is not private 0600"));
         }
         let payload_reader = access.contains(OpenFlags::SQLITE_OPEN_READ_ONLY);
-        if enrolled.is_some() {
-            if db_file.before.length != 0 {
-                return Err(invalid("refusing to initialize a nonempty SQLite file"));
+        if let Some((_, minted)) = enrolled {
+            if db_file.before != minted || minted.length != 0 {
+                return Err(invalid(
+                    "initialization requires the original newly created SQLite file",
+                ));
             }
         } else if !payload_reader {
             check_workspace_header(&db_file, false)?;
         }
         let db_id = (db_file.before.dev, db_file.before.ino);
         let open = || -> Result<_> {
+            if enrolled.is_some() {
+                db_file.check()?;
+            }
             let db = Connection::open_with_flags(
                 root.path().join(DB),
                 access | OpenFlags::SQLITE_OPEN_NOFOLLOW,
             )?;
+            if enrolled.is_some() {
+                db_file.check()?;
+            }
             db.busy_timeout(Duration::from_secs(5))?;
             db.pragma_update(None, "trusted_schema", "OFF")?;
             if access.contains(OpenFlags::SQLITE_OPEN_READ_WRITE) {
@@ -251,7 +279,7 @@ impl Workspace {
                 return Err(invalid("unexpected independent SQLite journal mode"));
             }
             let principal = match enrolled {
-                Some(value) => value.clone(),
+                Some((value, _)) => value.clone(),
                 None => {
                     checked_schema(&db)?;
                     let profile: String =
@@ -1376,6 +1404,15 @@ impl PayloadWorkspace {
             .publish_guarded(&choice.leaf, &staged, &body, recheck)?;
         Ok(body)
     }
+}
+
+fn require_only_db(root: &Folder) -> Result<()> {
+    if !matches!(root.names(Path::new(""))?.as_slice(), [name] if name == OsStr::new(DB)) {
+        return Err(invalid(
+            "the new private workspace did not contain only its created database",
+        ));
+    }
+    Ok(())
 }
 
 fn check_workspace_header(file: &Source, require_rollback: bool) -> Result<()> {

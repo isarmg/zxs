@@ -395,6 +395,59 @@ impl Folder {
         .into())
     }
 
+    pub(crate) fn require_creation_parent(&self) -> Result<()> {
+        self.check()?;
+        let mode = self.fd.metadata()?.mode();
+        if mode & 0o300 != 0o300 || mode & 0o022 != 0 {
+            return Err(invalid(
+                "workspace creation needs an owner-searchable/writable parent, not group/other writable",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Reserve one new leaf in the held owner-writable parent. Never replace or chmod a leaf.
+    pub(crate) fn new_private_child(
+        &self,
+        name: &OsStr,
+        admit: impl FnOnce() -> Result<()>,
+    ) -> Result<Self> {
+        if Path::new(name).file_name() != Some(name) {
+            return Err(invalid(
+                "workspace creation needs one new local directory name",
+            ));
+        }
+        self.require_creation_parent()?;
+        self.absent(name)?;
+        admit()?;
+        self.require_creation_parent()?;
+        fs::mkdirat(&self.fd, name, Mode::RWXU)?;
+        // mkdirat is exclusive but does not return an fd. The admitted
+        // parent is not writable by other users; same-UID replacement is
+        // outside the ordinary cooperative workspace boundary.
+        let fd: File = fs::openat2(
+            &self.fd,
+            name,
+            OFlags::RDONLY | OFlags::DIRECTORY | SAFE,
+            Mode::empty(),
+            INSIDE,
+        )?
+        .into();
+        let m = fd.metadata()?;
+        let child = Self {
+            path: self.path.join(name),
+            fd,
+            identity: (m.dev(), m.ino()),
+            uid: self.uid,
+            private: true,
+        };
+        child.check()?;
+        self.require_creation_parent()?;
+        self.sync()?;
+        child.check()?;
+        Ok(child)
+    }
+
     pub(crate) fn sync(&self) -> Result<()> {
         self.check()?;
         self.fd.sync_all()?;

@@ -19,6 +19,7 @@
 | Linux X11 冲突归档与重新提交 | 同一隔离客机。旧基线提交实际返回 `409`；离线归档同一原号 `O`，不联网。另存已核定的当前头至新路径，显式提交生成新节点 `N3`；旧工作文件、封存和映射保留。 |
 | Linux CLI 单文件断点上传 | [隔离 Ubuntu/ext4 客机实测：`d75a1fe` 与 `cbe375c`](../zxs/docs/guides/resumable-upload-installed-qualification.md#已核对的-cli-客机验收)。覆盖真实回环 HTTPS/2 的断线、首块确认答复丢失后的显式续传及默认整文件对照。 |
 | Linux X11 桌面断点续传 | [`6a4b51d` 隔离 Ubuntu/ext4 客机实测](docs/guides/resumable-upload.md#x11-客机验收)。收到首块确认后断线，冷重开和核对原回执未自动发送；显式继续只发末尾 137 字节，原回执、唯一节点和正文准确。 |
+| Linux X11 桌面首次设置 | [隔离 Ubuntu/ext4 客机实测 `7f29f12`](https://github.com/isarmg/zxs/commit/7f29f120d6de898393383b0428d917e9e810d860)：选父目录，授权清单返回后才创建私用目录和数据库；正常重开零 TCP、文件不变。密码页取消不建目录，已有同名子目录拒绝且保留。 |
 
 归档结果区只在登录后显示原号 `O` 的回执查询入口；本次实测只确认入口出现，未执行查询。
 

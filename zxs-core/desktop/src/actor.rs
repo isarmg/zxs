@@ -20,8 +20,8 @@ use zxs_core::{
     r3::{Body, Branch, Catalog, Container, Detail, DisplayName, Id, Intent, Lookup, Target},
     session::{ExistingBasicLogin, ExistingBasicSession},
     workspace::{
-        Basis, CheckoutChoice, ConflictArchiveChoice, PreparedCancellation, PreparedSubmission,
-        Resolution, Review, UploadObservation, UploadSelection, Workspace,
+        Basis, CheckoutChoice, ConflictArchiveChoice, NewWorkspace, PreparedCancellation,
+        PreparedSubmission, Resolution, Review, UploadObservation, UploadSelection, Workspace,
     },
 };
 
@@ -35,6 +35,7 @@ const ACCEPTED: u8 = 2;
 /// behind a TLS or filesystem await. Acceptance and revocation arbitrate once.
 struct Decision {
     phase: AtomicU8,
+    creation: AtomicU8,
     confirmed_bytes: AtomicU64,
     revoked: Notify,
 }
@@ -44,8 +45,13 @@ pub struct Claim(Arc<Decision>);
 
 impl Claim {
     pub fn new() -> Self {
+        Self::connection(false)
+    }
+
+    pub fn connection(create: bool) -> Self {
         Self(Arc::new(Decision {
             phase: AtomicU8::new(OPEN),
+            creation: AtomicU8::new(if create { OPEN } else { REVOKED }),
             confirmed_bytes: AtomicU64::new(u64::MAX),
             revoked: Notify::new(),
         }))
@@ -98,6 +104,39 @@ impl Claim {
         Ok(())
     }
 
+    pub fn can_cancel_creation(&self) -> bool {
+        self.0.creation.load(Ordering::Acquire) == OPEN
+    }
+
+    pub fn creation_admitted(&self) -> bool {
+        self.0.creation.load(Ordering::Acquire) == ACCEPTED
+    }
+
+    pub fn revoke_creation(&self) -> bool {
+        let canceled = self
+            .0
+            .creation
+            .compare_exchange(OPEN, REVOKED, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok();
+        if canceled {
+            self.0.revoked.notify_one();
+        }
+        canceled
+    }
+
+    fn admit_creation(&self) -> Result<()> {
+        if !self.accepted()
+            || self
+                .0
+                .creation
+                .compare_exchange(OPEN, ACCEPTED, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            return Err(fail("the exact workspace creation choice was revoked"));
+        }
+        Ok(())
+    }
+
     // Use only with a separately guarded final wire cut. Notification avoids
     // waiting for the H2 timeout while holding an already canceled login.
     async fn unless_revoked<T>(&self, original: impl Future<Output = Result<T>>) -> Result<T> {
@@ -121,6 +160,7 @@ pub enum Action {
     Begin {
         origin: String,
         account: String,
+        create_under: Option<PathBuf>,
         claim: Claim,
     },
     Finish {
@@ -164,6 +204,7 @@ pub struct Prompt {
     pub account: String,
     pub claim: Claim,
     pub deadline: Instant,
+    pub new_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy)]
@@ -243,7 +284,12 @@ impl Snapshot {
 
 struct PendingLogin {
     prompt: Prompt,
-    channel: ExistingBasicLogin,
+    channel: LoginChannel,
+}
+
+enum LoginChannel {
+    Existing(ExistingBasicLogin),
+    Create(Box<NewWorkspace>),
 }
 
 enum Choice {
@@ -354,6 +400,9 @@ impl Owner {
     fn drop_login(&mut self) {
         if let Some(login) = self.login.take() {
             login.prompt.claim.revoke();
+            if login.prompt.new_path.is_some() {
+                login.prompt.claim.revoke_creation();
+            }
         }
         self.view.prompt = None;
     }
@@ -427,33 +476,56 @@ impl Owner {
         self.view.detail = None;
     }
 
-    async fn begin(&mut self, origin: String, account: String, claim: Claim) -> Result<()> {
+    async fn begin(
+        &mut self,
+        origin: String,
+        account: String,
+        create_under: Option<&Path>,
+        claim: Claim,
+    ) -> Result<()> {
         self.drop_login();
         if self.session.is_some() || !claim.live() {
             return Err(fail("login not authorized for the current selection"));
         }
-        let workspace = self
-            .workspace
-            .as_ref()
-            .ok_or_else(|| fail("no open workspace"))?;
-        let channel = claim
-            .unless_revoked(workspace.begin_existing_basic(&origin, &account))
-            .await?;
-        if !claim.live() {
+        let (channel, authority, account, new_path) = if let Some(parent) = create_under {
+            let ready = claim
+                .unless_revoked(NewWorkspace::begin(parent, &origin, &account))
+                .await?;
+            let authority = ready.principal().origin().to_owned();
+            let verified_account = ready.principal().account().to_owned();
+            let new_path = Some(ready.path().to_owned());
+            (
+                LoginChannel::Create(Box::new(ready)),
+                authority,
+                verified_account,
+                new_path,
+            )
+        } else {
+            let workspace = self
+                .workspace
+                .as_ref()
+                .ok_or_else(|| fail("no open workspace"))?;
+            let ready = claim
+                .unless_revoked(workspace.begin_existing_basic(&origin, &account))
+                .await?;
+            (LoginChannel::Existing(ready), origin, account, None)
+        };
+        if !claim.live() || (new_path.is_some() && !claim.can_cancel_creation()) {
             return Err(fail("login choice was revoked while verifying"));
         }
         let prompt = Prompt {
-            authority: origin,
+            authority,
             account,
             claim,
             deadline: Instant::now() + PROMPT_LIMIT,
+            new_path,
         };
         self.view.prompt = Some(prompt.clone());
         self.login = Some(PendingLogin { prompt, channel });
         Ok(())
     }
 
-    async fn finish(&mut self, claim: &Claim, password: Zeroizing<String>) -> Result<()> {
+    async fn finish(&mut self, claim: &Claim, password: Zeroizing<String>) -> Result<&'static str> {
         let ready = self
             .login
             .as_ref()
@@ -461,6 +533,7 @@ impl Owner {
         if !claim.same(&ready.prompt.claim)
             || Instant::now() >= ready.prompt.deadline
             || !claim.live()
+            || (ready.prompt.new_path.is_some() && !claim.can_cancel_creation())
         {
             return Err(fail("the exact login choice was revoked or already used"));
         }
@@ -469,28 +542,48 @@ impl Owner {
             .take()
             .ok_or_else(|| fail("lost verified login choice"))?;
         self.view.prompt = None;
-        let workspace = self
-            .workspace
-            .as_ref()
-            .ok_or_else(|| fail("no open workspace"))?;
-        // The fresh typed login remains a future. Cancellation before its
-        // first poll drops the password without constructing an auth header.
-        // After poll, the shared core checks the cut again before H2 send.
+        // Polling and final H2 admission use the same claim. A new workspace
+        // has a second internal local cut; accepting credentials cannot authorize
+        // a subsequently canceled creation.
         let until = ready.prompt.deadline;
-        let (session, first) = claim
-            .unless_revoked(workspace.finish_existing_basic_with_catalog(
-                ready.channel,
-                password,
-                || claim.admit_first_wire(until),
-            ))
-            .await?;
+        let admit_wire = || claim.admit_first_wire(until);
+        let (session, first, notice) = match ready.channel {
+            LoginChannel::Existing(channel) => {
+                let workspace = self
+                    .workspace
+                    .as_ref()
+                    .ok_or_else(|| fail("no open workspace"))?;
+                let (session, first) = claim
+                    .unless_revoked(
+                        workspace.finish_existing_basic_with_catalog(channel, password, admit_wire),
+                    )
+                    .await?;
+                (
+                    session,
+                    first,
+                    "Authorized catalog received on the selected channel.",
+                )
+            }
+            LoginChannel::Create(channel) => {
+                let path = channel.path().to_owned();
+                let (workspace, session, first) = claim
+                    .unless_revoked(channel.finish(password, admit_wire, || claim.admit_creation()))
+                    .await?;
+                self.reset(Some(workspace), Some(path));
+                (
+                    session,
+                    first,
+                    "Private workspace created and authorized. No file was uploaded.",
+                )
+            }
+        };
         self.view.authority = session.principal().origin().to_owned();
         self.view.account = session.principal().account().to_owned();
         self.receive_catalog(first);
         self.view.connected = true;
         self.session = Some(session);
         let _ = self.refresh_pending();
-        Ok(())
+        Ok(notice)
     }
 
     fn set_choice(&mut self, choice: Choice, card: Card) {
@@ -914,20 +1007,39 @@ impl Owner {
             Action::Begin {
                 origin,
                 account,
+                create_under,
                 claim,
             } => {
-                if self.begin(origin, account, claim).await.is_ok() {
+                if self
+                    .begin(origin, account, create_under.as_deref(), claim)
+                    .await
+                    .is_ok()
+                {
                     "Original HTTPS/2 destination verified. Enter the password only in the protected prompt."
+                } else if create_under.is_some() {
+                    "Choose a local parent without a zxs-workspace child and verify HTTPS/2. No password was used, and nothing was created."
                 } else {
                     "The original HTTPS/2 destination or workspace could not be verified. No password was used."
                 }
             }
             Action::Finish { claim, password } => {
-                if self.finish(&claim, password).await.is_ok() {
-                    "Authorized catalog received on the selected channel."
+                let creating = self
+                    .login
+                    .as_ref()
+                    .is_some_and(|ready| ready.prompt.new_path.is_some());
+                if let Ok(notice) = self.finish(&claim, password).await {
+                    notice
                 } else {
                     self.drop_login();
-                    "The selected login did not confirm an authorized catalog. No fallback was tried."
+                    if creating && claim.can_cancel_creation() {
+                        "Workspace creation did not reach its local write step. Check sign-in, parent folder and name; no fallback was tried."
+                    } else if creating && claim.creation_admitted() {
+                        "Workspace creation was not confirmed. Check zxs-workspace under the selected parent with Open existing before retrying; nothing was overwritten."
+                    } else if creating {
+                        "Workspace creation was canceled before writing. No folder was created."
+                    } else {
+                        "The selected login did not confirm an authorized catalog. No fallback was tried."
+                    }
                 }
             }
             Action::Dismiss => {
@@ -1118,6 +1230,53 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn authenticated_catalog_does_not_spend_the_separate_local_creation_choice() {
+        let ordinary = Claim::new();
+        assert!(
+            ordinary
+                .admit_first_wire(Instant::now() + PROMPT_LIMIT)
+                .is_ok()
+        );
+        assert!(ordinary.admit_creation().is_err());
+        assert!(!ordinary.revoke_creation());
+
+        let pending = Claim::connection(true);
+        let got_catalog = Cell::new(false);
+        let created = Cell::new(false);
+        let mut flow = pin!(pending.unless_revoked(async {
+            pending.admit_first_wire(Instant::now() + PROMPT_LIMIT)?;
+            poll_fn(|_| {
+                if got_catalog.get() {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            })
+            .await;
+            pending.admit_creation()?;
+            created.set(true);
+            Ok(())
+        }));
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(flow.as_mut().poll(&mut cx).is_pending());
+        assert!(pending.accepted());
+        assert!(!pending.revoke()); // First authenticated read cannot be revoked.
+        assert!(pending.revoke_creation());
+        got_catalog.set(true);
+        assert!(matches!(flow.as_mut().poll(&mut cx), Poll::Ready(Err(_))));
+        assert!(!created.get());
+
+        let approved = Claim::connection(true);
+        assert!(approved.admit_creation().is_err());
+        approved
+            .admit_first_wire(Instant::now() + PROMPT_LIMIT)
+            .unwrap();
+        approved.admit_creation().unwrap();
+        assert!(!approved.revoke_creation()); // The exact local cut won; no false cancellation.
+        assert!(approved.admit_creation().is_err());
+    }
 
     #[test]
     fn local_pending_pages_reach_or_clamp_every_original_after_reopen() {

@@ -310,6 +310,21 @@ pub struct ExistingBasicSession {
 
 #[cfg(target_os = "linux")]
 impl ExistingBasicLogin {
+    pub(crate) async fn begin_new(owner: Arc<()>, spelling: &str, account: &str) -> Result<Self> {
+        let origin = approved_origin(spelling)?;
+        validate_account(account)?;
+        let channel = H2Channel::connect(origin, account, |_| Ok(())).await?;
+        let original = SelectedWorkspace {
+            owner,
+            saved: channel.principal.clone(),
+        };
+        Ok(Self { channel, original })
+    }
+
+    pub(crate) fn principal(&self) -> &Principal {
+        &self.original.saved
+    }
+
     pub(crate) async fn begin(
         original: &Principal,
         owner: Arc<()>,
