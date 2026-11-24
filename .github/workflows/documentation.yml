@@ -18,31 +18,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - name: Check changed documentation (manual runs check all)
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+      - name: Check all tracked documentation in scope
         run: |
           python3 - <<'PY'
           import os
           from pathlib import Path
-          import re
           import subprocess
           import sys
 
           PROJECTS = {"zxs", "helper", "zxs-workspace", "zxs-core"}
           CATEGORIES = {"guides", "specs", "invariants", "archive"}
 
-          event, base = os.environ["EVENT"], os.environ.get("BASE", "")
-          if event == "workflow_dispatch" or base == "0" * 40:
-              command = ["git", "ls-files", "-z"]
-          elif re.fullmatch(r"[0-9a-f]{40}", base):
-              command = ["git", "diff", "--name-only", "-z", "--diff-filter=ACMR", base, "HEAD", "--"]
-          else:
-              sys.exit("Could not determine the base commit for documentation checks")
-          paths = subprocess.check_output(command).split(b"\0")
+          paths = subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
           problems = []
           for raw in filter(None, paths):
               path = Path(os.fsdecode(raw))
