@@ -1,5 +1,8 @@
 //! One verified raw-content pass; a fresh copy never reads its bodies back.
-use super::{Armed, CStr, File, HeldDir, OpaquePin, Place, invalid, io, pin, same_file};
+use super::super::super::super::Intent;
+use super::{
+    Armed, CStr, Checked, File, HeldDir, OpaquePin, Place, Selected, invalid, io, pin, same_file,
+};
 use crate::container_store::{Body, Change, Error, Receipt, codec, entry_leaf};
 
 use super::super::super::{
@@ -8,6 +11,9 @@ use super::super::super::{
     source::{self, Evidence, Member, qualified_row},
 };
 use std::io::Write;
+
+/// Current held scope and its verified immutable semantic target, before or after selection.
+pub(super) type View<'held, 'scope> = (&'held Selected<'scope>, &'held Checked<Intent>);
 
 pub(super) struct Tree {
     pub(super) at: HeldDir,
@@ -43,7 +49,7 @@ impl Tree {
             input.require()?;
             Ok(row)
         })?;
-        bind(armed, &at, &mut evidence)?;
+        bind(&plan.journal.original, &at, &mut evidence)?;
         Ok(Self {
             at,
             bytes: evidence.bytes,
@@ -51,7 +57,7 @@ impl Tree {
     }
 
     pub(super) fn cold(
-        armed: &Armed<'_, '_>,
+        view: View<'_, '_>,
         (proof, expected): (&Proof<'_>, &[u8]),
         (parent, name): (&HeldDir, &CStr),
         inode: u64,
@@ -60,7 +66,7 @@ impl Tree {
         if at.entity.inode != inode {
             return Err(invalid("the cold DATA target is not the exact READY inode"));
         }
-        let bytes = observe(armed, &at, Some(proof))?;
+        let bytes = observe(view, &at, Some(proof))?;
         if bytes != expected {
             return Err(invalid("the cold DATA move target differs from READY"));
         }
@@ -68,7 +74,11 @@ impl Tree {
     }
 
     pub(super) fn require_metadata(&self, armed: &Armed<'_, '_>) -> io::Result<()> {
-        if observe(armed, &self.at, None)? != self.bytes {
+        self.require_metadata_at((armed.plan.selected, &armed.plan.journal.original))
+    }
+
+    pub(super) fn require_metadata_at(&self, view: View<'_, '_>) -> io::Result<()> {
+        if observe(view, &self.at, None)? != self.bytes {
             return Err(invalid("the exact prepared DATA move target changed"));
         }
         Ok(())
@@ -135,8 +145,11 @@ fn pin_written(output: &HeldDir, name: &CStr, raw: &File) -> io::Result<OpaquePi
     Ok(exact)
 }
 
-fn observe(armed: &Armed<'_, '_>, at: &HeldDir, full: Option<&Proof<'_>>) -> io::Result<Vec<u8>> {
-    let selected = armed.plan.selected;
+fn observe(
+    (selected, intent): View<'_, '_>,
+    at: &HeldDir,
+    full: Option<&Proof<'_>>,
+) -> io::Result<Vec<u8>> {
     let live = selected.outer;
     let mut evidence = source::walk(at, selected.scope, live, |receipt| {
         let member = Member::open(at, receipt)?;
@@ -158,12 +171,12 @@ fn observe(armed: &Armed<'_, '_>, at: &HeldDir, full: Option<&Proof<'_>>) -> io:
         }
         Ok(member.row)
     })?;
-    bind(armed, at, &mut evidence)?;
+    bind(intent, at, &mut evidence)?;
     Ok(evidence.bytes)
 }
 
-fn bind(armed: &Armed<'_, '_>, at: &HeldDir, evidence: &mut Evidence) -> io::Result<()> {
-    let i = armed.plan.journal.original.value();
+fn bind(intent: &Checked<Intent>, at: &HeldDir, evidence: &mut Evidence) -> io::Result<()> {
+    let i = intent.value();
     if evidence.count != i.rows || evidence.ledger != i.ledger {
         return Err(invalid(
             "DATA move target does not have the exact held logical history",

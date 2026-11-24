@@ -92,7 +92,7 @@ impl HeldReady<'_, '_> {
         original.place_candidate(sync_routes)
     }
 
-    fn prove_arrival(&self) -> io::Result<()> {
+    pub(super) fn prove_arrival(&self) -> io::Result<()> {
         self.require()?;
         let plan = &self.armed.plan;
         plan.source.require_same(&plan.selected.observe_source()?)?;

@@ -1,6 +1,8 @@
-//! Private READY and no-clobber arrivals. Never select CR1 or retire source.
+//! Private READY and no-clobber arrivals; separate route selection owns the next cut.
 #[path = "arrival.rs"]
 mod arrival;
+#[path = "switch.rs"]
+pub(super) mod switch;
 #[path = "ready_tree.rs"]
 mod tree;
 
@@ -198,18 +200,7 @@ impl<'held, 'scope> HeldReady<'held, 'scope> {
         selected.pre_ready_names()?;
         armed.require_scope(place.layout())?;
         place.require_absence(&armed)?;
-        let directory = &armed.plan.journal.directory;
-        let ready = pin(directory, R)?;
-        let raw: [u8; READY_BYTES] = read_raw(&ready, READY_BYTES)?
-            .try_into()
-            .map_err(|_| invalid("the DATA move READY has the wrong extent"))?;
-        let chain = Journal::decode(JournalBytes {
-            intent: &armed.plan.journal.raw,
-            guard: Some(&armed.guard.raw),
-            ready: Some(&raw),
-            switched: None,
-            done: None,
-        })?;
+        let (ready, raw, chain) = read_ready(&armed.plan.journal, &armed.guard)?;
         let checked = Ready::decode(&raw, chain.intent())?;
         let draft = reopen_draft(&armed, place, &chain, checked.value())?;
         Self {
@@ -281,26 +272,62 @@ fn reopen_draft(
     chain: &Journal,
     expected: &Ready,
 ) -> io::Result<Draft> {
-    let directory = &armed.plan.journal.directory;
     let site = place.candidate_site(armed);
     let candidate = pin(site.0, site.1)?;
     require_candidate(&candidate, site, expected)?;
-    let sidecar = pin(directory, TARGET)?;
-    let expect = Expect::target(chain)?;
-    let bytes = read_raw(&sidecar, expect.extent()?)?;
-    let proof = Proof::decode(&bytes, &expect)?;
-    sidecar.require(directory, TARGET)?;
-    let target = Tree::cold(
-        armed,
-        (&proof, &bytes),
-        place.tree_site(armed.plan.selected),
-        expected.target_inode,
+    let (target, sidecar) = recover_target(
+        &armed.plan.journal,
+        armed.plan.selected,
+        place,
+        chain,
+        expected,
     )?;
     Ok(Draft {
         target,
         sidecar,
         candidate,
     })
+}
+
+fn read_ready(
+    journal: &BoundJournal,
+    guard: &HeldGuard,
+) -> io::Result<(OpaquePin, [u8; READY_BYTES], Journal)> {
+    let ready = pin(&journal.directory, R)?;
+    let raw: [u8; READY_BYTES] = read_raw(&ready, READY_BYTES)?
+        .try_into()
+        .map_err(|_| invalid("the DATA move READY has the wrong extent"))?;
+    let chain = Journal::decode(JournalBytes {
+        intent: &journal.raw,
+        guard: Some(&guard.raw),
+        ready: Some(&raw),
+        switched: None,
+        done: None,
+    })?;
+    ready.require(&journal.directory, R)?;
+    Ok((ready, raw, chain))
+}
+
+fn recover_target(
+    journal: &BoundJournal,
+    selected: &Selected<'_>,
+    place: Place,
+    chain: &Journal,
+    expected: &Ready,
+) -> io::Result<(Tree, OpaquePin)> {
+    let directory = &journal.directory;
+    let sidecar = pin(directory, TARGET)?;
+    let expect = Expect::target(chain)?;
+    let bytes = read_raw(&sidecar, expect.extent()?)?;
+    let proof = Proof::decode(&bytes, &expect)?;
+    sidecar.require(directory, TARGET)?;
+    let target = Tree::cold(
+        (selected, &journal.original),
+        (&proof, &bytes),
+        place.tree_site(selected),
+        expected.target_inode,
+    )?;
+    Ok((target, sidecar))
 }
 
 fn require_candidate(

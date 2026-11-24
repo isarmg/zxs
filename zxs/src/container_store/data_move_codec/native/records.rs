@@ -248,6 +248,15 @@ fn intend(
     source: &Source,
     journal: &HeldDir,
 ) -> io::Result<Intent> {
+    intend_with_old(selected, (route.raw, route.incarnation), source, journal)
+}
+
+fn intend_with_old(
+    selected: &Selected<'_>,
+    (old_route, old_birth): ([u8; ROUTE_BYTES], Birth),
+    source: &Source,
+    journal: &HeldDir,
+) -> io::Result<Intent> {
     let (from, to) = selected.roots.data;
     Ok(Intent {
         scope: selected.scope,
@@ -259,8 +268,8 @@ fn intend(
         state_parent: birth(&selected.roots.state.file)?,
         routes_parent: birth(&selected.routes.file)?,
         journal: birth(&journal.file)?,
-        old_route: route.raw,
-        old_birth: route.incarnation,
+        old_route,
+        old_birth,
         source_inode: source.inode(),
         rows: source.count,
         source_proof: source.hash,

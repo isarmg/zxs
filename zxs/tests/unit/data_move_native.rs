@@ -410,3 +410,6 @@ fn replacement_of_the_exact_cr1_precedes_any_durable_vacancy_flush() {
 
 #[path = "data_move_ready.rs"]
 mod ready_tests;
+
+#[path = "data_move_switch.rs"]
+mod switch_tests;
