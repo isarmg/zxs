@@ -31,6 +31,7 @@ import java.util.regex.Pattern;
 final class RemoteSaveJournal {
     private static final String STORE = "remote-saves";
     private static final int MAGIC = 0x52533331; // RS31
+    private static final int STAGED_MAGIC = 0x52534631; // RSF1
     private static final int PLAN_MAGIC = 0x52535031; // RSP1
     private static final int ATTEMPT_MAGIC = 0x52534131; // RSA1
     private static final int RECEIPT_MAGIC = 0x52535231; // RSR1
@@ -64,18 +65,29 @@ final class RemoteSaveJournal {
         private final Authority authority;
         private final RemoteSaveContract.Save save;
         private final byte[] body;
+        private final OrdinaryFileStage.Staged staged;
 
         private Prepared(Authority authority, RemoteSaveContract.Save save, byte[] body) {
+            this(authority, save, body, null);
+        }
+
+        private Prepared(Authority authority, RemoteSaveContract.Save save, byte[] body,
+                         OrdinaryFileStage.Staged staged) {
             this.authority = authority;
             this.save = save;
             this.body = body;
+            this.staged = staged;
         }
 
         Authority authority() { return authority; }
         RemoteSaveContract.Save save() { return save; }
 
-        /** A stream over the exact checked bytes; no later file or provider re-open. */
+        /** In-memory original, used by existing bounded-text fixtures. */
         InputStream body() { return new ByteArrayInputStream(body); }
+
+        private InputStream openBody(Context context) throws IOException {
+            return staged == null ? body() : OrdinaryFileStage.openBody(context, staged);
+        }
     }
 
     private RemoteSaveJournal() {}
@@ -97,6 +109,17 @@ final class RemoteSaveJournal {
                 encodeMarker(new Plan(authority, save), PLAN_MAGIC, null));
         writeRecord(context, fileName(save.operation()), bytes);
         return prepared;
+    }
+
+    static synchronized void prepareStaged(Context context, Plan plan, OrdinaryFileStage.Staged stage)
+            throws IOException {
+        need(plan != null && stage != null && plan.authority() != null && plan.save() != null);
+        var save = plan.save();
+        need(stage.equals(new OrdinaryFileStage.Staged(save.operation(), save.length(), save.sha256())));
+        try (InputStream verified = OrdinaryFileStage.openBody(context, stage)) {
+            writeRecord(context, nameFor(save.operation(), ".plan"), encodeMarker(plan, PLAN_MAGIC, null));
+            writeRecord(context, fileName(save.operation()), encodeMarker(plan, STAGED_MAGIC, null));
+        }
     }
 
     record Plan(Authority authority, RemoteSaveContract.Save save) {}
@@ -147,9 +170,30 @@ final class RemoteSaveJournal {
     }
 
     static synchronized Prepared beginAttempt(Context context, Prepared proposed) throws IOException {
+        need(proposed.staged == null);
         var save = proposed.save();
         var prepared = reopen(context, proposed.authority(), save.operation());
-        need(save.equals(prepared.save()) && Arrays.equals(proposed.body, prepared.body));
+        need(save.equals(prepared.save()) && Arrays.equals(proposed.body, prepared.body)
+                && java.util.Objects.equals(proposed.staged, prepared.staged));
+        markAttempt(context, prepared);
+        return prepared;
+    }
+
+    static synchronized InputStream beginWithBody(Context context, Plan original) throws IOException {
+        var prepared = reopen(context, original.authority(), original.save().operation());
+        need(original.equals(new Plan(prepared.authority(), prepared.save())));
+        var held = prepared.openBody(context);
+        try {
+            markAttempt(context, prepared);
+            return held;
+        } catch (IOException | RuntimeException failure) {
+            try { held.close(); } catch (IOException close) { failure.addSuppressed(close); }
+            throw failure;
+        }
+    }
+
+    private static void markAttempt(Context context, Prepared prepared) throws IOException {
+        var save = prepared.save();
         Plan plan = new Plan(prepared.authority(), prepared.save());
         Plan existing = attempted(context, plan.authority(), save.operation());
         if (existing == null) {
@@ -158,7 +202,6 @@ final class RemoteSaveJournal {
         } else {
             need(plan.equals(existing));
         }
-        return prepared;
     }
 
     static synchronized BigInteger receipt(Context context, Plan original) throws IOException {
@@ -235,6 +278,15 @@ final class RemoteSaveJournal {
     static synchronized Prepared reopen(Context context, Authority authority, String operation)
             throws IOException {
         byte[] bytes = readRecord(context, fileName(operation), false);
+        need(bytes.length >= Integer.BYTES);
+        if (java.nio.ByteBuffer.wrap(bytes).getInt() == STAGED_MAGIC) {
+            Plan checked = decodeMarker(bytes, authority, operation, STAGED_MAGIC).plan();
+            byte[] selector = readRecord(context, nameFor(operation, ".plan"), false);
+            need(checked.equals(decodeMarker(selector, authority, operation, PLAN_MAGIC).plan()));
+            var save = checked.save();
+            return new Prepared(checked.authority(), save, null,
+                    new OrdinaryFileStage.Staged(operation, save.length(), save.sha256()));
+        }
         return decode(bytes, operation, authority);
     }
 
@@ -385,6 +437,7 @@ final class RemoteSaveJournal {
             throws IOException {
         try (var input = openRecord(record, MAGIC)) {
             Plan plan = readPlan(input, expectedOperation, expectedAuthority);
+            need(plan.save().length() <= MAX_BODY);
             int count = (int) plan.save().length();
             need(count == input.available());
             byte[] body = new byte[count];
@@ -450,7 +503,6 @@ final class RemoteSaveJournal {
 
     private static void writePlan(DataOutputStream out, Plan plan) throws IOException {
         RemoteSaveContract.Save save = plan.save();
-        need(save.length() <= MAX_BODY);
         out.writeUTF(plan.authority().destinationIdentity());
         out.writeUTF(plan.authority().account());
         out.writeUTF(save.container());
@@ -472,7 +524,12 @@ final class RemoteSaveJournal {
             throw new IOException("unknown save target");
         }
         out.writeUTF(save.sha256());
-        out.writeInt((int) save.length());
+        if (save.length() <= MAX_BODY) {
+            out.writeInt((int) save.length());
+        } else {
+            out.writeInt(-1);
+            out.writeLong(save.length());
+        }
     }
 
     private static Plan readPlan(DataInputStream input, String expectedOperation, Authority expectedAuthority)
@@ -491,8 +548,9 @@ final class RemoteSaveJournal {
             default -> throw new IOException("unknown save target");
         };
         String digest = input.readUTF();
-        int count = input.readInt();
-        need(count >= 0 && count <= MAX_BODY);
+        int mark = input.readInt();
+        long count = mark == -1 ? input.readLong() : mark;
+        need(mark == -1 ? count > MAX_BODY : count >= 0 && count <= MAX_BODY);
         return new Plan(authority,
                 new RemoteSaveContract.Save(container, operation, node, sequence, target, count, digest));
     }

@@ -2,6 +2,7 @@ package org.zipworkspace.preview;
 
 import android.content.Context;
 import android.os.CancellationSignal;
+import android.os.ParcelFileDescriptor;
 import android.os.Process;
 import android.os.StatFs;
 import android.system.ErrnoException;
@@ -12,6 +13,7 @@ import android.system.StructStat;
 import java.io.File;
 import java.io.FileDescriptor;
 import java.io.IOException;
+import java.io.InputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
@@ -87,12 +89,26 @@ final class OrdinaryFileStage {
     // A lone .pending is never a body or an automatic resend candidate.
     static synchronized Staged reopen(Context context, Staged expected, CancellationSignal cancel)
             throws IOException {
+        try (var verified = openVerified(context, expected, cancel)) {
+            return expected;
+        }
+    }
+
+    static InputStream openBody(Context context, Staged expected) throws IOException {
+        return new ParcelFileDescriptor.AutoCloseInputStream(
+                openVerified(context, expected, new CancellationSignal()));
+    }
+
+    private static synchronized ParcelFileDescriptor openVerified(Context context, Staged expected,
+                                                                  CancellationSignal cancel)
+            throws IOException {
         require(expected != null && expected.id() != null && expected.id().matches("[0-9a-f]{32}")
                 && expected.length() >= 0 && expected.sha256() != null
                 && expected.sha256().matches("[0-9a-f]{64}"));
         var path = new File(context.getNoBackupFilesDir(), STORE);
         int uid = Process.myUid();
         require(uid != 0 && path.isAbsolute());
+        ParcelFileDescriptor verified = null;
         try (var parent = new LocalWorkspaceStore.Directory(path.getParentFile(), uid, false);
              var store = new LocalWorkspaceStore.Directory(path, uid, true);
              var names = store.openNames()) {
@@ -121,11 +137,17 @@ final class OrdinaryFileStage {
                 store.sync();
                 checkFile(Os.lstat(body.getPath()), original, store, expected.length(), 1);
                 checkFile(Os.fstat(in.fd), original, store, expected.length(), 1);
-                return expected;
+                verified = ParcelFileDescriptor.dup(in.fd);
             }
-        } catch (ErrnoException err) {
-            throw err.rethrowAsIOException();
+        } catch (ErrnoException | IOException | RuntimeException failure) {
+            if (verified != null) {
+                try { verified.close(); } catch (IOException close) { failure.addSuppressed(close); }
+            }
+            if (failure instanceof ErrnoException errno) throw errno.rethrowAsIOException();
+            if (failure instanceof IOException io) throw io;
+            throw (RuntimeException) failure;
         }
+        return verified;
     }
 
     private static Staged publish(LocalWorkspaceStore.Directory store, String id, Source source,
@@ -210,6 +232,7 @@ final class OrdinaryFileStage {
         var digest = sha();
         for (long offset = 0; offset < length;) {
             cancel.throwIfCanceled();
+            require(!Thread.currentThread().isInterrupted());
             try {
                 int count = (int) Math.min(bytes.length, length - offset);
                 int n = Os.pread(fd, bytes, 0, count, offset);

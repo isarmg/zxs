@@ -96,23 +96,18 @@ final class RemoteSaveSubmit {
         }
 
         if (Thread.currentThread().isInterrupted()) return status(Status.UNCONFIRMED);
-        RemoteSaveJournal.Prepared prepared;
+        InputStream held;
         try {
-            // Reopen after lookup; never promote a stale UI draft or replace an
-            // attempt's original body with newly prepared bytes.
-            prepared = RemoteSaveJournal.reopen(context, authority, operation);
-            if (!original.equals(new RemoteSaveJournal.Plan(prepared.authority(), prepared.save()))) {
-                return status(Status.LOCAL_UNAVAILABLE);
-            }
-            prepared = RemoteSaveJournal.beginAttempt(context, prepared);
+            // Prove the original body after lookup, then hold it while persisting the attempt.
+            held = RemoteSaveJournal.beginWithBody(context, original);
         } catch (IOException unavailable) {
             return status(Status.LOCAL_UNAVAILABLE);
         }
 
-        if (Thread.currentThread().isInterrupted() || !authority.equals(exchange.authority())) {
-            return status(Status.UNCONFIRMED);
-        }
-        try (InputStream body = prepared.body()) {
+        try (InputStream body = held) {
+            if (Thread.currentThread().isInterrupted() || !authority.equals(exchange.authority())) {
+                return status(Status.UNCONFIRMED);
+            }
             var response = exchange.post(save.submitPath(), save.submitHeaders(), body);
             if (!authority.equals(exchange.authority()) || response == null) return status(Status.UNCONFIRMED);
             var after = RemoteSaveContract.project(save, false, response.status(), response.data());

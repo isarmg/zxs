@@ -6,6 +6,7 @@ import androidx.test.platform.app.InstrumentationRegistry;
 import org.junit.Test;
 
 import java.io.File;
+import java.math.BigInteger;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.security.MessageDigest;
@@ -72,6 +73,32 @@ public final class OrdinaryFileStageTest {
         } finally {
             Files.deleteIfExists(pending);
             Files.deleteIfExists(body);
+        }
+    }
+
+    @Test public void diskPlanReopensExactVerifiedBodyAndRefusesChangedSource() throws Exception {
+        var source = new Source();
+        var result = OrdinaryFileStage.stage(context(), OrdinaryFileStage.newId(), source, source.cancel);
+        var path = new File(store(), result.id() + ".body").toPath();
+        var authority = new RemoteSaveJournal.Authority("55".repeat(32), "alice");
+        var save = new RemoteSaveContract.Save("11".repeat(16), result.id(), "33".repeat(16),
+                BigInteger.ZERO, new RemoteSaveContract.FirstMain("whole.bin"), result.length(), result.sha256());
+        var plan = new RemoteSaveJournal.Plan(authority, save);
+        try {
+            RemoteSaveJournal.prepareStaged(context(), plan, result);
+            assertEquals(save, RemoteSaveJournal.reopen(context(), authority, result.id()).save());
+            assertTrue(RemoteSaveJournal.plans(context(), authority, null).rows().contains(plan));
+            try (var held = RemoteSaveJournal.beginWithBody(context(), plan)) {
+                assertArrayEquals(source.original, held.readAllBytes());
+            }
+            assertEquals(plan, RemoteSaveJournal.attempted(context(), authority, result.id()));
+            byte[] corrupt = source.original.clone();
+            corrupt[0] ^= 1;
+            Files.write(path, corrupt);
+            assertThrows(IOException.class, () -> RemoteSaveJournal.beginWithBody(context(), plan));
+            assertEquals(plan, RemoteSaveJournal.attempted(context(), authority, result.id()));
+        } finally {
+            Files.deleteIfExists(path);
         }
     }
 
