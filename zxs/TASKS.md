@@ -12,6 +12,7 @@
 | [正文 Range 读取](docs/specs/payload-range.md) | [CI通过] [`090e76d` ZXS 源码作业](https://github.com/isarmg/zxs/actions/runs/45337302724/job/138252297285)的 7 个用例覆盖 Range 解析、原 R3 路由隔离、鉴权和响应边界。未验安装后的真实 HTTPS/2 读回。 |
 | 独立构建 | [CI通过] [`7f249da` 的独立 ELF 构建和检查](https://github.com/isarmg/zxs/actions/runs/45332479104/job/138236653339)。这不证明已安装、发布或签名。 |
 | 旧提交的隔离客机 | [CI通过] [`7a88536` 的通过阶段](https://github.com/isarmg/zxs/actions/runs/45322511258/job/138204176887)：普通账号首设、全量写入、同号续查、双 DATA 和回收，以及实际 TLS/HTTP/2 全量写入读回。后续 FUSE 阶段失败；缺盘冷启动与重挂未执行。 |
+| [Linux CLI 分块续传](docs/guides/resumable-upload-installed-qualification.md#已核对的-cli-客机验收) | `d75a1fe` 安装在无网卡 Ubuntu/ext4 客机，收到首块确认后断线、首块确认答复完全丢失，两种情况均按原号续传。回环 HTTPS/2 上传，独立 HTTP/1.1 逐字节读回；同尺寸的默认 Basic 整传仍只发一次。 |
 
 ## 待验门槛
 
@@ -23,7 +24,7 @@
 | [外部文件导入](../helper/docs/guides/offline-imports.md) | [仅静态] [固定批次](docs/specs/offline-import-batch.md)仍需跨进程验父进程失答、原回执无源重放和半批恢复。保留来源；不就地覆盖非空盘，不迁移旧池。 |
 | 运行时断电、掉盘与权限变化 | [仅静态] 验缺盘冷启动、原盘恢复、其他容器独立可用、离线盘相关全局结果拒绝、掉电后的确定回执以及撤权不误报未找到。 |
 | [会话与后端复用](docs/specs/sessions.md) | [仅静态] 待已验证的 HTTPS/H2 入口确认新旧模式、到期、重启与只读原回执找回。 |
-| [分块上传与续传](docs/specs/resumable-uploads.md) | [仅静态] 已接入正式监听，旧 R3 不变。[真实会话与流式中转验收](docs/guides/resumable-upload-installed-qualification.md)待跑，覆盖慢块、断流、重开与原回执。 |
+| [分块上传与续传](docs/specs/resumable-uploads.md) | [仅静态] [流式链路](docs/guides/resumable-upload-installed-qualification.md#流式链路待验)仍待验低速块、固定入站时限及截断。服务端重启、会话到期和桌面断点续传也未验。 |
 
 ## 可复核的验收入口
 
