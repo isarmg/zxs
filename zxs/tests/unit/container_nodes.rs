@@ -1184,6 +1184,32 @@ fn first_save_reserves_only_on_valid_intake_and_reuses_reserved_disk_after_reope
 }
 
 #[test]
+fn a_first_body_that_cannot_fit_never_reads_input_or_reserves_disk() {
+    struct UnexpectedRead;
+    impl Read for UnexpectedRead {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            panic!("a rejected first intake read request bytes");
+        }
+    }
+
+    let (_temp, root, store) = fixture();
+    let mut impossible = body(b"one");
+    impossible.length = u64::MAX;
+    assert!(matches!(
+        store.save(
+            mutation(2),
+            first_node(id(10), impossible, "unfit".into()),
+            UnexpectedRead,
+            || Ok(())
+        ),
+        Err(Error::Io(error)) if error.kind() == io::ErrorKind::StorageFull
+    ));
+    assert_eq!(store.routes.get(id(1)).unwrap(), None);
+    assert!(!store.volumes[0].container(id(1)).exists());
+    assert!(fs::read_dir(root.join("staging")).unwrap().next().is_none());
+}
+
+#[test]
 fn exact_routes_keep_other_ids_usable_when_one_data_root_is_missing() {
     let local = PrivateTemp::under(&std::env::temp_dir());
     let system = local.0.join("system");
@@ -1205,6 +1231,9 @@ fn exact_routes_keep_other_ids_usable_when_one_data_root_is_missing() {
         request: id(request),
     };
     let first = |name: &str| first_node(id(10), body(b"one"), name.into());
+    // Pin the first exact route independently of the physical capacity of
+    // this single-filesystem route-affinity fixture.
+    store.routes.reserve(id(1), [2; 32]).unwrap();
     store
         .save(op(1, 5), first("first"), &b"one"[..], || Ok(()))
         .unwrap();
@@ -1213,6 +1242,7 @@ fn exact_routes_keep_other_ids_usable_when_one_data_root_is_missing() {
         Err(Error::Conflict(Conflict::AlreadyExists))
     ));
     assert_eq!(store.routes.get(id(2)).unwrap(), None);
+    store.routes.reserve(id(2), [1; 32]).unwrap();
     store
         .save(op(2, 5), first("second"), &b"one"[..], || Ok(()))
         .unwrap();

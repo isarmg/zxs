@@ -8,6 +8,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/sysmacros.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
@@ -137,6 +138,21 @@ int zxs_pin_record(int fd, const char *name) {
 /* No brand-specific feature: create a new ordinary private candidate. Never reopen or truncate a preexisting name. */
 int zxs_create_new_regular(int parent, const char *name) {
     return openat(parent, name, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+}
+
+/* A read-only capacity sample of the already held DATA staging directory. */
+int zxs_data_available(int fd, uint64_t *out) {
+    struct statvfs observed;
+    if (fstatvfs(fd, &observed) < 0) return -1;
+    if (observed.f_flag & ST_RDONLY) { errno = EROFS; return -1; }
+    if (!observed.f_frsize || observed.f_bavail > observed.f_blocks ||
+        observed.f_bavail > observed.f_bfree ||
+        (uintmax_t)observed.f_bavail > UINT64_MAX / (uintmax_t)observed.f_frsize) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    *out = (uint64_t)observed.f_bavail * (uint64_t)observed.f_frsize;
+    return 0;
 }
 
 int zxs_mount_id(int fd, uint64_t *out) {

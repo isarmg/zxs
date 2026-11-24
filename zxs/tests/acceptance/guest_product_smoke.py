@@ -2,6 +2,7 @@
 """Narrow same-guest product smoke; only for the disposable Actions guest."""
 
 import base64
+from contextlib import contextmanager
 import errno
 import hashlib
 import http.client
@@ -76,6 +77,36 @@ def guard(*, initialized=False):
                     and not component.is_symlink(), "fixture program path is not root-protected")
     # Keep the process's core dump limit at zero before handling credentials.
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
+
+@contextmanager
+def prefer_data(preferred):
+    """Tilt only the two freshly created disposable ext4 guest volumes."""
+    require(preferred in DATA, "capacity test escaped the admitted guest DATA roots")
+    other = next(root for root in DATA if root != preferred)
+
+    def available(root):
+        stat = os.statvfs(root / "staging")
+        return stat.f_bavail * stat.f_frsize
+
+    have, competing = available(preferred), available(other)
+    # Never fill the fixture or depend on the stable-token tiebreak here.
+    ballast = competing - have + 1024 * 1024
+    if ballast <= 0:
+        yield
+        return
+    require(ballast <= 8 * 1024 * 1024 and competing - ballast > 4 * 1024 * 1024,
+            "unexpected capacity difference between the disposable fixture volumes")
+    path = other / ".zxs-acceptance-capacity"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    try:
+        os.posix_fallocate(fd, 0, ballast)
+        os.fsync(fd)
+        require(available(preferred) > available(other), "cannot establish fixture capacity order")
+        yield
+    finally:
+        os.close(fd)
+        path.unlink()
 
 
 def issue_setup(password):
@@ -392,8 +423,11 @@ class Smoke:
         peer_body = b"independent container on other DATA\n"
         peer_target = {"kind": "first_main", "name": "peer.bin"}
         peer_headers = self.save_headers(self.peer_operation, self.peer_node, peer_body, name=b"peer.bin")
-        _, raw = self.request("POST", self.peer + "/branches/main/nodes", 200,
-                              headers=peer_headers, body=peer_body)
+        with prefer_data(DATA[1]):
+            _, raw = self.request("POST", self.peer + "/branches/main/nodes", 200,
+                                  headers=peer_headers, body=peer_body)
+            require(self.physical_container(self.peer).parents[1] == DATA[1],
+                    "new peer did not choose the qualified DATA with more free bytes")
         self.expect_receipt(json.loads(raw), self.peer_operation, self.peer_node, 1, peer_body,
                             peer_target, self.peer)
         source = self.physical_container(self.container)
@@ -451,7 +485,10 @@ class Smoke:
         first = self.save_headers(self.first_operation, self.first_node, base)
         append = self.save_headers(self.next_operation, self.next_node, new, self.first_node)
         print("ZXS-PRODUCT-SMOKE stage=first-save", flush=True)
-        _, raw = self.request("POST", endpoint, 200, headers=first, body=base)
+        with prefer_data(DATA[0]):
+            _, raw = self.request("POST", endpoint, 200, headers=first, body=base)
+            require(self.physical_container(self.container).parents[1] == DATA[0],
+                    "first container did not choose the qualified DATA with more free bytes")
         receipt = json.loads(raw)
         first_target = {"kind": "first_main", "name": "fixture.bin"}
         self.expect_receipt(receipt, self.first_operation, self.first_node, 1, base, first_target)

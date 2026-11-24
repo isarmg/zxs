@@ -6,6 +6,7 @@ mod model;
 pub(crate) mod offline_catalog;
 mod operation;
 mod payload;
+mod placement;
 mod recycle;
 mod recycle_material;
 mod recycle_receipt;
@@ -21,6 +22,7 @@ use crate::hash::Sha256;
 pub(crate) use model::{Body, Change, Conflict, Id, MAIN, Mutation, Node, NodeId, Receipt, Target};
 use model::{Decision, State};
 pub(crate) use operation::OperationReceipt;
+use placement::{Intake, Placement};
 pub(crate) use recycle::RecycleReceipt;
 use routes::Routes;
 use stage::FlatStage;
@@ -47,6 +49,7 @@ use std::{
 
 const TAG_BYTES: usize = 1024 * 1024;
 const OBJECT_SLOT_TARGET: usize = 128;
+const PLACEMENT_ATTEMPTS: usize = 4;
 
 pub(crate) enum Error {
     Io(io::Error),
@@ -249,6 +252,7 @@ pub(crate) struct Store {
     volumes: Vec<DataVolume>,
     routes: Routes,
     next_stage: AtomicU64,
+    placement: Placement,
     // Catalogue lock selects an independent short per-container lock.
     // No upload reads, hashing, or fsync while acquiring this map.
     objects: Mutex<BTreeMap<Id, Arc<Mutex<Option<State>>>>>,
@@ -315,6 +319,7 @@ impl Store {
             volumes,
             routes,
             next_stage: AtomicU64::new(0),
+            placement: Placement::default(),
             objects: Mutex::new(BTreeMap::new()),
             names: Mutex::new(()),
             archive: None,
@@ -339,21 +344,67 @@ impl Store {
     fn write_volume(
         &self,
         id: Id,
-        first: bool,
+        first_body: Option<u64>,
         authorize: &impl Fn() -> io::Result<()>,
-    ) -> Result<&DataVolume, Error> {
+    ) -> Result<(&DataVolume, Option<Intake<'_>>), Error> {
         if self.recycled(id)?.is_none() {
             if let Some(volume) = self.routed(id)? {
-                return Ok(volume);
+                return Ok((volume, None));
             }
-            if first {
-                // The roster is nonempty and sorted by stable disk token.
-                // Only an ID with no route can be assigned an intake root.
-                return Ok(&self.volumes[usize::from(id[0]) % self.volumes.len()]);
+            if let Some(bytes) = first_body {
+                return self.first_volume(id, bytes, authorize);
             }
         }
         authorize()?;
         Err(Conflict::MissingContainer.into())
+    }
+
+    fn first_volume(
+        &self,
+        id: Id,
+        bytes: u64,
+        authorize: &impl Fn() -> io::Result<()>,
+    ) -> Result<(&DataVolume, Option<Intake<'_>>), Error> {
+        for _ in 0..PLACEMENT_ATTEMPTS {
+            let generation = self.placement.generation()?;
+            let samples: Vec<_> = self
+                .volumes
+                .iter()
+                .filter_map(|volume| {
+                    volume
+                        .available_bytes()
+                        .ok()
+                        .map(|free| (volume.token, free))
+                })
+                .collect();
+
+            // A concurrent first save can make the durable route decisive
+            // during the native queries or as this provisional slot is issued.
+            if let Some(volume) = self.routed(id)? {
+                return Ok((volume, None));
+            }
+            let proposed = self.placement.reserve(generation, id, bytes, &samples);
+            if let Some(volume) = self.routed(id)? {
+                let matching = proposed
+                    .ok()
+                    .flatten()
+                    .filter(|lease| lease.token == volume.token);
+                return Ok((volume, matching));
+            }
+            match proposed {
+                Ok(Some(lease)) => {
+                    let volume = self.enrolled(lease.token).ok_or_else(unenrolled_data)?;
+                    return Ok((volume, Some(lease)));
+                }
+                Ok(None) => continue,
+                Err(error) => {
+                    authorize()?;
+                    return Err(error.into());
+                }
+            }
+        }
+        authorize()?;
+        Err(io::Error::from(io::ErrorKind::WouldBlock).into())
     }
 
     fn recycled(&self, id: Id) -> io::Result<Option<(RecycleReceipt, HeldDir)>> {
@@ -428,14 +479,11 @@ impl Store {
         input: impl Read,
         authorize: impl Fn() -> io::Result<()>,
     ) -> Result<Receipt, Error> {
-        let Change::Save { target, .. } = &change else {
+        let Change::Save { body, target, .. } = &change else {
             return Err(invalid("a node requires a complete save operation").into());
         };
-        let volume = self.write_volume(
-            mutation.container,
-            matches!(target, Target::FirstMain { .. }),
-            &authorize,
-        )?;
+        let first_body = matches!(target, Target::FirstMain { .. }).then_some(body.length);
+        let (volume, _intake) = self.write_volume(mutation.container, first_body, &authorize)?;
         self.save_on(mutation, change, input, volume, authorize)
     }
 
@@ -468,7 +516,7 @@ impl Store {
         if matches!(change, Change::Save { .. }) {
             return Err(invalid("a node must carry the original complete body").into());
         }
-        let volume = self.write_volume(mutation.container, false, &authorize)?;
+        let (volume, _intake) = self.write_volume(mutation.container, None, &authorize)?;
         self.publish(
             mutation,
             change,

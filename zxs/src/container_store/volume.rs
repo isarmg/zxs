@@ -2,11 +2,15 @@
 use super::{DataRoot, Id, State, hex, invalid, read_state};
 use crate::fs::HeldDir;
 use std::{
-    ffi::CString,
+    ffi::{CString, c_int},
     fs::{self, File},
     io,
     os::{fd::AsRawFd, unix::fs::MetadataExt},
 };
+
+unsafe extern "C" {
+    fn zxs_data_available(fd: c_int, bytes: *mut u64) -> c_int;
+}
 
 pub(super) struct DataVolume {
     pub(super) token: [u8; 32],
@@ -103,6 +107,17 @@ impl DataVolume {
         self.root.require_named()?;
         self.data.require_named()?;
         self.staging.require_named()
+    }
+
+    pub(super) fn available_bytes(&self) -> io::Result<u64> {
+        self.require_named()?;
+        let mut bytes = 0;
+        // SAFETY: the qualified staging FD stays held; bytes is a live u64.
+        if unsafe { zxs_data_available(self.staging.file.as_raw_fd(), &raw mut bytes) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        self.require_named()?;
+        Ok(bytes)
     }
 
     pub(super) fn sync_data(&self) -> io::Result<()> {
