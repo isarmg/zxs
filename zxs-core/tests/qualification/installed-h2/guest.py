@@ -151,7 +151,8 @@ def pty_run(name, exe, args, choices, *, connected=None, rejected=False, watched
     pid, master = pty.fork()
     if pid == 0:
         try:
-            for sig in (signal.SIGPIPE, signal.SIGXFSZ):
+            # Bash starts the guest worker asynchronously and ignores INT and QUIT.
+            for sig in (signal.SIGINT, signal.SIGQUIT, signal.SIGPIPE, signal.SIGXFSZ):
                 signal.signal(sig, signal.SIG_DFL)
             # The prompt can be printed before rpassword changes the terminal.
             # Disable echo from the start, including for Helper's two prompts.
@@ -355,7 +356,7 @@ def enroll_and_leave_original(lane, wire, context, authority, origin, password, 
 def guest_phase(name):
     (CONTROL / "request" / name).mkdir(0o700)
     ready_marker = CONTROL / "ready" / name
-    end = time.monotonic() + TIMEOUT
+    end = time.monotonic() + 240
     while time.monotonic() < end:
         try:
             m = ready_marker.lstat()

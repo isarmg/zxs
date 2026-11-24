@@ -61,7 +61,8 @@ trap cleanup EXIT
 stage=verify-seed
 cd "$media"
 sha256sum --strict -c SHA256SUMS
-install -m 0755 -d "$dest" "$dest/old/bin" "$dest/new/bin" "$dest/deps" "$dest/fixture-tls" /zxs /zxs/bin
+install -m 0755 -d "$dest" "$dest/old" "$dest/new" \
+    "$dest/old/bin" "$dest/new/bin" "$dest/deps" "$dest/fixture-tls" /zxs /zxs/bin
 install -m 0755 zxs helper /zxs/bin/
 install -m 0755 zxs-client-old "$dest/old/bin/zxs-client"
 install -m 0755 zxs-client-new "$dest/new/bin/zxs-client"
@@ -79,6 +80,7 @@ for path in Path(sys.argv[1]).rglob("*"):
 PY
 
 stage=mounts
+install -d -m 0755 /zxs/state
 install -d -m 0700 -o 23100 -g 23100 "$state" /var/lib/zxs-acceptance-system
 for role in data-a data-b recycle client; do
     if [[ "$role" == client ]]; then target=/mnt/zxs-core-qualification-client
