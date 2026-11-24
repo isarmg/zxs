@@ -1,0 +1,16 @@
+name: Workspace Android hosted emulator
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  android-emulator:
+    if: github.repository == 'isarmg/zxs' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Run Android instrumentation and cold recovery
+        run: bash zxs-workspace/android/ci/hosted-emulator.sh
