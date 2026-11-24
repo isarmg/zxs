@@ -80,6 +80,8 @@ jobs:
           unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
           unset LIBSQLITE3_SYS_USE_PKG_CONFIG LIBSQLITE3_FLAGS
           cases=(
+            actor::tests::local_pending_pages_reach_or_clamp_every_original_after_reopen
+            actor::tests::first_preview_keeps_exact_name_and_body_without_inventing_an_original
             actor::tests::prewire_cancel_during_sender_ready_refuses_the_first_auth_cut
             actor::tests::revocation_and_acceptance_are_single_original_decisions
             secret::tests::only_previously_armed_direct_text_survives_in_fixed_secret_storage
@@ -88,6 +90,7 @@ jobs:
             secret::tests::overlong_batch_is_not_truncated_and_left_available
             secret::tests::only_new_enter_after_composition_can_submit
             secret::tests::only_explicit_foreground_paste_is_requested_and_enter_ends_that_batch
+            view::tests::second_file_replaces_only_an_automatically_suggested_name
             view::tests::a_card_needs_prior_native_visibility_and_the_same_exact_claim
             view::tests::close_event_wins_over_an_old_or_a_new_card_in_that_frame
             clipboard::tests::native_paste_keeps_its_target_through_glows_empty_pass

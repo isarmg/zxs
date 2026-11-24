@@ -13,6 +13,7 @@ pub enum Field {
     Workspace,
     CheckoutFolder,
     WorkingFile,
+    FirstFile,
 }
 
 pub struct Selection {
@@ -34,10 +35,11 @@ impl Selection {
                     Field::Workspace => "Select the existing ZXS private directory",
                     Field::CheckoutFolder => "Select a folder for the new ordinary file",
                     Field::WorkingFile => "Select the ordinary working file",
+                    Field::FirstFile => "Select the ordinary file to submit",
                 });
                 let path = match field {
                     Field::Workspace | Field::CheckoutFolder => dialog.pick_folder(),
-                    Field::WorkingFile => dialog.pick_file(),
+                    Field::WorkingFile | Field::FirstFile => dialog.pick_file(),
                 };
                 let _ = answer.send(path);
                 repaint.request_repaint();

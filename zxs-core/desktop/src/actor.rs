@@ -17,7 +17,7 @@ use tokio::sync::{Notify, mpsc, watch};
 use zeroize::Zeroizing;
 use zxs_core::{
     Result,
-    r3::{Body, Branch, Catalog, Container, Detail, Id, Intent, Lookup},
+    r3::{Body, Branch, Catalog, Container, Detail, DisplayName, Id, Intent, Lookup},
     session::{ExistingBasicLogin, ExistingBasicSession},
     workspace::{Basis, CheckoutChoice, Resolution, Review, Workspace},
 };
@@ -130,12 +130,19 @@ pub enum Action {
         output: PathBuf,
     },
     Review(PathBuf),
+    ReviewFirst {
+        path: PathBuf,
+        name: DisplayName,
+    },
     ReviewSend,
     Approve {
         choice: Claim,
         gesture: Claim,
     },
     Lookup(Id),
+    PendingPage {
+        next: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -151,6 +158,19 @@ pub enum Effect {
     Checkout,
     Freeze,
     Send,
+    FirstUpload,
+}
+
+impl Effect {
+    pub fn sends(self) -> bool {
+        matches!(self, Self::Send | Self::FirstUpload)
+    }
+}
+
+#[derive(Clone)]
+pub enum CardTarget {
+    Mapped(Basis),
+    First(DisplayName),
 }
 
 #[derive(Clone)]
@@ -158,7 +178,7 @@ pub struct Card {
     pub claim: Claim,
     pub effect: Effect,
     pub path: String,
-    pub basis: Basis,
+    pub target: CardTarget,
     pub body: Body,
     pub intent: Option<Intent>,
 }
@@ -178,6 +198,7 @@ pub struct Snapshot {
     pub working: Option<PathBuf>,
     pub card: Option<Card>,
     pub pending: Vec<Id>,
+    pub pending_start: usize,
     pub pending_more: bool,
     pub fresh_send: bool,
     pub resolution: Option<Resolution>,
@@ -191,6 +212,7 @@ struct PendingLogin {
 
 enum Choice {
     Checkout(CheckoutChoice),
+    FirstUpload(Review),
     Freeze(Review),
     Send(Intent),
 }
@@ -206,6 +228,9 @@ impl Choice {
             }
             Self::Send(_) => {
                 "Submit not confirmed. Keep the original operation and check its receipt; do not resend here."
+            }
+            Self::FirstUpload(_) => {
+                "No upload request was sent. The source changed or local staging was refused. Check Pending originals before reviewing again."
             }
         }
     }
@@ -313,8 +338,10 @@ impl Owner {
             .as_ref()
             .ok_or_else(|| fail("no open workspace"))?
             .pending()?;
-        self.view.pending_more = all.len() > PENDING_DISPLAY;
-        self.view.pending = all.into_iter().take(PENDING_DISPLAY).collect();
+        let page = pending_page(all.len(), self.view.pending_start);
+        self.view.pending_start = page.start;
+        self.view.pending_more = page.end < all.len();
+        self.view.pending = all[page].to_vec();
         self.view.fresh_send = self.fresh.is_some();
         Ok(())
     }
@@ -420,7 +447,7 @@ impl Owner {
             claim: Claim::new(),
             effect: Effect::Checkout,
             path: choice.output().display().to_string(),
-            basis: choice.basis().clone(),
+            target: CardTarget::Mapped(choice.basis().clone()),
             body: choice.basis().body.clone(),
             intent: None,
         };
@@ -444,15 +471,31 @@ impl Owner {
             claim: Claim::new(),
             effect: Effect::Freeze,
             path: review.path().to_owned(),
-            basis: review
-                .basis()
-                .ok_or_else(|| fail("first uploads are not in this desktop slice"))?
-                .clone(),
+            target: CardTarget::Mapped(
+                review
+                    .basis()
+                    .ok_or_else(|| fail("no original mapping"))?
+                    .clone(),
+            ),
             body: review.body().clone(),
             intent: None,
         };
         self.set_choice(Choice::Freeze(review), card);
         Ok("Review these full-file bytes. Freezing does not upload.")
+    }
+
+    fn review_first(&mut self, path: PathBuf, name: DisplayName) -> Result<()> {
+        let (workspace, _) = self.online()?;
+        let review = workspace.review(&path, Some(name))?;
+        let card = first_card(
+            review.path(),
+            review
+                .name()
+                .ok_or_else(|| fail("missing reviewed display name"))?,
+            review.body(),
+        );
+        self.set_choice(Choice::FirstUpload(review), card);
+        Ok(())
     }
 
     fn review_send(&mut self) -> Result<()> {
@@ -468,7 +511,7 @@ impl Owner {
             claim: Claim::new(),
             effect: Effect::Send,
             path: path.clone(),
-            basis: basis.clone(),
+            target: CardTarget::Mapped(basis.clone()),
             body: intent.body.clone(),
             intent: Some(intent.clone()),
         };
@@ -491,6 +534,44 @@ impl Owner {
                 w.checkout_selected(remote, original, true).await?;
                 self.view.working = Some(path);
                 Ok("Verified node saved to the exact new ordinary file.")
+            }
+            Choice::FirstUpload(review) => {
+                let remote = self
+                    .session
+                    .as_ref()
+                    .ok_or_else(|| fail("no authorized session"))?;
+                // This branch only runs after the original foreground approval.
+                // Prepare selects one new container/operation/body and durably
+                // retains it before the existing exact submit preflight can POST.
+                let intent = match w.prepare(&review, true) {
+                    Ok(Some(intent)) => intent,
+                    Ok(None) => return Err(fail("no frozen first upload")),
+                    Err(error) => {
+                        let _ = self.refresh_pending();
+                        return Err(error);
+                    }
+                };
+                let result = w
+                    .submit_existing(remote, &intent.operation_id, true)
+                    .await
+                    .unwrap_or(Resolution {
+                        operation: intent.operation_id,
+                        status: Lookup::Unknown,
+                        local_cleanup_pending: false,
+                    });
+                let confirmed = matches!(result.status, Lookup::Confirmed { .. });
+                self.view.resolution = Some(result);
+                let _ = self.refresh_pending();
+                if confirmed {
+                    self.view.working = Some(PathBuf::from(review.path()));
+                    Ok(
+                        "New remote file confirmed. Select Refresh catalog to see the current listing.",
+                    )
+                } else {
+                    Ok(
+                        "Keep the original operation shown below and check its receipt. No automatic resend.",
+                    )
+                }
             }
             Choice::Freeze(review) => {
                 let basis = review
@@ -691,6 +772,13 @@ impl Owner {
             Action::Review(path) => self.review(path).unwrap_or(
                 "Select a previously mapped ordinary file without another active local freeze.",
             ),
+            Action::ReviewFirst { path, name } => {
+                if self.review_first(path, name).is_ok() {
+                    "Review this new remote file. Only your final Submit can send it."
+                } else {
+                    "Choose an unmapped ordinary file and its exact remote name in this authorized workspace."
+                }
+            }
             Action::ReviewSend => {
                 if self.review_send().is_ok() {
                     "Review the exact frozen operation before sending."
@@ -699,6 +787,20 @@ impl Owner {
                 }
             }
             Action::Approve { choice, gesture } => self.approve(choice, gesture).await,
+            Action::PendingPage { next } => {
+                let previous = self.view.pending_start;
+                self.view.pending_start = if next {
+                    self.view.pending_start.saturating_add(PENDING_DISPLAY)
+                } else {
+                    self.view.pending_start.saturating_sub(PENDING_DISPLAY)
+                };
+                if self.refresh_pending().is_ok() {
+                    "Local pending originals. Select the exact receipt to check."
+                } else {
+                    self.view.pending_start = previous;
+                    "Could not read this workspace's local pending originals."
+                }
+            }
             Action::Lookup(op) => {
                 if self.lookup(op).await.is_ok() {
                     "Original receipt checked; no file body was sent."
@@ -710,6 +812,23 @@ impl Owner {
     }
 }
 
+fn pending_page(total: usize, requested: usize) -> std::ops::Range<usize> {
+    let last = total.saturating_sub(1) / PENDING_DISPLAY * PENDING_DISPLAY;
+    let start = requested.min(last);
+    start..start.saturating_add(PENDING_DISPLAY).min(total)
+}
+
+fn first_card(path: &str, name: &DisplayName, body: &Body) -> Card {
+    Card {
+        claim: Claim::new(),
+        effect: Effect::FirstUpload,
+        path: path.to_owned(),
+        target: CardTarget::First(name.clone()),
+        body: body.clone(),
+        intent: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -718,6 +837,31 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn local_pending_pages_reach_or_clamp_every_original_after_reopen() {
+        assert_eq!(pending_page(0, 64), 0..0);
+        assert_eq!(pending_page(65, 0), 0..32);
+        assert_eq!(pending_page(65, 32), 32..64);
+        assert_eq!(pending_page(65, 64), 64..65);
+        assert_eq!(pending_page(65, usize::MAX), 64..65);
+        assert_eq!(pending_page(31, 64), 0..31);
+    }
+
+    #[test]
+    fn first_preview_keeps_exact_name_and_body_without_inventing_an_original() {
+        let name = DisplayName::parse("试件.bin").unwrap();
+        let body = Body {
+            length: 167,
+            sha256: zxs_core::r3::Digest::parse(&"a".repeat(64)).unwrap(),
+        };
+        let card = first_card("/ordinary/选中文件", &name, &body);
+        assert!(card.effect.sends() && card.claim.live());
+        assert_eq!(card.path, "/ordinary/选中文件");
+        assert_eq!(card.body, body);
+        assert!(matches!(card.target, CardTarget::First(n) if n == name));
+        assert!(card.intent.is_none());
+    }
 
     #[test]
     fn prewire_cancel_during_sender_ready_refuses_the_first_auth_cut() {

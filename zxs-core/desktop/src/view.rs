@@ -8,11 +8,11 @@ use eframe::egui::{self, Context, Event, Key, PointerButton, RawInput, Response,
 use tokio::sync::{mpsc, watch};
 use zxs_core::{
     Result,
-    r3::{Branch, Lookup},
+    r3::{Branch, DisplayName, Lookup},
 };
 
 use crate::{
-    actor::{self, Action, Card, Claim, Effect, Message, Snapshot},
+    actor::{self, Action, Card, CardTarget, Claim, Effect, Message, Snapshot},
     clipboard::{Queue as Clipboard, Target as PasteTarget},
     picker::{self, Field},
     secret::{NativeFrame, Password, clipboard_chord},
@@ -104,6 +104,9 @@ pub struct Desktop {
     destination: String,
     branch: Option<Branch>,
     working: String,
+    first_path: String,
+    first_name: String,
+    first_name_automatic: bool,
 }
 
 impl Desktop {
@@ -134,6 +137,9 @@ impl Desktop {
             destination: String::new(),
             branch: None,
             working: String::new(),
+            first_path: String::new(),
+            first_name: String::new(),
+            first_name_automatic: false,
         })
     }
 
@@ -207,6 +213,10 @@ impl Desktop {
                 );
             }
             Field::WorkingFile => self.working = path.to_owned(),
+            Field::FirstFile => {
+                self.first_path = path.to_owned();
+                offer_first_name(&mut self.first_name, &mut self.first_name_automatic, path);
+            }
         }
     }
 
@@ -252,6 +262,9 @@ impl Desktop {
             }
             self.destination.clear();
             self.working.clear();
+            self.first_path.clear();
+            self.first_name.clear();
+            self.first_name_automatic = false;
         }
         if next.serial != self.view.serial {
             self.waiting = false;
@@ -422,12 +435,25 @@ impl Desktop {
             Effect::Checkout => "Confirm exact checkout",
             Effect::Freeze => "Freeze this exact full file locally",
             Effect::Send => "Submit this original operation",
+            Effect::FirstUpload => "Submit as a new remote file",
         });
         ui.label(format!("File: {}", card.path));
-        ui.label(format!("Container: {}", card.basis.container));
-        ui.label(format!("Branch: {}", card.basis.branch));
-        ui.label(format!("Approved head: {}", card.basis.node));
-        ui.label(format!("Container revision: {}", card.basis.seen_sequence));
+        match &card.target {
+            CardTarget::Mapped(basis) => {
+                ui.label(format!("Container: {}", basis.container));
+                ui.label(format!("Branch: {}", basis.branch));
+                ui.label(format!("Approved head: {}", basis.node));
+                ui.label(format!("Container revision: {}", basis.seen_sequence));
+            }
+            CardTarget::First(name) => {
+                ui.label(format!("New remote name: {name}"));
+                ui.label(format!(
+                    "Destination account: {} · {}",
+                    self.view.authority, self.view.account
+                ));
+                ui.label("Submit will stage this exact full file and use one original operation. The ordinary file is not replaced.");
+            }
+        }
         ui.label(format!("Full body: {} bytes", card.body.length));
         ui.label(format!("SHA-256: {}", card.body.sha256));
         if let Some(intent) = &card.intent {
@@ -447,7 +473,11 @@ impl Desktop {
         } else if ui
             .add_enabled(
                 !self.waiting && previously_shown && card.claim.live(),
-                egui::Button::new("Confirm this exact choice"),
+                egui::Button::new(if matches!(card.effect, Effect::FirstUpload) {
+                    "Submit new file"
+                } else {
+                    "Confirm this exact choice"
+                }),
             )
             .clicked_by(PointerButton::Primary)
         {
@@ -457,7 +487,7 @@ impl Desktop {
                 gesture: gesture.clone(),
             }) {
                 self.gesture = Some(gesture);
-                self.approved_send = matches!(card.effect, Effect::Send);
+                self.approved_send = card.effect.sends();
             }
         }
         if self.approved_send && self.gesture.as_ref().is_some_and(Claim::accepted) {
@@ -548,8 +578,35 @@ impl Desktop {
                         action = Some(Action::Disconnect);
                     }
                 });
+                ui.separator();
+                ui.heading("New remote file");
                 ui.horizontal(|ui| {
-                    if ui.button("First catalog page").clicked() { action = Some(Action::Catalog { more: false }); }
+                    ui.label("Ordinary file:");
+                    let file = ui.text_edit_singleline(&mut self.first_path);
+                    if ui.button("Choose file…").clicked() {
+                        pick = Some(Field::FirstFile);
+                    }
+                    ui.label("Remote name:");
+                    if file.changed() {
+                        offer_first_name(&mut self.first_name, &mut self.first_name_automatic, &self.first_path);
+                    }
+                    let name = ui.text_edit_singleline(&mut self.first_name);
+                    if name.changed() {
+                        self.first_name_automatic = false;
+                    }
+                    if ui.button("Review first upload").clicked() || field_enter(&file, enter) || field_enter(&name, enter) {
+                        if !absolute_file(&self.first_path) {
+                            self.local_notice = Some("Choose an ordinary file using an absolute path.");
+                        } else if let Ok(name) = DisplayName::parse(&self.first_name) {
+                            action = Some(Action::ReviewFirst { path: self.first_path.as_str().into(), name });
+                        } else {
+                            self.local_notice = Some("Enter one exact remote filename, without a directory or trailing dot or space.");
+                        }
+                    }
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui.button("Refresh catalog").clicked() { action = Some(Action::Catalog { more: false }); }
                     if ui.add_enabled(self.view.after.is_some(), egui::Button::new("Next page")).clicked() {
                         action = Some(Action::Catalog { more: true });
                     }
@@ -623,8 +680,21 @@ impl Desktop {
                         Lookup::Unknown => "The original result is unknown. Keep the same operation.",
                     });
                     if result.local_cleanup_pending { ui.label("Confirmed receipt; local cleanup still pending."); }
+                    if self.view.connected && !matches!(result.status, Lookup::Confirmed { .. })
+                        && !self.view.pending.contains(&result.operation)
+                        && ui.button("Check this original receipt").clicked()
+                    {
+                        action = Some(Action::Lookup(result.operation.clone()));
+                    }
                 }
-                if self.view.pending_more { ui.label("Only the first 32 local pending originals are displayed."); }
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(self.view.pending_start > 0, egui::Button::new("Previous local page")).clicked() {
+                        action = Some(Action::PendingPage { next: false });
+                    }
+                    if ui.add_enabled(self.view.pending_more, egui::Button::new("Next local page")).clicked() {
+                        action = Some(Action::PendingPage { next: true });
+                    }
+                });
                 egui::ScrollArea::vertical().id_salt("pending").max_height(120.0).show(ui, |ui| {
                     for op in &self.view.pending {
                         ui.horizontal(|ui| {
@@ -650,6 +720,18 @@ impl Desktop {
             self.clipboard
                 .request(ui.ctx(), PasteTarget::Ordinary(edit));
         }
+    }
+}
+
+fn offer_first_name(name: &mut String, automatic: &mut bool, path: &str) {
+    if *automatic || name.is_empty() {
+        *name = Path::new(path)
+            .file_name()
+            .and_then(|leaf| leaf.to_str())
+            .filter(|leaf| DisplayName::parse(leaf).is_ok())
+            .unwrap_or_default()
+            .to_owned();
+        *automatic = !name.is_empty();
     }
 }
 
@@ -821,6 +903,20 @@ impl Drop for Desktop {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn second_file_replaces_only_an_automatically_suggested_name() {
+        let mut name = String::new();
+        let mut automatic = false;
+        offer_first_name(&mut name, &mut automatic, "/ordinary/初次.txt");
+        assert_eq!((&name[..], automatic), ("初次.txt", true));
+        offer_first_name(&mut name, &mut automatic, "/ordinary/第二份.txt");
+        assert_eq!((&name[..], automatic), ("第二份.txt", true));
+        name = "My visible name".to_owned();
+        automatic = false;
+        offer_first_name(&mut name, &mut automatic, "/ordinary/third.txt");
+        assert_eq!((&name[..], automatic), ("My visible name", false));
+    }
 
     #[test]
     fn a_card_needs_prior_native_visibility_and_the_same_exact_claim() {
