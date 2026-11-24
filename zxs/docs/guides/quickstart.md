@@ -9,7 +9,7 @@
 - SYSTEM 记录容器位置和回收状态；DATA 保存容器；RECYCLE 保存回收的容器。
 - `/zxs`、`/zxs/bin`、`/zxs/state` 由 root 管理，不允许其他账号写入；空的 `/zxs/state/headless` 和各角色根由服务账号所有，权限设为 `0700`。
 - 使用实际绝对路径，三个角色目录不重叠。回收盘和其他角色用不同文件系统；有多块 DATA 时也要分别位于不同文件系统。
-- 本流程只给空目录做首次设置。不会格式化磁盘，也不迁移旧池。更多先决条件见 [Helper 首设说明](../../../helper/docs/headless-offline.md)。
+- 本流程只给空目录做首次设置。不会格式化磁盘，也不迁移旧池。更多先决条件见 [Helper 首设说明](../../../helper/docs/guides/headless-offline.md)。
 
 下列路径是示例，只替换为你已准备好的目录。先检查，不写入磁盘：
 
