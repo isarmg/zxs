@@ -9,7 +9,7 @@
 | Linux 库与 CLI 源码 | [仅静态] 独立源码目录、Rust 1.100.0、锁未改。格式与全目标严格 Clippy 通过；4 个纯内存 R3/地址单测通过，不是远端网络验收。 |
 | 普通文件边界和无覆盖 | [实机已验] Dot Linux 临时 ext4、普通用户、有效能力为零。[3 个原生用例](src/native_tests.rs)与[工作区用例](src/workspace_tests.rs)覆盖租约竞争、拒绝不合格对象、晚占名和换件后不发布、不推进原操作。 |
 | 确定性离线 ZIP | [实机已验] 同一环境跑[实际编译出的 CLI 用例](tests/linux_zip.rs)。两棵源树的创建顺序、权限、mtime 和被忽略文件各异，产生逐字节相同的 625 B ZIP；独立 unzip/Python 读回、晚占名、旧核对拒绝及准确差异清单通过。 |
-| 独立 GitHub Actions | [仅静态] 已审[路径过滤工作流](../.github/workflows/zxs-core.yml)及脚本语法，未登记托管通过证据。只有附实际成功运行和适用范围时才标 [CI通过]。 |
+| 独立 GitHub Actions | [CI通过] [Ubuntu 24.04 托管作业](https://github.com/isarmg/zxs/actions/runs/45335009882/job/138244922987)通过 Rust 1.100.0 锁定依赖、格式、全目标严格 Clippy、4 个纯内存及 5 个离线 ext4 用例；独立 ZIP 读回一致。未连接真实服务或安装产品。 |
 
 本次标准 ZIP SHA-256 为 `6f24562e993621528ce86967a40fa3ef4848d09332a37c7531818e4b4dcc9642`。证据和锁定命令见[复现实例](docs/guides/linux-ext4-qualification.md)。未验 XFS、安装包或真实服务器。
 

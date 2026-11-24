@@ -35,4 +35,6 @@ cargo test --locked --offline --test linux_zip deterministic_native_zip -- --ign
 - [离线 CLI](../../tests/linux_zip.rs)与[独立读取](../../tests/zip_oracle.py)：标准 ZIP32/Deflate、CRC、字节和固定元数据，含空文件、空目录与 UTF-8 名。晚占名和确认前二次改动都不发布替件。
 - 两份实际 ZIP 均 625 B，SHA-256 为 `6f24562e993621528ce86967a40fa3ef4848d09332a37c7531818e4b4dcc9642`。没有验证异平台解包。
 
-这条证据不替代[真实安装和丢回执恢复](../../TASKS.md#还要证明什么)。
+[CI通过] [Ubuntu 24.04 托管复现](https://github.com/isarmg/zxs/actions/runs/45335009882/job/138244922987)同样通过 4 个纯内存和 5 个离线 ext4 用例，独立工具读回同一 ZIP 长度和摘要。
+
+这些证据不替代[真实安装和丢回执恢复](../../TASKS.md#还要证明什么)。
