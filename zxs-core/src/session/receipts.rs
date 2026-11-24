@@ -76,14 +76,15 @@ impl ReceiptSession {
 pub(super) enum ReadPurpose {
     Receipt,
     Payload,
+    Browse,
 }
 
 impl ReadPurpose {
     fn require_peer_identity(self, saved: &Principal, current: &Principal) -> Result<()> {
         let allowed = match self {
-            // Receipt recovery uses current native trust on the same endpoint.
+            // Receipt and Browse use current native trust at the same endpoint.
             // The live TLS check is separate and always required.
-            Self::Receipt => saved.same_authority(current),
+            Self::Receipt | Self::Browse => saved.same_authority(current),
             Self::Payload => saved == current,
         };
         if !allowed {
@@ -98,6 +99,7 @@ impl ReadPurpose {
         match self {
             Self::Receipt => "receipt",
             Self::Payload => "payload",
+            Self::Browse => "browse",
         }
     }
 
@@ -112,6 +114,9 @@ impl ReadPurpose {
             return Err(invalid(
                 "Bearer capability only admits its bodyless on-origin GET",
             ));
+        }
+        if matches!(self, Self::Browse) {
+            return super::browse::require_request(request);
         }
         let rest = uri
             .path()
@@ -200,11 +205,11 @@ impl BoundBearer {
                 .is_ok()
     }
 
-    fn require_live(&self) -> Result<()> {
+    pub(super) fn require_live(&self) -> Result<()> {
         self.token.require_live(Instant::now())
     }
 
-    // None is transport uncertainty, never evidence for either read purpose.
+    // None is transport uncertainty, never evidence for any read purpose.
     pub(super) async fn read(
         &self,
         request: Request<()>,

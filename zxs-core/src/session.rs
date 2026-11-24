@@ -14,6 +14,10 @@ use tokio_rustls::TlsConnector;
 use zeroize::Zeroizing;
 
 #[cfg(target_os = "linux")]
+mod browse;
+#[cfg(target_os = "linux")]
+pub use browse::{BrowseError, BrowseSession};
+#[cfg(target_os = "linux")]
 mod payloads;
 #[cfg(target_os = "linux")]
 pub(crate) use payloads::PayloadSelection;

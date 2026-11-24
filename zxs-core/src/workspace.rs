@@ -21,6 +21,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+mod browse;
 mod checkout;
 pub use checkout::CheckoutChoice;
 
