@@ -29,7 +29,8 @@ fn run() -> zxs_core::Result<()> {
 
     fn usage() -> Box<dyn std::error::Error + Send + Sync> {
         "zxs-client /absolute/private-state open|prepare /file [first DISPLAY_NAME]|dirty /file|bundle-diff /dir|bundle-pack /dir /new.zip\n\
-         zxs-client HTTPS_ORIGIN ACCOUNT /absolute/private-state init|reconcile|list [after]|detail ID|checkout ID BRANCH /new/file|status OP|send OP".into()
+         zxs-client HTTPS_ORIGIN ACCOUNT /absolute/private-state init|reconcile|list [after]|detail ID|checkout ID BRANCH /new/file|status OP|send OP\n\
+         zxs-client --receipt-session HTTPS_ORIGIN ACCOUNT /absolute/private-state reconcile|status OP".into()
     }
 
     fn ask(word: &str) -> Result<bool> {
@@ -44,6 +45,9 @@ fn run() -> zxs_core::Result<()> {
     if args.first().is_some_and(|arg| arg == "--help") {
         println!("{}", usage());
         return Ok(());
+    }
+    if args.first().is_some_and(|arg| arg == "--receipt-session") {
+        return run_receipts(&args);
     }
     if let [state, verb, rest @ ..] = args.as_slice()
         && matches!(
@@ -189,6 +193,68 @@ fn run() -> zxs_core::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
+enum ReceiptAction {
+    Reconcile,
+    Status(zxs_core::r3::Id),
+}
+
+#[cfg(target_os = "linux")]
+fn receipt_args(args: &[String]) -> zxs_core::Result<(&str, &str, &str, ReceiptAction)> {
+    use zxs_core::r3::Id;
+    let unsupported =
+        || "receipt-only mode supports reconcile or status OP, not legacy reads or sends";
+    let [mode, origin, account, state, verb, rest @ ..] = args else {
+        return Err(unsupported().into());
+    };
+    if mode != "--receipt-session" {
+        return Err(unsupported().into());
+    }
+    let action = match (verb.as_str(), rest) {
+        ("reconcile", []) => ReceiptAction::Reconcile,
+        ("status", [op]) => ReceiptAction::Status(Id::parse(op)?),
+        _ => return Err(unsupported().into()),
+    };
+    Ok((origin, account, state, action))
+}
+
+#[cfg(target_os = "linux")]
+fn run_receipts(args: &[String]) -> zxs_core::Result<()> {
+    use std::path::Path;
+    use zeroize::Zeroizing;
+    use zxs_core::workspace::Workspace;
+    // Reject all out-of-scope verbs and unknown original IDs before a prompt,
+    // DNS or TLS. Enrollment and file upload are not part of this mode.
+    let (origin, account, state, action) = receipt_args(args)?;
+    let mut state = Workspace::open_local(Path::new(state))?;
+    if let ReceiptAction::Status(op) = &action {
+        state.intent(op)?;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let receipt = state
+            .connect_receipts(origin, account, || {
+                Ok(Zeroizing::new(rpassword::prompt_password(
+                    "ZXS 回执会话口令（不回显）：",
+                )?))
+            })
+            .await?;
+        match action {
+            ReceiptAction::Reconcile => {
+                for original in state.reconcile_receipts(&receipt).await? {
+                    println!("{original:?}");
+                }
+            }
+            ReceiptAction::Status(op) => {
+                println!("{:?}", state.receipt_status(&receipt, &op).await?)
+            }
+        }
+        Ok(())
+    })
+}
+
+#[cfg(target_os = "linux")]
 fn local_review(
     state: &mut zxs_core::workspace::Workspace,
     path: &std::path::Path,
@@ -225,3 +291,7 @@ fn local_review(
     }
     Ok(())
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "../../tests/unit/receipt_cli_cases.rs"]
+mod receipt_tests;

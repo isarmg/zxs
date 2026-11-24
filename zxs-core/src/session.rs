@@ -13,6 +13,11 @@ use tokio::{io::AsyncReadExt, net::TcpStream, task::JoinHandle, time::timeout};
 use tokio_rustls::TlsConnector;
 use zeroize::Zeroizing;
 
+#[cfg(target_os = "linux")]
+mod receipts;
+#[cfg(target_os = "linux")]
+pub use receipts::ReceiptSession;
+
 const IDLE: Duration = Duration::from_secs(30);
 const CHUNK: usize = 64 * 1024;
 
@@ -33,41 +38,26 @@ impl Principal {
     }
 }
 
-pub struct Session {
+struct H2Channel {
     principal: Principal,
-    auth: HeaderValue,
     sender: SendRequest<Bytes>,
     driver: JoinHandle<()>,
 }
 
-impl Drop for Session {
+impl Drop for H2Channel {
     fn drop(&mut self) {
         self.driver.abort();
     }
 }
 
-impl Session {
-    pub async fn connect(
-        spelling: &str,
+type Origin = (String, u16, String);
+
+impl H2Channel {
+    async fn connect(
+        (host, port, origin): Origin,
         account: &str,
-        password: Zeroizing<String>,
+        bound: Option<&Principal>,
     ) -> Result<Self> {
-        let (host, port, origin) = approved_origin(spelling)?;
-        if account.is_empty()
-            || account.len() > 64
-            || !account
-                .bytes()
-                .next()
-                .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
-            || !account
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
-            || password.is_empty()
-            || password.len() > 1024
-            || password.bytes().any(|b| b < 32 || b == 127)
-        {
-            return Err(invalid("invalid Basic credential for this R3 endpoint"));
-        }
         if std::env::var_os("SSL_CERT_FILE").is_some() || std::env::var_os("SSL_CERT_DIR").is_some()
         {
             return Err(invalid(
@@ -87,6 +77,12 @@ impl Session {
         for digest in proof {
             trust.update(digest);
         }
+        let principal = Principal {
+            origin,
+            account: account.to_owned(),
+            trust: hex(&trust.finalize()),
+        };
+        require_original_principal(bound, &principal)?;
         let mut store = RootCertStore::empty();
         if store.add_parsable_certificates(root.certs).0 == 0 {
             return Err(invalid("no usable native TLS trust roots"));
@@ -110,38 +106,22 @@ impl Session {
                 "the same authenticated TLS channel did not negotiate HTTP/2",
             ));
         }
-        // No Basic header/body is even constructed until TLS hostname, chain and ALPN all passed.
+        // No authorization header is constructed before the selected TLS and ALPN checks.
         let (sender, drive) = timeout(IDLE, h2::client::handshake(tls)).await??;
         let driver = tokio::spawn(async move {
             let _ = drive.await;
         });
-        let mut secret = Zeroizing::new(account.as_bytes().to_vec());
-        secret.push(b':');
-        secret.extend_from_slice(password.as_bytes());
-        let encoded = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(&secret[..]));
-        let mut basic = Zeroizing::new(String::from("Basic "));
-        basic.push_str(&encoded);
-        let mut auth = HeaderValue::from_str(&basic)?;
-        auth.set_sensitive(true);
         Ok(Self {
-            principal: Principal {
-                origin,
-                account: account.to_owned(),
-                trust: hex(&trust.finalize()),
-            },
-            auth,
+            principal,
             sender,
             driver,
         })
     }
 
-    pub fn principal(&self) -> &Principal {
-        &self.principal
-    }
-
     async fn request(
         &self,
         mut request: Request<()>,
+        auth: &HeaderValue,
         upload: Option<(File, &Body)>,
         before_send: impl FnOnce() -> Result<()>,
     ) -> Result<Response<RecvStream>> {
@@ -159,7 +139,7 @@ impl Session {
         *request.version_mut() = Version::HTTP_2;
         request
             .headers_mut()
-            .insert(header::AUTHORIZATION, self.auth.clone());
+            .insert(header::AUTHORIZATION, auth.clone());
         let mut available = timeout(IDLE, self.sender.clone().ready()).await??;
         before_send()?;
         let (head, mut tx) = available.send_request(request, upload.is_none())?;
@@ -167,6 +147,87 @@ impl Session {
             send_complete(&mut tx, file, expected).await?;
         }
         Ok(timeout(IDLE, head).await??)
+    }
+}
+
+fn require_original_principal(bound: Option<&Principal>, observed: &Principal) -> Result<()> {
+    if bound.is_some_and(|original| original != observed) {
+        return Err(invalid(
+            "the original client authority or native trust changed",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_account(account: &str) -> Result<()> {
+    if account.is_empty()
+        || account.len() > 64
+        || !account
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        || !account
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b))
+    {
+        return Err(invalid("invalid Basic credential for this R3 endpoint"));
+    }
+    Ok(())
+}
+
+fn validate_password(password: &str) -> Result<()> {
+    if password.is_empty() || password.len() > 1024 || password.bytes().any(|b| b < 32 || b == 127)
+    {
+        return Err(invalid("invalid Basic credential for this R3 endpoint"));
+    }
+    Ok(())
+}
+
+fn basic_header(account: &str, password: &str) -> Result<HeaderValue> {
+    let mut secret = Zeroizing::new(account.as_bytes().to_vec());
+    secret.push(b':');
+    secret.extend_from_slice(password.as_bytes());
+    let encoded = Zeroizing::new(base64::engine::general_purpose::STANDARD.encode(&secret[..]));
+    let mut basic = Zeroizing::new(String::from("Basic "));
+    basic.push_str(&encoded);
+    let mut auth = HeaderValue::from_str(&basic)?;
+    auth.set_sensitive(true);
+    Ok(auth)
+}
+
+/// Legacy Basic R3 transport. Its endpoint capabilities do not change.
+pub struct Session {
+    channel: H2Channel,
+    auth: HeaderValue,
+}
+
+impl Session {
+    pub async fn connect(
+        spelling: &str,
+        account: &str,
+        password: Zeroizing<String>,
+    ) -> Result<Self> {
+        let original = approved_origin(spelling)?;
+        validate_account(account)?;
+        validate_password(&password)?;
+        let channel = H2Channel::connect(original, account, None).await?;
+        let auth = basic_header(account, &password)?;
+        Ok(Self { channel, auth })
+    }
+
+    pub fn principal(&self) -> &Principal {
+        &self.channel.principal
+    }
+
+    async fn request(
+        &self,
+        request: Request<()>,
+        upload: Option<(File, &Body)>,
+        before_send: impl FnOnce() -> Result<()>,
+    ) -> Result<Response<RecvStream>> {
+        self.channel
+            .request(request, &self.auth, upload, before_send)
+            .await
     }
 
     async fn json<T: DeserializeOwned>(&self, request: Request<()>) -> Result<T> {
@@ -356,21 +417,29 @@ impl Session {
         let Ok(response) = self.request(request, upload, before_send).await else {
             return Lookup::Unknown;
         };
-        let status = response.status();
-        if status == StatusCode::CONFLICT {
-            return Lookup::Conflict;
-        }
-        if status != StatusCode::OK && !(status == StatusCode::NOT_FOUND && readback) {
-            return Lookup::Unknown;
-        }
-        match collect_json(response).await {
-            Ok(bytes) => r3::outcome(intent, status, &bytes, readback),
-            Err(_) => Lookup::Unknown,
-        }
+        decode_r3_reply(intent, response, readback).await
     }
 }
 
-fn approved_origin(spelling: &str) -> Result<(String, u16, String)> {
+async fn decode_r3_reply(
+    intent: &Intent,
+    response: Response<RecvStream>,
+    readback: bool,
+) -> Lookup {
+    let status = response.status();
+    if status == StatusCode::CONFLICT {
+        return Lookup::Conflict;
+    }
+    if status != StatusCode::OK && !(status == StatusCode::NOT_FOUND && readback) {
+        return Lookup::Unknown;
+    }
+    match collect_json(response).await {
+        Ok(bytes) => r3::outcome(intent, status, &bytes, readback),
+        Err(_) => Lookup::Unknown,
+    }
+}
+
+fn approved_origin(spelling: &str) -> Result<Origin> {
     // Authority::port_u16 returns None for both "no explicit port" and certain invalid
     // suffixes. Never send credentials to the default port for the latter.
     if !spelling.starts_with("https://")
@@ -463,8 +532,12 @@ async fn has_trailers(stream: &mut RecvStream) -> Result<bool> {
 }
 
 async fn collect_json(response: Response<RecvStream>) -> Result<Vec<u8>> {
+    collect_bounded_json(response, r3::MAX_JSON).await
+}
+
+async fn collect_bounded_json(response: Response<RecvStream>, limit: u64) -> Result<Vec<u8>> {
     let length = extent(response.headers(), "application/json")?;
-    if length > r3::MAX_JSON {
+    if length > limit {
         return Err(invalid("R3 JSON exceeded its budget"));
     }
     let mut bytes = Vec::with_capacity(usize::try_from(length)?);

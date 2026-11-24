@@ -3,7 +3,7 @@ use crate::{
     Result, bundle, invalid,
     native::{self, Folder, Lease, Source, Stamp},
     r3::{Body, Branch, DisplayName, Id, Intent, Lookup, Target},
-    session::{Principal, Session},
+    session::{Principal, ReceiptSession, Session},
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
@@ -12,8 +12,10 @@ use std::{
     io::sink,
     os::unix::fs::{FileExt, MetadataExt, PermissionsExt},
     path::Path,
+    sync::Arc,
     time::Duration,
 };
+use zeroize::Zeroizing;
 
 const DB: &str = "workspace.sqlite";
 const APP: i64 = 0x5a58_4331;
@@ -60,6 +62,12 @@ pub struct Workspace {
     db: Connection,
     db_id: (u64, u64),
     principal: Principal,
+    receipt_owner: Arc<()>,
+}
+
+enum ReceiptLane<'a> {
+    Basic(&'a Session),
+    Receipt(&'a ReceiptSession),
 }
 
 pub struct Review {
@@ -182,6 +190,7 @@ impl Workspace {
             db,
             db_id,
             principal,
+            receipt_owner: Arc::new(()),
         };
         opened.held_database()?;
         Ok(opened)
@@ -218,6 +227,41 @@ impl Workspace {
             return Err(invalid("original account/trust changed"));
         }
         Ok(())
+    }
+
+    /// Explicit receipt-only authentication for this already-open workspace.
+    /// The prompt is not called before the exact workspace and TLS/H2 checks.
+    pub async fn connect_receipts(
+        &self,
+        spelling: &str,
+        account: &str,
+        prompt: impl FnOnce() -> Result<Zeroizing<String>>,
+    ) -> Result<ReceiptSession> {
+        self.validate()?;
+        ReceiptSession::connect_bound(
+            &self.principal,
+            Arc::clone(&self.receipt_owner),
+            spelling,
+            account,
+            prompt,
+            || self.validate(),
+        )
+        .await
+    }
+
+    fn validate_receipt_lane(&self, lane: &ReceiptLane<'_>) -> Result<()> {
+        match lane {
+            ReceiptLane::Basic(session) => self.same_principal(session),
+            ReceiptLane::Receipt(session) => {
+                self.validate()?;
+                if !session.belongs_to(&self.receipt_owner, &self.principal) {
+                    return Err(invalid(
+                        "the receipt session has a different original workspace",
+                    ));
+                }
+                session.require_live()
+            }
+        }
     }
 
     fn normal_path<'a>(&self, path: &'a Path) -> Result<&'a str> {
@@ -512,16 +556,43 @@ impl Workspace {
 
     // Called when a shell connects. This loop can only send operation GETs, even after authoritative absence.
     pub async fn reconcile_on_open(&mut self, session: &Session) -> Result<Vec<Resolution>> {
-        self.same_principal(session)?;
+        self.reconcile_receipt_lane(ReceiptLane::Basic(session))
+            .await
+    }
+
+    pub async fn reconcile_receipts(
+        &mut self,
+        session: &ReceiptSession,
+    ) -> Result<Vec<Resolution>> {
+        self.reconcile_receipt_lane(ReceiptLane::Receipt(session))
+            .await
+    }
+
+    async fn reconcile_receipt_lane(&mut self, lane: ReceiptLane<'_>) -> Result<Vec<Resolution>> {
+        self.validate_receipt_lane(&lane)?;
         let mut results = self.cleanup_on_open()?;
         for op in self.pending()? {
-            results.push(self.lookup(session, &op).await?);
+            results.push(self.lookup_receipt_lane(&lane, &op).await?);
         }
         Ok(results)
     }
 
     pub async fn lookup(&mut self, session: &Session, op: &Id) -> Result<Resolution> {
-        self.same_principal(session)?;
+        self.lookup_receipt_lane(&ReceiptLane::Basic(session), op)
+            .await
+    }
+
+    pub async fn receipt_status(
+        &mut self,
+        session: &ReceiptSession,
+        op: &Id,
+    ) -> Result<Resolution> {
+        self.lookup_receipt_lane(&ReceiptLane::Receipt(session), op)
+            .await
+    }
+
+    async fn lookup_receipt_lane(&mut self, lane: &ReceiptLane<'_>, op: &Id) -> Result<Resolution> {
+        self.validate_receipt_lane(lane)?;
         let (selected, _, _) = self.original(op)?;
         let lease = self.hold_container(&selected.intent.container_id)?;
         let (original, _, prior_result) = self.original(op)?;
@@ -531,7 +602,22 @@ impl Workspace {
         // Readback is independent of body availability. No POST can follow from this method.
         let reply = match prior_result {
             Some(sequence) => Lookup::Confirmed { sequence },
-            None => session.lookup(&original.intent).await,
+            None => match lane {
+                ReceiptLane::Basic(session) => session.lookup(&original.intent).await,
+                ReceiptLane::Receipt(session) => {
+                    session
+                        .lookup(&original.intent, || {
+                            self.validate_receipt_lane(lane)?;
+                            if self.original(op)?.0 != original {
+                                return Err(invalid(
+                                    "the selected original changed before receipt GET",
+                                ));
+                            }
+                            held_lease_at(&self.root, self.db_id, &lease)
+                        })
+                        .await?
+                }
+            },
         };
         self.settle(&original, reply, &lease)
     }
