@@ -3,11 +3,15 @@ use crate::{
     Result, bundle, invalid,
     native::{self, Folder, Lease, Source, Stamp},
     r3::{Body, Branch, DisplayName, Id, Intent, Lookup, Target},
-    session::{Principal, ReceiptSession, Session},
+    session::{
+        ByteWindow, PayloadError, PayloadSelection, PayloadSession, Principal, ReceiptSession,
+        Session,
+    },
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::{
+    ffi::{OsStr, OsString},
     fs::{File, Permissions},
     io::sink,
     os::unix::fs::{FileExt, MetadataExt, PermissionsExt},
@@ -18,6 +22,11 @@ use std::{
 use zeroize::Zeroizing;
 
 const DB: &str = "workspace.sqlite";
+const DB_SIDECARS: [&str; 3] = [
+    "workspace.sqlite-journal",
+    "workspace.sqlite-wal",
+    "workspace.sqlite-shm",
+];
 const APP: i64 = 0x5a58_4331;
 const VERSION: i64 = 1;
 const SCHEMA: &str = "
@@ -62,12 +71,26 @@ pub struct Workspace {
     db: Connection,
     db_id: (u64, u64),
     principal: Principal,
-    receipt_owner: Arc<()>,
+    read_session_owner: Arc<()>,
 }
 
 enum ReceiptLane<'a> {
     Basic(&'a Session),
     Receipt(&'a ReceiptSession),
+}
+
+/// Existing private workspace opened without SQLite write permission.
+pub struct PayloadWorkspace(Workspace, Source);
+
+/// Exact original confirmed reference and held ordinary destination.
+pub struct PayloadSlice {
+    owner: Arc<()>,
+    mapped: String,
+    selected: Basis,
+    selection: PayloadSelection,
+    output: String,
+    parent: Folder,
+    leaf: OsString,
 }
 
 pub struct Review {
@@ -140,60 +163,71 @@ impl Workspace {
     }
 
     fn connect(root: Folder, enrolled: Option<&Principal>) -> Result<Self> {
+        let (opened, _original_file) =
+            Self::connect_with_access(root, enrolled, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        Ok(opened)
+    }
+
+    fn connect_with_access(
+        root: Folder,
+        enrolled: Option<&Principal>,
+        access: OpenFlags,
+    ) -> Result<(Self, Source)> {
         let db_file = root.source(Path::new(DB))?;
         if db_file.file.metadata()?.mode() & 0o777 != 0o600 {
             return Err(invalid("workspace SQLite file is not private 0600"));
         }
+        let payload_reader = access.contains(OpenFlags::SQLITE_OPEN_READ_ONLY);
         if enrolled.is_some() {
             if db_file.before.length != 0 {
                 return Err(invalid("refusing to initialize a nonempty SQLite file"));
             }
-        } else {
-            let mut header = [0_u8; 100];
-            db_file.file.read_exact_at(&mut header, 0)?;
-            if &header[..16] != b"SQLite format 3\x00"
-                || header[60..64] != (VERSION as u32).to_be_bytes()
-                || header[68..72] != (APP as u32).to_be_bytes()
-            {
-                return Err(invalid(
-                    "not the independent workspace DB header; leaving it unopened by SQLite",
-                ));
-            }
-            db_file.check()?;
+        } else if !payload_reader {
+            check_workspace_header(&db_file, false)?;
         }
         let db_id = (db_file.before.dev, db_file.before.ino);
-        let db = Connection::open_with_flags(
-            root.path().join(DB),
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-        )?;
-        db.busy_timeout(Duration::from_secs(5))?;
-        db.pragma_update(None, "trusted_schema", "OFF")?;
-        db.pragma_update(None, "synchronous", "EXTRA")?;
-        let mode: String = db.pragma_query_value(None, "journal_mode", |r| r.get(0))?;
-        if mode != "delete" {
-            return Err(invalid("unexpected independent SQLite journal mode"));
-        }
-        let principal = match enrolled {
-            Some(value) => value.clone(),
-            None => {
-                let (app, version) = schema_version(&db)?;
-                if (app, version) != (APP, VERSION) {
-                    return Err(invalid("not independent ZXS Rust client state"));
-                }
-                let profile: String =
-                    db.query_row("SELECT record FROM profile WHERE id=1", [], |r| r.get(0))?;
-                serde_json::from_str::<Principal>(&profile)?
+        let open = || -> Result<_> {
+            let db = Connection::open_with_flags(
+                root.path().join(DB),
+                access | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+            )?;
+            db.busy_timeout(Duration::from_secs(5))?;
+            db.pragma_update(None, "trusted_schema", "OFF")?;
+            if access.contains(OpenFlags::SQLITE_OPEN_READ_WRITE) {
+                db.pragma_update(None, "synchronous", "EXTRA")?;
             }
+            let mode: String = db.pragma_query_value(None, "journal_mode", |r| r.get(0))?;
+            if mode != "delete" {
+                return Err(invalid("unexpected independent SQLite journal mode"));
+            }
+            let principal = match enrolled {
+                Some(value) => value.clone(),
+                None => {
+                    let (app, version) = schema_version(&db)?;
+                    if (app, version) != (APP, VERSION) {
+                        return Err(invalid("not independent ZXS Rust client state"));
+                    }
+                    let profile: String =
+                        db.query_row("SELECT record FROM profile WHERE id=1", [], |r| r.get(0))?;
+                    serde_json::from_str::<Principal>(&profile)?
+                }
+            };
+            Ok((db, principal))
+        };
+        let (db, principal) = if payload_reader {
+            inspect_payload_database(&root, &db_file, open)?
+        } else {
+            open()?
         };
         let opened = Self {
             root,
             db,
             db_id,
             principal,
-            receipt_owner: Arc::new(()),
+            read_session_owner: Arc::new(()),
         };
         opened.held_database()?;
-        Ok(opened)
+        Ok((opened, db_file))
     }
 
     fn held_database(&self) -> Result<()> {
@@ -240,7 +274,7 @@ impl Workspace {
         self.validate()?;
         ReceiptSession::connect_bound(
             &self.principal,
-            Arc::clone(&self.receipt_owner),
+            Arc::clone(&self.read_session_owner),
             spelling,
             account,
             prompt,
@@ -254,7 +288,7 @@ impl Workspace {
             ReceiptLane::Basic(session) => self.same_principal(session),
             ReceiptLane::Receipt(session) => {
                 self.validate()?;
-                if !session.belongs_to(&self.receipt_owner, &self.principal) {
+                if !session.belongs_to(&self.read_session_owner, &self.principal) {
                     return Err(invalid(
                         "the receipt session has a different original workspace",
                     ));
@@ -869,6 +903,188 @@ impl Workspace {
         }
         Ok(body)
     }
+}
+
+impl PayloadWorkspace {
+    pub fn open_local(directory: &Path) -> Result<Self> {
+        let (workspace, original_file) = Workspace::connect_with_access(
+            Folder::open(directory, true)?,
+            None,
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        let opened = Self(workspace, original_file);
+        opened.checked_read(|| Ok(()))?;
+        Ok(opened)
+    }
+
+    fn checked_read<T>(&self, inspect: impl FnOnce() -> Result<T>) -> Result<T> {
+        // Retain the original raw FD for the lifetime of the SQLite connection.
+        // Opening and closing another FD on this inode could release POSIX locks.
+        inspect_payload_database(&self.0.root, &self.1, || {
+            self.0.validate()?;
+            inspect()
+        })
+    }
+
+    /// Select an already-confirmed immutable node, without reading local file bytes.
+    pub fn choose_payload_slice(
+        &self,
+        mapped: &Path,
+        window: ByteWindow,
+        output: &Path,
+    ) -> Result<PayloadSlice> {
+        let mapped = self.0.normal_path(mapped)?.to_owned();
+        let selected = self.checked_read(|| {
+            db_basis(&self.0.db, &mapped)?.ok_or_else(|| PayloadError::MissingBaseline.into())
+        })?;
+        let target = self.0.normal_path(output)?.to_owned();
+        let parent = Folder::open(
+            output
+                .parent()
+                .ok_or_else(|| invalid("slice output needs its original parent"))?,
+            false,
+        )?;
+        let leaf = output
+            .file_name()
+            .ok_or_else(|| invalid("slice output needs a new ordinary name"))?;
+        let selection = PayloadSelection::new(
+            selected.container.clone(),
+            selected.node.clone(),
+            selected.body.clone(),
+            window,
+        );
+        let choice = PayloadSlice {
+            owner: Arc::clone(&self.0.read_session_owner),
+            mapped,
+            selected,
+            selection,
+            output: target,
+            parent,
+            leaf: leaf.to_owned(),
+        };
+        self.check_payload_slice(&choice)?;
+        Ok(choice)
+    }
+
+    fn check_payload_slice(&self, choice: &PayloadSlice) -> Result<()> {
+        if !Arc::ptr_eq(&self.0.read_session_owner, &choice.owner) {
+            return Err(invalid(
+                "the payload choice has a different original workspace",
+            ));
+        }
+        self.checked_read(|| {
+            if db_basis(&self.0.db, &choice.mapped)?.as_ref() != Some(&choice.selected) {
+                return Err(invalid(
+                    "the original confirmed payload baseline changed or is missing",
+                ));
+            }
+            if choice.output == choice.mapped
+                || db_basis(&self.0.db, &choice.output)?.is_some()
+                || unresolved_path(&self.0.db, &choice.output)?
+            {
+                return Err(invalid(
+                    "slice output must be a new unmapped ordinary filename",
+                ));
+            }
+            choice.parent.absent(&choice.leaf)
+        })
+    }
+
+    /// Explicit login for this exact workspace and still-selected immutable slice.
+    pub async fn connect_payload(
+        &self,
+        choice: &PayloadSlice,
+        spelling: &str,
+        account: &str,
+        prompt: impl FnOnce() -> Result<Zeroizing<String>>,
+    ) -> Result<PayloadSession> {
+        self.check_payload_slice(choice)?;
+        PayloadSession::connect_bound(
+            &self.0.principal,
+            Arc::clone(&self.0.read_session_owner),
+            &choice.selection,
+            spelling,
+            account,
+            prompt,
+            || self.check_payload_slice(choice),
+        )
+        .await
+    }
+
+    /// Verify one slice into an unnamed inode, then publish once with no overwrite.
+    /// This never inserts a workspace mapping or changes any remote state.
+    pub async fn save_payload_slice(
+        &self,
+        session: &PayloadSession,
+        choice: &PayloadSlice,
+    ) -> Result<Body> {
+        let recheck = || {
+            session.require_choice(
+                &self.0.read_session_owner,
+                &self.0.principal,
+                &choice.selection,
+            )?;
+            self.check_payload_slice(choice)
+        };
+        recheck()?;
+        let mut staged = choice.parent.unlinked()?;
+        let body = session.read_slice(&mut staged, recheck).await?;
+        choice
+            .parent
+            .publish_guarded(&choice.leaf, &staged, &body, recheck)?;
+        Ok(body)
+    }
+}
+
+fn check_workspace_header(file: &Source, require_rollback: bool) -> Result<()> {
+    let mut header = [0_u8; 100];
+    file.file.read_exact_at(&mut header, 0)?;
+    validate_workspace_header(&header, require_rollback)?;
+    file.check()
+}
+
+fn validate_workspace_header(header: &[u8; 100], require_rollback: bool) -> Result<()> {
+    if &header[..16] != b"SQLite format 3\x00"
+        || header[60..64] != (VERSION as u32).to_be_bytes()
+        || header[68..72] != (APP as u32).to_be_bytes()
+    {
+        return Err(invalid(
+            "not the independent workspace DB header; leaving it unopened by SQLite",
+        ));
+    }
+    // WAL read/write markers can make even OPEN_READ_ONLY create WAL or SHM.
+    if require_rollback && header[18..20] != [1, 1] {
+        return Err(invalid(
+            "payload reads require the original rollback-mode SQLite file",
+        ));
+    }
+    Ok(())
+}
+
+fn inspect_payload_database<T>(
+    root: &Folder,
+    file: &Source,
+    inspect: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let check = || {
+        file.check()?;
+        if file.file.metadata()?.mode() & 0o777 != 0o600 {
+            return Err(invalid("workspace SQLite file is not private 0600"));
+        }
+        for name in DB_SIDECARS {
+            // Do not open, interpret or try to recover any auxiliary object.
+            root.absent(OsStr::new(name)).map_err(|_| {
+                invalid(
+                    "payload reads require an exact SQLite directory without journal, WAL or SHM",
+                )
+            })?;
+        }
+        check_workspace_header(file, true)
+    };
+    check()?;
+    let result = inspect();
+    check()?;
+    result
 }
 
 fn held_database_at(root: &Folder, db_id: (u64, u64)) -> Result<()> {

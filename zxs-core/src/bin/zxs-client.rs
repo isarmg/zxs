@@ -30,7 +30,8 @@ fn run() -> zxs_core::Result<()> {
     fn usage() -> Box<dyn std::error::Error + Send + Sync> {
         "zxs-client /absolute/private-state open|prepare /file [first DISPLAY_NAME]|dirty /file|bundle-diff /dir|bundle-pack /dir /new.zip\n\
          zxs-client HTTPS_ORIGIN ACCOUNT /absolute/private-state init|reconcile|list [after]|detail ID|checkout ID BRANCH /new/file|status OP|send OP\n\
-         zxs-client --receipt-session HTTPS_ORIGIN ACCOUNT /absolute/private-state reconcile|status OP".into()
+         zxs-client --receipt-session HTTPS_ORIGIN ACCOUNT /absolute/private-state reconcile|status OP\n\
+         zxs-client --payload-session HTTPS_ORIGIN ACCOUNT /absolute/private-state slice /mapped/file START LENGTH /new/output".into()
     }
 
     fn ask(word: &str) -> Result<bool> {
@@ -48,6 +49,9 @@ fn run() -> zxs_core::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "--receipt-session") {
         return run_receipts(&args);
+    }
+    if args.first().is_some_and(|arg| arg == "--payload-session") {
+        return run_payload(&args);
     }
     if let [state, verb, rest @ ..] = args.as_slice()
         && matches!(
@@ -255,6 +259,97 @@ fn run_receipts(args: &[String]) -> zxs_core::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
+struct PayloadArgs<'a> {
+    origin: &'a str,
+    account: &'a str,
+    state: &'a str,
+    mapped: &'a str,
+    window: zxs_core::session::ByteWindow,
+    output: &'a str,
+}
+
+#[cfg(target_os = "linux")]
+fn payload_args(args: &[String]) -> zxs_core::Result<PayloadArgs<'_>> {
+    use std::path::Path;
+    use zxs_core::session::{ByteWindow, PayloadError};
+    let [
+        mode,
+        origin,
+        account,
+        state,
+        verb,
+        mapped,
+        start,
+        length,
+        output,
+    ] = args
+    else {
+        return Err(
+            "payload-only mode supports one slice of an already-bound workspace file".into(),
+        );
+    };
+    if mode != "--payload-session" || verb != "slice" {
+        return Err(
+            "payload-only mode supports slice, not receipts, raw URLs or legacy writes".into(),
+        );
+    }
+    if [state, mapped, output]
+        .iter()
+        .any(|p| !Path::new(p).is_absolute())
+    {
+        return Err(
+            "slice selection requires exact absolute local paths, not an endpoint URL".into(),
+        );
+    }
+    let decimal = |s: &str| -> zxs_core::Result<u64> {
+        if s.is_empty() || !s.bytes().all(|n| n.is_ascii_digit()) {
+            return Err(PayloadError::InvalidWindow.into());
+        }
+        s.parse().map_err(|_| PayloadError::InvalidWindow.into())
+    };
+    Ok(PayloadArgs {
+        origin,
+        account,
+        state,
+        mapped,
+        window: ByteWindow::new(decimal(start)?, decimal(length)?)?,
+        output,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn run_payload(args: &[String]) -> zxs_core::Result<()> {
+    use std::path::Path;
+    use zeroize::Zeroizing;
+    use zxs_core::workspace::PayloadWorkspace;
+    let command = payload_args(args)?;
+    let state = PayloadWorkspace::open_local(Path::new(command.state))?;
+    let selected = state.choose_payload_slice(
+        Path::new(command.mapped),
+        command.window,
+        Path::new(command.output),
+    )?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let payload = state
+            .connect_payload(&selected, command.origin, command.account, || {
+                Ok(Zeroizing::new(rpassword::prompt_password(
+                    "ZXS 正文区间会话口令（不回显）：",
+                )?))
+            })
+            .await?;
+        let saved = state.save_payload_slice(&payload, &selected).await?;
+        println!(
+            "已另存所选节点区间：{} 字节，片段 SHA-256 {}。片段摘要不是整文件校验。",
+            saved.length, saved.sha256,
+        );
+        Ok(())
+    })
+}
+
+#[cfg(target_os = "linux")]
 fn local_review(
     state: &mut zxs_core::workspace::Workspace,
     path: &std::path::Path,
@@ -295,3 +390,7 @@ fn local_review(
 #[cfg(all(test, target_os = "linux"))]
 #[path = "../../tests/unit/receipt_cli_cases.rs"]
 mod receipt_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "../../tests/unit/payload_cli_cases.rs"]
+mod payload_tests;

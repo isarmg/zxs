@@ -1,8 +1,11 @@
-use super::{DisplayName, Id, Intent, Lookup, Permissions, Target, Workspace, payload};
+use super::{
+    APP, DB, DB_SIDECARS, DisplayName, Id, Intent, Lookup, PayloadWorkspace, Permissions, Target,
+    VERSION, Workspace, payload, validate_workspace_header,
+};
 use crate::{native_test_support as support, session::Principal};
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{FileExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -13,8 +16,8 @@ fn replace_lease(state: &Path, name: &Id) {
     fs::rename(selected, detached).unwrap();
 }
 
-fn scratch_workspace() -> (Workspace, PathBuf, PathBuf, PathBuf) {
-    let dir = support::fixture("workspace-lease");
+fn scratch_workspace(fixture: &str) -> (Workspace, PathBuf, PathBuf, PathBuf) {
+    let dir = support::fixture(fixture);
     let state = dir.join("private");
     fs::create_dir(&state).unwrap();
     fs::set_permissions(&state, fs::Permissions::from_mode(0o700)).unwrap();
@@ -37,7 +40,7 @@ fn scratch_workspace() -> (Workspace, PathBuf, PathBuf, PathBuf) {
 #[test]
 #[ignore = "requires newly allocated unprivileged ext4 fixture scratch"]
 fn detached_lease_refuses_local_and_wire_custody() {
-    let (mut ws, state, a, b) = scratch_workspace();
+    let (mut ws, state, a, b) = scratch_workspace("workspace-lease");
     let name = DisplayName::parse("first").unwrap();
     let review_a = ws.review(&a, Some(name.clone())).unwrap();
     let intent = ws.prepare(&review_a, true).unwrap().unwrap();
@@ -101,4 +104,80 @@ fn detached_lease_refuses_local_and_wire_custody() {
     assert_eq!(ws.basis(&a).unwrap().unwrap().node, intent.node_id);
     ws.root.absent(payload(op).as_ref()).unwrap();
     assert_eq!(fs::read(a).unwrap(), b"synthetic a");
+}
+
+#[test]
+fn payload_requires_both_raw_header_modes_to_be_rollback() {
+    let mut header = [0_u8; 100];
+    header[..16].copy_from_slice(b"SQLite format 3\x00");
+    header[60..64].copy_from_slice(&(VERSION as u32).to_be_bytes());
+    header[68..72].copy_from_slice(&(APP as u32).to_be_bytes());
+    for mode in [[1, 1], [2, 2], [1, 2], [2, 1], [0, 1], [1, 0]] {
+        header[18..20].copy_from_slice(&mode);
+        assert_eq!(
+            validate_workspace_header(&header, true).is_ok(),
+            mode == [1, 1]
+        );
+        // The new marker condition does not change ordinary/receipt Workspace open.
+        assert!(validate_workspace_header(&header, false).is_ok());
+    }
+}
+
+#[test]
+#[ignore = "requires newly allocated unprivileged ext4 fixture scratch"]
+fn payload_reader_leaves_wal_marker_and_sidecars_untouched() {
+    let (writer, state, _, _) = scratch_workspace("payload-rollback");
+    drop(writer);
+    let raw = state.join(DB);
+    let names = || {
+        let mut names: Vec<_> = fs::read_dir(&state)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        names.sort_unstable();
+        names
+    };
+    let bare = names();
+    assert_eq!(bare, [DB]);
+    let reader = PayloadWorkspace::open_local(&state).unwrap();
+    let rollback = fs::read(&raw).unwrap();
+    assert_eq!(rollback[18..20], [1, 1]);
+
+    for name in DB_SIDECARS {
+        // Neither a recovery journal nor another auxiliary object is ours to open.
+        let sidecar = state.join(name);
+        let sidecar_bytes = b"original sidecar must not be repaired or removed";
+        fs::write(&sidecar, sidecar_bytes).unwrap();
+        let original_names = names();
+        let Err(error) = PayloadWorkspace::open_local(&state) else {
+            panic!("payload reader admitted sidecar {name}");
+        };
+        assert!(error.to_string().contains("without journal, WAL or SHM"));
+        let checked = reader.checked_read::<()>(|| panic!("must refuse before querying SQLite"));
+        assert!(
+            checked
+                .unwrap_err()
+                .to_string()
+                .contains("without journal, WAL or SHM")
+        );
+        assert_eq!(names(), original_names);
+        assert_eq!(fs::read(&raw).unwrap(), rollback);
+        assert_eq!(fs::read(&sidecar).unwrap(), sidecar_bytes);
+        fs::remove_file(sidecar).unwrap();
+    }
+    assert_eq!(names(), bare);
+    drop(reader);
+
+    let original = fs::OpenOptions::new().write(true).open(&raw).unwrap();
+    original.write_all_at(&[2, 2], 18).unwrap();
+    original.sync_all().unwrap();
+    drop(original);
+    let wal_marked = fs::read(&raw).unwrap();
+    assert_eq!(wal_marked[18..20], [2, 2]);
+    let Err(error) = PayloadWorkspace::open_local(&state) else {
+        panic!("payload reader admitted a WAL-marked DB with no sidecars");
+    };
+    assert!(error.to_string().contains("rollback-mode"));
+    assert_eq!(names(), bare);
+    assert_eq!(fs::read(raw).unwrap(), wal_marked);
 }

@@ -14,6 +14,12 @@ use tokio_rustls::TlsConnector;
 use zeroize::Zeroizing;
 
 #[cfg(target_os = "linux")]
+mod payloads;
+#[cfg(target_os = "linux")]
+pub(crate) use payloads::PayloadSelection;
+#[cfg(target_os = "linux")]
+pub use payloads::{ByteWindow, PayloadError, PayloadSession};
+#[cfg(target_os = "linux")]
 mod receipts;
 #[cfg(target_os = "linux")]
 pub use receipts::ReceiptSession;
