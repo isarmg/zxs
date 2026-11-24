@@ -287,6 +287,7 @@ pub struct ExistingBasicLogin {
 pub struct ExistingBasicSession {
     session: Session,
     original: SelectedWorkspace,
+    checkout_session: Arc<()>,
 }
 
 #[cfg(target_os = "linux")]
@@ -330,6 +331,7 @@ impl ExistingBasicLogin {
                 auth,
             },
             original: self.original,
+            checkout_session: Arc::new(()),
         })
     }
 }
@@ -342,6 +344,10 @@ impl ExistingBasicSession {
 
     pub(crate) fn belongs_to(&self, owner: &Arc<()>, saved: &Principal) -> bool {
         self.original.matches(owner, saved) && saved.same_authority(&self.session.channel.principal)
+    }
+
+    pub(crate) fn checkout_session(&self) -> &Arc<()> {
+        &self.checkout_session
     }
 
     pub(crate) fn requests<F: Fn() -> Result<()>>(&self, before_wire: F) -> BasicRequests<'_, F> {
@@ -435,14 +441,25 @@ impl<F: Fn() -> Result<()>> BasicRequests<'_, F> {
     }
 
     pub(crate) async fn detail(&self, container: &Id) -> Result<Detail> {
+        self.detail_at(container, None).await
+    }
+
+    pub(crate) async fn detail_at(&self, container: &Id, sequence: Option<u64>) -> Result<Detail> {
         let mut request = r3::json_request(format!("{}/{container}", r3::ROOT))?;
         request
             .headers_mut()
             .insert("zxs-detail", HeaderValue::from_static("paged"));
+        if let Some(sequence) = sequence {
+            request.headers_mut().insert(
+                "zxs-detail-sequence",
+                HeaderValue::from_str(&sequence.to_string())?,
+            );
+        }
         let detail: Detail = self.json(request).await?;
         if &detail.container_id != container
             || detail.sequence == 0
             || detail.sequence == u64::MAX
+            || sequence.is_some_and(|original| original != detail.sequence)
             || detail.heads.len() > 256
             || detail.heads.windows(2).any(|w| w[0].branch >= w[1].branch)
             || detail.next_after.as_ref()
@@ -462,13 +479,28 @@ impl<F: Fn() -> Result<()>> BasicRequests<'_, F> {
         container: &Id,
         branch: &Branch,
     ) -> Result<(Detail, Node)> {
-        let detail = self.detail(container).await?;
+        self.selected_head_at(container, branch, None, None).await
+    }
+
+    pub(crate) async fn selected_head_at(
+        &self,
+        container: &Id,
+        branch: &Branch,
+        expected_node: Option<&Id>,
+        sequence: Option<u64>,
+    ) -> Result<(Detail, Node)> {
+        let detail = self.detail_at(container, sequence).await?;
         let pinned = detail
             .heads
             .iter()
             .find(|row| &row.branch == branch)
             .ok_or_else(|| invalid("branch not found in first R3 detail page"))?;
         let head = &pinned.head;
+        if expected_node.is_some_and(|original| original != head) {
+            return Err(invalid(
+                "the selected R3 branch no longer has the original head",
+            ));
+        }
         let mut request =
             r3::json_request(format!("{}/{container}/branches/{branch}/nodes", r3::ROOT))?;
         request
@@ -484,7 +516,7 @@ impl<F: Fn() -> Result<()>> BasicRequests<'_, F> {
             || node.sequence == 0
             || node.sequence > detail.sequence
             || node.parent_node.as_ref() == Some(head)
-            || self.detail(container).await? != detail
+            || self.detail_at(container, sequence).await? != detail
         {
             return Err(invalid("the original R3 head changed during selection"));
         }

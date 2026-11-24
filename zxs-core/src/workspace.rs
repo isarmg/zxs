@@ -21,6 +21,9 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+mod checkout;
+pub use checkout::CheckoutChoice;
+
 const DB: &str = "workspace.sqlite";
 const DB_SIDECARS: [&str; 3] = [
     "workspace.sqlite-journal",
@@ -274,17 +277,7 @@ impl Workspace {
 
     fn validate(&self) -> Result<()> {
         self.held_database()?;
-        if schema_version(&self.db)? != (APP, VERSION) {
-            return Err(invalid("not independent ZXS Rust client state"));
-        }
-        let profile: String =
-            self.db
-                .query_row("SELECT record FROM profile WHERE id=1", [], |r| r.get(0))?;
-        if serde_json::from_str::<Principal>(&profile)? != self.principal {
-            return Err(invalid(
-                "workspace state needs the original server trust and account",
-            ));
-        }
+        require_profile(&self.db, &self.principal)?;
         self.held_database()
     }
 
@@ -530,98 +523,6 @@ impl Workspace {
                                intent.operation_id).into());
         }
         Ok(intent)
-    }
-
-    pub async fn checkout(
-        &mut self,
-        session: &Session,
-        container: &Id,
-        branch: &Branch,
-        file: &Path,
-    ) -> Result<Basis> {
-        self.checkout_using(BasicLane::Legacy(session), container, branch, file)
-            .await
-    }
-
-    pub async fn checkout_existing(
-        &mut self,
-        session: &ExistingBasicSession,
-        container: &Id,
-        branch: &Branch,
-        file: &Path,
-    ) -> Result<Basis> {
-        self.checkout_using(BasicLane::Existing(session), container, branch, file)
-            .await
-    }
-
-    async fn checkout_using(
-        &mut self,
-        lane: BasicLane<'_>,
-        container: &Id,
-        branch: &Branch,
-        file: &Path,
-    ) -> Result<Basis> {
-        let before_wire = || self.validate_basic_lane(lane);
-        before_wire()?;
-        let session = lane.requests(&before_wire);
-        let path = self.normal_path(file)?.to_owned();
-        if self.basis(file)?.is_some() || unresolved_path(&self.db, &path)? {
-            return Err(invalid(
-                "local file already owns a workspace binding or an unresolved original",
-            ));
-        }
-        let parent = Folder::open(
-            file.parent()
-                .ok_or_else(|| invalid("checkout needs an original parent"))?,
-            false,
-        )?;
-        let leaf = file
-            .file_name()
-            .ok_or_else(|| invalid("checkout needs a new ordinary leaf"))?;
-        parent.absent(leaf)?;
-        let (detail, node) = session.selected_head(container, branch).await?;
-        let mut staged = parent.unlinked()?;
-        session.download(container, &node, &mut staged).await?;
-        self.validate_basic_lane(lane)?;
-        let basis = Basis {
-            container: container.clone(),
-            branch: branch.clone(),
-            node: node.node_id.clone(),
-            seen_sequence: detail.sequence,
-            body: node.body(),
-        };
-        // Checkout has no network mutation or pending operation. Its local write
-        // is guarded by the held DB/path ownership transaction and held destination.
-        let root = &self.root;
-        let db_id = self.db_id;
-        let recheck = || held_database_at(root, db_id);
-        let tx = self
-            .db
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if db_basis(&tx, &path)?.is_some() || unresolved_path(&tx, &path)? {
-            return Err(invalid(
-                "a binding or unresolved original acquired the destination during download",
-            ));
-        }
-        parent.publish_guarded(leaf, &staged, &basis.body, recheck)?;
-        let saved = (|| -> Result<()> {
-            recheck()?;
-            parent.check()?;
-            tx.execute(
-                "INSERT INTO basis VALUES(?1,?2)",
-                params![path, serde_json::to_string(&basis)?],
-            )?;
-            recheck()?;
-            parent.check()?;
-            tx.commit()?;
-            Ok(())
-        })();
-        if saved.is_err() || self.held_database().is_err() {
-            return Err(invalid(
-                "download may already be published, but local binding not confirmed; do not overwrite",
-            ));
-        }
-        Ok(basis)
     }
 
     pub fn pending(&self) -> Result<Vec<Id>> {
@@ -1394,6 +1295,20 @@ fn held_database_at(root: &Folder, db_id: (u64, u64)) -> Result<()> {
 fn held_lease_at(root: &Folder, db_id: (u64, u64), lease: &Lease) -> Result<()> {
     held_database_at(root, db_id)?;
     lease.check()
+}
+
+fn require_profile(db: &Connection, principal: &Principal) -> Result<()> {
+    if schema_version(db)? != (APP, VERSION) {
+        return Err(invalid("not independent ZXS Rust client state"));
+    }
+    let profile: String =
+        db.query_row("SELECT record FROM profile WHERE id=1", [], |r| r.get(0))?;
+    if &serde_json::from_str::<Principal>(&profile)? != principal {
+        return Err(invalid(
+            "workspace state needs the original server trust and account",
+        ));
+    }
+    Ok(())
 }
 
 fn schema_version(db: &Connection) -> Result<(i64, i64)> {

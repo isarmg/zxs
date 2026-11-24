@@ -27,6 +27,8 @@ flowchart LR
 
 原内容先由用户正常编辑，再显式冻结。重开与重查分别见[本机回执边界](docs/invariants/receipt-recovery.md)。服务端版本仍归 ZXS；客户端不读、写或接管旧 Workspace 的 STATE、STORE 或归档历史。
 
+[仅静态] [共享签出选择](src/workspace/checkout.rs)在确认前核定原分支头和版本，持有普通输出目录。同一会话复核后只读原节点；完整验校暂存，再读原版本，最后不覆盖发布并登记本机基线。最后一次读取不是远端保留；已变更时重新选择。现有 CLI 不变。
+
 ## 源码导航
 
 | 路径 | 职责 |

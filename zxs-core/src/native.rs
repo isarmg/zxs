@@ -423,11 +423,18 @@ impl Folder {
         expected: &Body,
         before_link: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
+        self.verify_unnamed(name, file, expected)?
+            .publish(before_link)?;
+        Ok(())
+    }
+
+    pub(crate) fn verify_unnamed<'a>(
+        &'a self,
+        name: &'a OsStr,
+        file: &'a File,
+        expected: &Body,
+    ) -> Result<VerifiedOutput<'a>> {
         self.absent(name)?;
-        file.sync_all()?;
-        if &measure(file, std::io::sink())? != expected {
-            return Err(invalid("output readback did not match original bytes"));
-        }
         let before = stamp(&file.metadata()?);
         if before.links != 0
             || before.uid != self.uid
@@ -437,26 +444,19 @@ impl Folder {
         {
             return Err(invalid("output is not the original private unnamed inode"));
         }
-        self.link_unpublished(name, file, before_link)?;
-        // The name may exist if any check from here onward errors. Do not retry with a replacement.
-        let check = || -> Result<()> {
-            self.sync()?;
-            let named = self.source(Path::new(name))?;
-            let published = named.before;
-            if (
-                published.dev,
-                published.ino,
-                published.length,
-                published.modified,
-            ) != (before.dev, before.ino, before.length, before.modified)
-                || published.mode != before.mode
-                || stamp(&file.metadata()?) != published
-            {
-                return Err(invalid("the original published identity changed"));
-            }
-            Ok(())
+        let verified = VerifiedOutput {
+            folder: self,
+            name,
+            file,
+            before,
         };
-        check().map_err(|_| invalid("verified output may already have been published; check original name, never replace"))
+        file.sync_all()?;
+        verified.held_unnamed()?;
+        if &measure(file, std::io::sink())? != expected {
+            return Err(invalid("output readback did not match original bytes"));
+        }
+        verified.held_unnamed()?;
+        Ok(verified)
     }
 
     // The last name insertion must not rely on the earlier absence check.
@@ -557,6 +557,61 @@ impl Folder {
         };
         lease.check()?;
         Ok(lease)
+    }
+}
+
+/// Already fsynced and fully read back; the only remaining insertion is the
+/// original empty name in this held parent. Do not pick another input or rehash here.
+pub(crate) struct VerifiedOutput<'a> {
+    folder: &'a Folder,
+    name: &'a OsStr,
+    file: &'a File,
+    before: Stamp,
+}
+
+impl VerifiedOutput<'_> {
+    fn held_unnamed(&self) -> Result<()> {
+        if stamp(&self.file.metadata()?) != self.before {
+            return Err(invalid("the verified unnamed output changed"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn publish(&self, before_link: impl FnOnce() -> Result<()>) -> Result<Stamp> {
+        self.folder.absent(self.name)?;
+        self.folder.link_unpublished(self.name, self.file, || {
+            self.held_unnamed()?;
+            before_link()?;
+            self.held_unnamed()
+        })?;
+        // From this point the exact name might already exist, even on error.
+        self.folder
+            .sync()
+            .and_then(|()| self.require_named())
+            .map_err(|_| invalid("verified output may already have been published; check original name, never replace"))
+    }
+
+    pub(crate) fn require_named(&self) -> Result<Stamp> {
+        let named = self.folder.source(Path::new(self.name))?;
+        let published = named.before;
+        let prior = self.before;
+        if (
+            published.dev,
+            published.ino,
+            published.length,
+            published.modified,
+            published.mode,
+        ) != (
+            prior.dev,
+            prior.ino,
+            prior.length,
+            prior.modified,
+            prior.mode,
+        ) || stamp(&self.file.metadata()?) != published
+        {
+            return Err(invalid("the original published identity changed"));
+        }
+        Ok(published)
     }
 }
 

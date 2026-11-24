@@ -263,3 +263,62 @@ fn group_write_does_not_weaken_publication_or_private_modes(case: &Path, out: &P
     assert!(private.check().is_err());
     assert!(Folder::open(&state, true).is_err());
 }
+
+#[test]
+#[ignore = "requires newly allocated unprivileged ext4 fixture scratch"]
+fn verified_output_keeps_the_original_empty_name_and_bytes_after_readback() {
+    let root = support::fixture("verified-output");
+    let out = root.join("output");
+    let detached = root.join("held-output");
+    stdfs::create_dir(&out).unwrap();
+    let folder = Folder::open(&out, false).unwrap();
+    let leaf = OsStr::new("checkout.bin");
+
+    let mut staged = folder.unlinked().unwrap();
+    staged.write_all(b"exact synthetic node").unwrap();
+    let body = measure(&staged, sink()).unwrap();
+
+    let original = folder.verify_unnamed(leaf, &staged, &body).unwrap();
+    stdfs::rename(&out, &detached).unwrap();
+    stdfs::create_dir(&out).unwrap();
+    assert!(original.publish(|| Ok(())).is_err());
+    assert!(!out.join(leaf).exists());
+    assert!(!detached.join(leaf).exists());
+    stdfs::remove_dir(&out).unwrap();
+    stdfs::rename(&detached, &out).unwrap();
+
+    let verified = folder.verify_unnamed(leaf, &staged, &body).unwrap();
+    let late = verified.publish(|| {
+        stdfs::write(out.join(leaf), b"keep the late selected occupant")?;
+        Ok(())
+    });
+    assert_eq!(
+        late.unwrap_err().downcast_ref::<Errno>(),
+        Some(&Errno::EXIST)
+    );
+    assert_eq!(
+        stdfs::read(out.join(leaf)).unwrap(),
+        b"keep the late selected occupant"
+    );
+
+    let another = OsStr::new("new-checkout.bin");
+    let verified = folder.verify_unnamed(another, &staged, &body).unwrap();
+    let published = verified.publish(|| Ok(())).unwrap();
+    assert_eq!(verified.require_named().unwrap(), published);
+    assert_eq!(
+        stdfs::read(out.join(another)).unwrap(),
+        b"exact synthetic node"
+    );
+
+    let changed = OsStr::new("changed-checkout.bin");
+    let changed_stage = folder.unlinked().unwrap();
+    (&changed_stage).write_all(b"exact synthetic node").unwrap();
+    let verified = folder
+        .verify_unnamed(changed, &changed_stage, &body)
+        .unwrap();
+    (&changed_stage)
+        .write_all(b"post-check replacement")
+        .unwrap();
+    assert!(verified.publish(|| Ok(())).is_err());
+    assert!(!out.join(changed).exists());
+}
