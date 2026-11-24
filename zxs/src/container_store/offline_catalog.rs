@@ -1,5 +1,7 @@
 //! Existing-only live-name view under the original offline state lease.
-use super::{DataRoot, Id, hex, invalid, recycle, replay_selected_entries, routes};
+use super::{
+    DataRoot, Id, hex, invalid, recycle, recycle_receipt::RecycleRole, replay_selected_entries, routes,
+};
 use crate::fs::{HeldDir, ReadAccess};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -56,11 +58,12 @@ pub(crate) fn live_names(
     recycle_root: &HeldDir,
     data: &[DataRoot],
     pool: Id,
+    recycle_token: [u8; 32],
     require_original: impl Fn() -> io::Result<()>,
 ) -> io::Result<BTreeSet<String>> {
     require_original()?;
     recycle::Recycle::require_roles(system, recycle_root, data)?;
-    let names = read_live_names(system, recycle_root, data, pool)?;
+    let names = read_live_names(system, recycle_root, data, RecycleRole { pool, token: recycle_token })?;
     recycle::Recycle::require_roles(system, recycle_root, data)?;
     require_original()?;
     Ok(names)
@@ -70,15 +73,18 @@ fn read_live_names(
     system: &HeldDir,
     recycle_root: &HeldDir,
     data: &[DataRoot],
-    pool: Id,
+    role: RecycleRole,
 ) -> io::Result<BTreeSet<String>> {
-    if data.is_empty() || pool == [0; 16] {
+    role.require()?;
+    if data.is_empty() {
         return Err(invalid("offline catalog requires the current DATA roster"));
     }
     let mut volumes = BTreeMap::new();
     for volume in data {
         let directory = Namespace::open(&volume.root, c"data")?;
-        if volume.token == [0; 32] || volumes.insert(volume.token, directory).is_some() {
+        if volume.token == [0; 32] || volume.token == role.token
+            || volumes.insert(volume.token, directory).is_some()
+        {
             return Err(invalid("offline catalog sees an invalid DATA token"));
         }
     }
@@ -99,9 +105,9 @@ fn read_live_names(
         for id in ids {
             let token = routes::lookup_route(routes, id, ACCESS)?
                 .ok_or_else(|| invalid("offline catalog route vanished"))?;
-            if archived(&moves, &arrived, id)? {
+            if archived(&moves, &arrived, id, token, role)? {
                 if !volumes.contains_key(&token)
-                    && !recycle::read_retired_data(system, pool, token, ACCESS)?
+                    && !recycle::read_retired_data(system, role.pool, token, ACCESS)?
                 {
                     return Err(invalid("recycled route has no known DATA token"));
                 }
@@ -134,7 +140,9 @@ fn require_fresh(
     volumes.values().try_for_each(Namespace::require_empty)
 }
 
-fn archived(moves: &Namespace<'_>, arrived: &Namespace<'_>, id: Id) -> io::Result<bool> {
+fn archived(
+    moves: &Namespace<'_>, arrived: &Namespace<'_>, id: Id, token: [u8; 32], role: RecycleRole,
+) -> io::Result<bool> {
     let Some(moves) = &moves.selected else {
         return Ok(false);
     };
@@ -145,7 +153,8 @@ fn archived(moves: &Namespace<'_>, arrived: &Namespace<'_>, id: Id) -> io::Resul
         .selected
         .as_ref()
         .ok_or_else(|| invalid("selected offline recycle directory is absent"))?;
-    recycle::qualify_arrival(arrived, ready, ACCESS)?.require_named()?;
+    ready.require_data(token)?;
+    recycle::qualify_arrival(arrived, ready, role, ACCESS)?.require_named()?;
     Ok(true)
 }
 

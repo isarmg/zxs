@@ -14,6 +14,7 @@ use std::{
 
 const POOL: Id = [9; 16];
 const TOKEN: [u8; 32] = [8; 32];
+const ROLE: RecycleRole = RecycleRole { pool: POOL, token: [7; 32] };
 
 fn data(root: &Path) -> DataRoot {
     DataRoot {
@@ -52,7 +53,7 @@ impl Fixture {
 
     fn names(&self) -> io::Result<BTreeSet<String>> {
         // Sibling directories qualify local reads, not multi-device admission.
-        read_live_names(&self.system, &self.recycle, &self.data, POOL)
+        read_live_names(&self.system, &self.recycle, &self.data, ROLE)
     }
 }
 
@@ -175,4 +176,45 @@ fn unknown_routed_data_cannot_return_a_partial_live_catalog() {
     store.routes.reserve([4; 16], [7; 32]).unwrap();
     drop(store);
     assert!(fixture.names().is_err());
+}
+
+#[test]
+fn matching_ready_and_selector_cannot_hide_an_unrelated_source_route_or_recycle_role() {
+    let fixture = Fixture::new();
+    let store = fixture.store();
+    let id = [1; 16];
+    let request = [5; 16];
+    save(&store, id, "report");
+    drop(store);
+    let moves = fixture.system.path.join("container-moves");
+    let arrived = fixture.recycle.path.join("containers");
+    let arrival = arrived.join(format!("{}-{}", hex(id), hex(request)));
+    for directory in [&moves, &arrived, &arrival, &arrival.join("container")] {
+        ensure_dir(directory).unwrap();
+    }
+    let meta = fs::metadata(&arrival).unwrap();
+    let selector = moves.join(hex(id));
+    let ready = arrival.join("ready");
+    for path in [&selector, &ready] {
+        create_file(path).unwrap();
+    }
+    let make = |role, data, inode| recycle::RecycleReceipt::enrolled(
+        Mutation { container: id, request }, 1, role, data, (21, inode), [7; 32],
+    ).unwrap().encode();
+    let exact = make(ROLE, TOKEN, meta.ino());
+    fs::write(&selector, &exact).unwrap();
+    fs::write(&ready, &exact).unwrap();
+    assert!(fixture.names().unwrap().is_empty());
+    for wrong in [
+        make(ROLE, [11; 32], meta.ino()),
+        make(RecycleRole { token: [12; 32], ..ROLE }, TOKEN, meta.ino()),
+        make(RecycleRole { pool: [13; 16], ..ROLE }, TOKEN, meta.ino()),
+        make(ROLE, TOKEN, meta.ino() ^ (1 << 63)),
+    ] {
+        for path in [&selector, &ready] {
+            fs::write(path, &wrong).unwrap();
+        }
+        assert!(fixture.names().is_err());
+        assert!(fixture.data[0].root.path.join("data").join(hex(id)).exists());
+    }
 }

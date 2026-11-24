@@ -1,6 +1,6 @@
 //! Offline retirement of a clean DATA root. The disk itself is never changed.
 use super::{
-    DESCRIPTOR, FIXED_ROOTS, LOGIN, OfflineSession, SCOPED, field, fixed, read,
+    DESCRIPTOR, FIXED_ROOTS, LOGIN, OfflineSession, Record, SCOPED, field, fixed, read,
     stage::{finish_stage, read_stage},
     stamp,
 };
@@ -17,6 +17,8 @@ const RETIRED: &str = "retired-data";
 const DATA_ROLE: u8 = 1;
 const ROLE_ONLY: u8 = 0b0001;
 const INITIALIZED: u8 = 0b1111;
+const LEGACY_RECEIPT_BYTES: usize = 108;
+const STABLE_RECEIPT_BYTES: usize = 172;
 
 impl SelectedRoles {
     pub(crate) fn retire_data(self, target: &Path) -> io::Result<()> {
@@ -72,7 +74,15 @@ impl OfflineSession {
                 INITIALIZED => true,
                 _ => return Err(refused()),
             };
-            archive_routes(system, &token, uid, initialized)?;
+            let archive = ArchiveReceipts {
+                recycle: &selected.roots[1].directory,
+                pool,
+                data_token: &token,
+                recycle_token: &self.identity.tokens[1],
+                source_device: target.metadata()?.dev(),
+                uid,
+            };
+            archive_routes(system, &archive, initialized)?;
             prove_target(target, uid, initialized)?;
             self.require_original()
         };
@@ -316,7 +326,95 @@ pub(super) fn retired(
     Ok(true)
 }
 
-fn archive_routes(system: &File, token: &[u8; 32], uid: u32, initialized: bool) -> io::Result<()> {
+/// R always means the RECYCLE root held and checked against this descriptor,
+/// never a name from a receipt. Only RC1 still uses the current device numbers.
+struct ArchiveReceipts<'a> {
+    recycle: &'a File,
+    pool: &'a [u8; 16],
+    data_token: &'a [u8; 32],
+    recycle_token: &'a [u8; 32],
+    source_device: u64,
+    uid: u32,
+}
+
+impl ArchiveReceipts<'_> {
+    fn require_arrival(&self, name: &str, container: &[u8], receipt: &[u8]) -> io::Result<()> {
+        let legacy = receipt.len() == LEGACY_RECEIPT_BYTES && receipt.starts_with(b"RC1\0");
+        let stable = receipt.len() == STABLE_RECEIPT_BYTES && receipt.starts_with(b"RC2\0");
+        if !(legacy || stable)
+            || &receipt[4..20] != container
+            || receipt[20..36] == [0; 16]
+            || receipt[36..44] == [0; 8]
+        {
+            return Err(refused());
+        }
+        let (arrived_inode, arrived_device) = if legacy {
+            let source = word(receipt, 44)?;
+            let recycle = word(receipt, 60)?;
+            if source == recycle || source != self.source_device || word(receipt, 52)? == 0 {
+                return Err(refused());
+            }
+            (word(receipt, 68)?, Some(recycle))
+        } else {
+            // The CR1 route, target role marker, and roster already identify
+            // DATA. RC2 must also name the exact enrolled pool and R role.
+            if receipt[44..60] == [0; 16]
+                || &receipt[44..60] != self.pool
+                || receipt[60..92] == [0; 32]
+                || &receipt[60..92] != self.data_token
+                || receipt[92..124] == [0; 32]
+                || &receipt[92..124] != self.recycle_token
+                || self.data_token == self.recycle_token
+                || word(receipt, 124)? == 0
+            {
+                return Err(refused());
+            }
+            (word(receipt, 132)?, None)
+        };
+        if arrived_inode == 0 {
+            return Err(refused());
+        }
+        let arrivals = child(self.recycle, "containers", self.uid)?.ok_or_else(refused)?;
+        let leaf = format!("{name}-{}", hex(&receipt[20..36]));
+        let envelope = child(&arrivals, &leaf, self.uid)?.ok_or_else(refused)?;
+        let info = envelope.metadata()?;
+        if info.ino() != arrived_inode || arrived_device.is_some_and(|dev| info.dev() != dev) {
+            return Err(refused());
+        }
+        let ready = read(&envelope, "ready", self.uid)?;
+        if ready.full.as_slice() != receipt {
+            return Err(refused());
+        }
+        let payload = child(&envelope, "container", self.uid)?.ok_or_else(refused)?;
+        require_record(&envelope, "ready", &ready, self.uid)?;
+        require_named(&envelope, "container", &payload, self.uid)?;
+        require_named(&arrivals, &leaf, &envelope, self.uid)?;
+        require_named(self.recycle, "containers", &arrivals, self.uid)
+    }
+}
+
+fn word(bytes: &[u8], start: usize) -> io::Result<u64> {
+    Ok(u64::from_be_bytes(fixed(&mut &bytes[start..])?))
+}
+
+fn require_record(parent: &File, name: &str, record: &Record, uid: u32) -> io::Result<()> {
+    let named = read(parent, name, uid)?;
+    if stamp(&named.meta) != stamp(&record.meta)
+        || stamp(&record.held.metadata()?) != stamp(&record.meta)
+        || named.full.as_slice() != record.full.as_slice()
+    {
+        return Err(refused());
+    }
+    Ok(())
+}
+
+fn archive_routes(
+    system: &File,
+    archive: &ArchiveReceipts<'_>,
+    initialized: bool,
+) -> io::Result<()> {
+    let uid = archive.uid;
+    let token = archive.data_token;
     let Some(routes) = child(system, "container-routes", uid)? else {
         return Ok(());
     };
@@ -373,20 +471,20 @@ fn archive_routes(system: &File, token: &[u8; 32], uid: u32, initialized: bool) 
         };
         let area = moves.as_ref().ok_or_else(missing)?;
         let selected = read_stage(area, name, uid)?.ok_or_else(missing)?;
-        let receipt = selected.full.as_slice();
-        if receipt.len() != 108
-            || &receipt[..4] != b"RC1\0"
-            || receipt[4..20] != raw[4..20]
-            || receipt[20..36] == [0; 16]
-            || receipt[36..44] == [0; 8]
-            || receipt[44..52] == receipt[60..68]
-        {
-            return Err(io::Error::other(format!(
-                "DATA {}: container {name} has an invalid selected recycle record",
-                hex(token)
-            )));
-        }
+        archive
+            .require_arrival(name, &raw[4..20], &selected.full)
+            .map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!(
+                        "DATA {}: container {name} has an invalid selected recycle record",
+                        hex(token)
+                    ),
+                )
+            })?;
         selected.held.sync_all()?;
+        require_record(area, name, &selected, uid)?;
+        require_record(&routes, name, &record, uid)?;
     }
     if let Some(moves) = moves {
         moves.sync_all()?;
@@ -396,3 +494,7 @@ fn archive_routes(system: &File, token: &[u8; 32], uid: u32, initialized: bool) 
     require_named(system, "container-routes", &routes, uid)?;
     system.sync_all()
 }
+
+#[cfg(test)]
+#[path = "../../../tests/maintenance/retire_data_receipts.rs"]
+mod tests;

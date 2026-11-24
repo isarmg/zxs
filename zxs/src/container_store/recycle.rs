@@ -1,11 +1,14 @@
 //! Directed whole-container move from ordinary storage to recycle storage.
 //! A small SYSTEM receipt selects exactly one qualified R installation.
 use super::{
-    Change, DataRoot, Error, FlatStage, Id, Mutation, State, entry_leaf, hex, invalid,
-    recycle_material, volume::DataVolume,
+    Change, DataRoot, Error, FlatStage, Id, Mutation, State, entry_leaf, hex, invalid, read_state,
+    recycle_material::{self, ProofFormat, SourceRow},
+    recycle_receipt::{ENROLLED_BYTES, LEGACY_BYTES, RecycleRole},
+    volume::DataVolume,
 };
+pub(crate) use super::recycle_receipt::RecycleReceipt;
 use crate::{
-    fs::{HeldDir, OPAQUE_STAMP_BYTES, ReadAccess},
+    fs::{HeldDir, ReadAccess},
     hash::Sha256,
 };
 use std::{
@@ -20,89 +23,30 @@ use std::{
     },
 };
 
-const BYTES: usize = 108;
 const RETIRED_BYTES: usize = 52;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RecycleReceipt {
-    pub(crate) mutation: Mutation,
-    pub(crate) original_sequence: u64,
-    source_device: u64,
-    source_inode: u64,
-    recycle_device: u64,
-    recycle_inode: u64,
-    source_proof: [u8; 32],
-}
-
-impl RecycleReceipt {
-    fn encode(self) -> [u8; BYTES] {
-        let mut value = [0; BYTES];
-        value[..4].copy_from_slice(b"RC1\0");
-        value[4..20].copy_from_slice(&self.mutation.container);
-        value[20..36].copy_from_slice(&self.mutation.request);
-        for (i, field) in [
-            self.original_sequence,
-            self.source_device,
-            self.source_inode,
-            self.recycle_device,
-            self.recycle_inode,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            value[36 + i * 8..44 + i * 8].copy_from_slice(&field.to_be_bytes());
-        }
-        value[76..108].copy_from_slice(&self.source_proof);
-        value
+fn read_ready(
+    parent: &HeldDir,
+    name: &CStr,
+    access: ReadAccess,
+) -> io::Result<Option<RecycleReceipt>> {
+    let Some(original) = parent.opaque_pin_with(name, access)? else {
+        parent.require_named()?;
+        return Ok(None);
+    };
+    let len = original.file.metadata()?.len();
+    if len != LEGACY_BYTES as u64 && len != ENROLLED_BYTES as u64 {
+        return Err(invalid("invalid recycle receipt size"));
     }
-    fn read(parent: &HeldDir, name: &CStr) -> io::Result<Option<Self>> {
-        Self::read_with(parent, name, ReadAccess::Ordinary)
+    let mut bytes = [0; ENROLLED_BYTES];
+    let raw = &mut bytes[..len as usize];
+    let mut input = &original.file;
+    input.read_exact(raw)?;
+    if input.read(&mut [0; 1])? != 0 {
+        return Err(invalid("recycle receipt grew while reading"));
     }
-
-    fn read_with(parent: &HeldDir, name: &CStr, access: ReadAccess) -> io::Result<Option<Self>> {
-        let Some(original) = parent.opaque_pin_with(name, access)? else {
-            parent.require_named()?;
-            return Ok(None);
-        };
-        if original.file.metadata()?.len() != BYTES as u64 {
-            return Err(invalid("invalid recycle receipt size"));
-        }
-        let mut bytes = [0; BYTES];
-        (&original.file).read_exact(&mut bytes)?;
-        original.require(parent, name)?;
-        if &bytes[..4] != b"RC1\0" {
-            return Err(invalid("unknown recycle receipt"));
-        }
-        let id =
-            |i| <[u8; 16]>::try_from(&bytes[i..i + 16]).map_err(|_| invalid("invalid recycle ID"));
-        let word = |i| {
-            <[u8; 8]>::try_from(&bytes[i..i + 8])
-                .map(u64::from_be_bytes)
-                .map_err(|_| invalid("invalid recycle coordinate"))
-        };
-        let receipt = Self {
-            mutation: Mutation {
-                container: id(4)?,
-                request: id(20)?,
-            },
-            original_sequence: word(36)?,
-            source_device: word(44)?,
-            source_inode: word(52)?,
-            recycle_device: word(60)?,
-            recycle_inode: word(68)?,
-            source_proof: bytes[76..108]
-                .try_into()
-                .map_err(|_| invalid("invalid source proof identity"))?,
-        };
-        if receipt.mutation.container == [0; 16]
-            || receipt.mutation.request == [0; 16]
-            || receipt.original_sequence == 0
-            || receipt.source_device == receipt.recycle_device
-        {
-            return Err(invalid("invalid recycle transaction identity"));
-        }
-        Ok(Some(receipt))
-    }
+    original.require(parent, name)?;
+    RecycleReceipt::decode(raw).map(Some)
 }
 
 pub(super) fn read_selector(
@@ -111,7 +55,7 @@ pub(super) fn read_selector(
     access: ReadAccess,
 ) -> io::Result<Option<RecycleReceipt>> {
     let name = CString::new(hex(id)).map_err(|_| invalid("invalid recycle selector name"))?;
-    let Some(ready) = RecycleReceipt::read_with(moves, &name, access)? else {
+    let Some(ready) = read_ready(moves, &name, access)? else {
         return Ok(None);
     };
     if ready.mutation.container != id {
@@ -132,9 +76,10 @@ fn held_arrived_at(arrived: &HeldDir, mutation: Mutation) -> io::Result<Option<H
 pub(super) fn qualify_arrival(
     arrived: &HeldDir,
     ready: RecycleReceipt,
+    role: RecycleRole,
     access: ReadAccess,
 ) -> io::Result<HeldDir> {
-    qualified_envelope(arrived, ready, access)?
+    qualified_envelope(arrived, ready, role, access)?
         .child_directory(c"container")?
         .ok_or_else(|| invalid("selected recycled container is absent"))
 }
@@ -142,18 +87,16 @@ pub(super) fn qualify_arrival(
 fn qualified_envelope(
     arrived: &HeldDir,
     ready: RecycleReceipt,
+    role: RecycleRole,
     access: ReadAccess,
 ) -> io::Result<HeldDir> {
     let selected = held_arrived_at(arrived, ready.mutation)?
         .ok_or_else(|| invalid("selected recycle directory is absent"))?;
-    let known = selected.file.metadata()?;
-    if (known.dev(), known.ino()) != (ready.recycle_device, ready.recycle_inode)
-        || RecycleReceipt::read_with(&selected, c"ready", access)? != Some(ready)
-    {
-        return Err(invalid(
-            "recycle location differs from its original ready receipt",
-        ));
+    ready.require_arrival(role, selected.entity)?;
+    if read_ready(&selected, c"ready", access)? != Some(ready) {
+        return Err(invalid("recycle location differs from its original ready receipt"));
     }
+    selected.require_named()?;
     Ok(selected)
 }
 
@@ -194,7 +137,7 @@ pub(super) fn read_retired_data(
 /// Selected receipts never require opening the former DATA container.
 pub(super) struct Recycle {
     system: HeldDir,
-    pool: Id,
+    role: RecycleRole,
     archive_root: HeldDir,
     moves_directory: HeldDir,
     staging_directory: HeldDir,
@@ -202,6 +145,12 @@ pub(super) struct Recycle {
     _recycle_owner: File,
     receipt_fence: Mutex<()>,
     unsure: AtomicBool,
+}
+
+/// The chosen receipt and the exact R child that was copied or verified.
+pub(super) struct PreparedRecycle {
+    pub(super) receipt: RecycleReceipt,
+    pub(super) at: HeldDir,
 }
 
 impl Recycle {
@@ -253,20 +202,21 @@ impl Recycle {
     }
 
     /// The caller already retains the original SYSTEM owner.
-    pub(super) fn open(system: HeldDir, recycle: HeldDir, pool: Id) -> io::Result<Self> {
-        Self::select_namespaces(system, recycle, pool, true)
+    pub(super) fn open(system: HeldDir, recycle: HeldDir, role: RecycleRole) -> io::Result<Self> {
+        Self::select_namespaces(system, recycle, role, true)
     }
 
-    pub(super) fn open_existing(system: HeldDir, recycle: HeldDir, pool: Id) -> io::Result<Self> {
-        Self::select_namespaces(system, recycle, pool, false)
+    pub(super) fn open_existing(system: HeldDir, recycle: HeldDir, role: RecycleRole) -> io::Result<Self> {
+        Self::select_namespaces(system, recycle, role, false)
     }
 
     fn select_namespaces(
         system: HeldDir,
         recycle: HeldDir,
-        pool: Id,
+        role: RecycleRole,
         may_create: bool,
     ) -> io::Result<Self> {
+        role.require()?;
         let owner = if may_create {
             recycle.opaque_owner(c"container-owner")?
         } else {
@@ -294,7 +244,7 @@ impl Recycle {
         recycle.require_named()?;
         Ok(Self {
             system,
-            pool,
+            role,
             archive_root: recycle,
             _recycle_owner: owner,
             moves_directory,
@@ -331,7 +281,7 @@ impl Recycle {
 
     fn qualify(&self, ready: RecycleReceipt) -> io::Result<HeldDir> {
         self.held()?;
-        qualify_arrival(&self.arrived_directory, ready, ReadAccess::Ordinary)
+        qualify_arrival(&self.arrived_directory, ready, self.role, ReadAccess::Ordinary)
     }
 
     pub(super) fn selected(&self, id: Id) -> io::Result<Option<(RecycleReceipt, HeldDir)>> {
@@ -357,7 +307,7 @@ impl Recycle {
         state: &State,
         candidate: &mut FlatStage<'_>,
         live: impl Fn() -> io::Result<()>,
-    ) -> Result<RecycleReceipt, Error> {
+    ) -> Result<PreparedRecycle, Error> {
         self.held()?;
         live()?;
         let held = ordinary
@@ -367,22 +317,38 @@ impl Recycle {
         let destination = CString::new(arrived_leaf(mutation))
             .map_err(|_| invalid("invalid recycle arrival position"))?;
         if let Some(arrived) = self.held_arrived(mutation)? {
-            let old = RecycleReceipt::read(&arrived, c"ready")?.ok_or_else(|| {
-                invalid("recycle position is occupied without matching ready proof")
-            })?;
-            if (
-                old.mutation,
-                old.original_sequence,
-                old.source_device,
-                old.source_inode,
-            ) != (mutation, state.sequence, before.dev(), before.ino())
-            {
+            let old = read_ready(&arrived, c"ready", ReadAccess::Ordinary)?
+                .ok_or_else(|| invalid("recycle position is occupied without matching ready proof"))?;
+            if (old.mutation, old.original_sequence) != (mutation, state.sequence) {
                 return Err(super::Conflict::RequestReused.into());
             }
-            self.qualify(old)?;
+            if !old.is_enrolled() {
+                return Err(invalid("unselected legacy recycle material is preserved, not adopted").into());
+            }
+            old.require_source(ordinary.token, held.entity)?;
+            let envelope = qualified_envelope(
+                &self.arrived_directory, old, self.role, ReadAccess::Ordinary,
+            )?;
+            if envelope.entity != arrived.entity || !envelope.same_mount(&arrived)? {
+                return Err(invalid("original recycle arrival was replaced").into());
+            }
+            let archive = envelope.child_directory(c"container")?
+                .ok_or_else(|| invalid("selected recycled container is absent"))?;
+            let exact = read_state(&archive, mutation.container)?;
+            if exact.sequence != state.sequence || exact.receipts != state.receipts {
+                return Err(invalid("prepared archive does not match the current original history").into());
+            }
+            recycle_material::verify_recovered(&exact.receipts, &archive, &live)?;
+            prove_source(old, state, &held, &envelope, true)?;
             self.arrived_directory.file.sync_all()?;
             self.staging_directory.file.sync_all()?;
-            return Ok(old);
+            archive.require_named()?;
+            held.require_named()?;
+            live()?;
+            return Ok(PreparedRecycle {
+                receipt: old,
+                at: archive,
+            });
         }
         let mut tree = recycle_material::CopyTree::new(&candidate.directory)?;
         let evidence = candidate.create(c"source-proof")?;
@@ -394,15 +360,10 @@ impl Recycle {
                 live()
             })?;
         let into = candidate.directory.file.metadata()?;
-        let proof = RecycleReceipt {
-            mutation,
-            original_sequence: state.sequence,
-            source_device: before.dev(),
-            source_inode: before.ino(),
-            recycle_device: into.dev(),
-            recycle_inode: into.ino(),
-            source_proof,
-        };
+        let proof = RecycleReceipt::enrolled(
+            mutation, state.sequence, self.role, ordinary.token,
+            (before.ino(), into.ino()), source_proof,
+        )?;
         candidate.write(c"ready", &proof.encode())?;
         candidate.directory.file.sync_all()?;
         self.held()?;
@@ -412,30 +373,43 @@ impl Recycle {
         if (before.dev(), before.ino()) != (after.dev(), after.ino()) {
             return Err(invalid("source container changed while recycling").into());
         }
-        tree.require_named()?;
-        candidate.publish_directory(&self.arrived_directory, &destination, live)?;
+        candidate.publish_directory(&self.arrived_directory, &destination, || {
+            tree.require_named()?;
+            live()
+        })?;
         self.arrived_directory.file.sync_all()?;
         self.staging_directory.file.sync_all()?;
-        self.qualify(proof)?;
-        Ok(proof)
+        let at = self.qualify(proof)?;
+        tree.require_arrived(&at)?;
+        Ok(PreparedRecycle { receipt: proof, at })
     }
 
     pub(super) fn choose(
         &self,
-        receipt: RecycleReceipt,
+        prepared: &PreparedRecycle,
         candidate: &mut FlatStage<'_>,
         authorize: impl FnOnce() -> io::Result<()>,
     ) -> Result<(), Error> {
+        let receipt = prepared.receipt;
         let _cut = self
             .receipt_fence
             .lock()
             .map_err(|_| invalid("recycle receipt cut unavailable"))?;
-        self.qualify(receipt)?;
+        if !receipt.is_enrolled() {
+            return Err(invalid("new recycle selection requires an enrolled-role receipt").into());
+        }
         candidate.write(c"selector", &receipt.encode())?;
         let selected = CString::new(hex(receipt.mutation.container))
             .map_err(|_| invalid("invalid recycle selector name"))?;
         self.held()?;
-        candidate.publish_record(c"selector", &self.moves_directory, &selected, authorize)?;
+        candidate.publish_record(c"selector", &self.moves_directory, &selected, || {
+            let named = self.qualify(receipt)?;
+            if named.entity != prepared.at.entity || !named.same_mount(&prepared.at)? {
+                return Err(invalid("prepared recycle child changed before selection"));
+            }
+            prepared.at.require_named()?;
+            authorize()
+        })?;
         if let Err(e) = self.moves_directory.file.sync_all() {
             self.unsure.store(true, Ordering::Release);
             return Err(Error::Uncertain(e));
@@ -465,7 +439,7 @@ impl Recycle {
     /// The offline owner publishes this record before removing the disk
     /// from the roster. The caller checks that the original token is absent.
     pub(super) fn retired_data(&self, token: [u8; 32]) -> io::Result<bool> {
-        read_retired_data(&self.system, self.pool, token, ReadAccess::Ordinary)
+        read_retired_data(&self.system, self.role.pool, token, ReadAccess::Ordinary)
     }
 
     /// Validate the full original metadata proof before the first unlink.
@@ -478,67 +452,78 @@ impl Recycle {
         receipt: RecycleReceipt,
         ordinary: &DataVolume,
         known: &State,
+        verify_copy: impl FnOnce() -> io::Result<()>,
+        authorize: impl Fn() -> io::Result<()>,
     ) -> io::Result<()> {
         self.require_selected(receipt, known)?;
+        receipt.require_data(ordinary.token)?;
         let parent = ordinary.contents();
         let leaf = CString::new(hex(receipt.mutation.container))
             .map_err(|_| invalid("invalid original container name"))?;
         let Some(original) = ordinary.held_container(receipt.mutation.container)? else {
+            authorize()?;
             return parent.confirm_absence(&leaf);
         };
-        if (original.entity.device, original.entity.inode)
-            != (receipt.source_device, receipt.source_inode)
-        {
-            return Err(invalid(
-                "source retirement no longer identifies the exact moved container",
-            ));
-        }
-        let entries = known
-            .receipts
-            .values()
-            .map(|r| entry_leaf(r.sequence, r.mutation.request))
-            .collect::<BTreeSet<_>>();
-        original.each_name(ReadAccess::Ordinary, |name| {
-            if std::str::from_utf8(name).is_ok_and(|s| entries.contains(s)) {
-                Ok(())
-            } else {
-                Err(invalid("unknown source descendant prevents retirement"))
-            }
-        })?;
-        original.require_named()?;
+        receipt.require_source(ordinary.token, original.entity)?;
         let proof_root =
-            qualified_envelope(&self.arrived_directory, receipt, ReadAccess::Ordinary)?;
-        let proof = proof_root
-            .opaque_pin(c"source-proof")?
-            .ok_or_else(|| invalid("retirement evidence is absent"))?;
-        let mut input = &proof.file;
-        let mut digest = Sha256::new();
-        let mut rows = Vec::new();
-        rows.try_reserve_exact(known.receipts.len())
-            .map_err(|_| io::Error::other("cannot retain exact retirement metadata"))?;
-        for saved in known.receipts.values() {
-            let mut row = [0; recycle_material::PROOF_ROW];
-            input.read_exact(&mut row)?;
-            digest.update(&row)?;
-            rows.push(row);
-            retire_entry(&original, saved, &row, false)?;
-        }
-        let mut extra = [0; 1];
-        if input.read(&mut extra)? != 0 || digest.finish() != receipt.source_proof {
-            return Err(invalid(
-                "source retirement evidence does not bind the exact moved copy",
-            ));
-        }
-        proof.require(&proof_root, c"source-proof")?;
-        // No unlink occurred before all rows and the exact source mount
-        // were verified. Each old member is checked again at the syscall.
-        for (saved, row) in known.receipts.values().zip(rows.iter()) {
+            qualified_envelope(&self.arrived_directory, receipt, self.role, ReadAccess::Ordinary)?;
+        // A recovery verifies the archived bodies only when this exact source
+        // is still present. The same held source is used through retirement.
+        verify_copy()?;
+        let rows = prove_source(receipt, known, &original, &proof_root, false)?;
+        let before_unlink = || {
             ordinary.require_named()?;
-            retire_entry(&original, saved, row, true)?;
+            original.require_named()?;
+            proof_root.require_named()?;
+            authorize()
+        };
+        // No unlink before the entire proof and final live authority succeed.
+        // Each source member is re-pinned and authorized again at its unlink.
+        before_unlink()?;
+        for (saved, row) in known.receipts.values().zip(rows.iter()) {
+            retire_entry(&original, saved, row, false, Some(&before_unlink))?;
         }
+        before_unlink()?;
         parent.unlink_empty_opaque_original(&leaf, &original)
     }
 }
+
+fn prove_source(
+    receipt: RecycleReceipt, known: &State, original: &HeldDir, proof_root: &HeldDir,
+    require_complete: bool,
+) -> io::Result<Vec<SourceRow>> {
+    let entries = known.receipts.values()
+        .map(|r| entry_leaf(r.sequence, r.mutation.request))
+        .collect::<BTreeSet<_>>();
+    original.each_name(ReadAccess::Ordinary, |name| {
+        if std::str::from_utf8(name).is_ok_and(|s| entries.contains(s)) {
+            Ok(())
+        } else {
+            Err(invalid("unknown source descendant prevents retirement"))
+        }
+    })?;
+    original.require_named()?;
+    let proof = proof_root.opaque_pin(c"source-proof")?
+        .ok_or_else(|| invalid("retirement evidence is absent"))?;
+    let mut input = &proof.file;
+    let mut digest = Sha256::new();
+    let mut rows = Vec::new();
+    let format = if receipt.is_enrolled() { ProofFormat::Enrolled } else { ProofFormat::Legacy };
+    rows.try_reserve_exact(known.receipts.len())
+        .map_err(|_| io::Error::other("cannot retain exact retirement metadata"))?;
+    for saved in known.receipts.values() {
+        let row = SourceRow::read(&mut input, format, matches!(saved.change, Change::Save { .. }))?;
+        digest.update(row.bytes())?;
+        retire_entry(original, saved, &row, require_complete, None)?;
+        rows.push(row);
+    }
+    if input.read(&mut [0; 1])? != 0 || digest.finish() != receipt.source_proof {
+        return Err(invalid("source retirement evidence does not bind the exact moved copy"));
+    }
+    proof.require(proof_root, c"source-proof")?;
+    Ok(rows)
+}
+
 fn arrived_leaf(mutation: Mutation) -> String {
     format!("{}-{}", hex(mutation.container), hex(mutation.request))
 }
@@ -546,29 +531,19 @@ fn arrived_leaf(mutation: Mutation) -> String {
 fn retire_entry(
     original: &HeldDir,
     receipt: &super::Receipt,
-    row: &[u8; recycle_material::PROOF_ROW],
-    remove: bool,
+    row: &SourceRow,
+    require_complete: bool,
+    before_unlink: Option<&dyn Fn() -> io::Result<()>>,
 ) -> io::Result<()> {
     let leaf = CString::new(entry_leaf(receipt.sequence, receipt.mutation.request))
         .map_err(|_| invalid("invalid source member label"))?;
     let Some(entry) = original.child_directory(&leaf)? else {
+        if require_complete {
+            return Err(invalid("a prepared unselected archive lost an original source entry"));
+        }
         return Ok(());
     };
-    let dev = u64::from_be_bytes(
-        row[..8]
-            .try_into()
-            .map_err(|_| invalid("invalid source member device"))?,
-    );
-    let ino = u64::from_be_bytes(
-        row[8..16]
-            .try_into()
-            .map_err(|_| invalid("invalid source member inode"))?,
-    );
-    if (entry.entity.device, entry.entity.inode) != (dev, ino) || !original.same_mount(&entry)? {
-        return Err(invalid(
-            "source member is not the same copied original directory",
-        ));
-    }
+    row.require_directory(entry.entity, original.same_mount(&entry)?)?;
     let body = matches!(receipt.change, Change::Save { .. });
     if entry
         .names()?
@@ -583,27 +558,22 @@ fn retire_entry(
     } else {
         None
     };
-    if record
-        .as_ref()
-        .is_some_and(|f| f.stamp().as_slice() != &row[16..16 + OPAQUE_STAMP_BYTES])
-        || payload
-            .as_ref()
-            .is_some_and(|f| f.stamp().as_slice() != &row[16 + OPAQUE_STAMP_BYTES..])
-        || record.is_none() && payload.is_some()
-    {
-        return Err(invalid(
-            "old source names no longer identify equal copied originals",
-        ));
+    if require_complete && (record.is_none() || body && payload.is_none()) {
+        return Err(invalid("a prepared unselected archive lost an original source member"));
     }
-    if remove {
+    row.require_members(record.as_ref(), payload.as_ref())?;
+    if let Some(check) = before_unlink {
         if let Some(body) = payload {
+            check()?;
             entry.unlink_opaque_original(c"payload", &body)?;
         }
         // Payload unlink above is synchronized before receipt unlink, so
         // restart can distinguish an original partial cleanup safely.
         if let Some(record) = record {
+            check()?;
             entry.unlink_opaque_original(c"receipt", &record)?;
         }
+        check()?;
         original.unlink_empty_opaque_original(&leaf, &entry)?;
     }
     Ok(())

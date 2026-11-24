@@ -1,7 +1,8 @@
 //! One explicitly planned complete import to an already initialized DATA disk.
 use super::{
     Body, Change, Conflict, DataRoot, DataVolume, Error, Id, Mutation, NodeId, OperationReceipt,
-    Receipt, Routes, Store, Target, invalid, qualify_roster, recycle::Recycle, unenrolled_data,
+    Receipt, Routes, Store, Target, invalid, qualify_roster, recycle::Recycle,
+    recycle_receipt::RecycleRole, unenrolled_data,
 };
 use crate::{display, fs::HeldDir, hash::Sha256};
 use std::{
@@ -152,11 +153,12 @@ impl OfflineImport {
         recycle: HeldDir,
         data: Vec<DataRoot>,
         pool: Id,
+        recycle_token: [u8; 32],
         require_original: impl Fn() -> io::Result<()>,
     ) -> io::Result<Self> {
         require_original()?;
         Recycle::require_roles(&system, &recycle, &data)?;
-        let writer = Self::open_existing(system, recycle, data, pool)?;
+        let writer = Self::open_existing(system, recycle, data, pool, recycle_token)?;
         require_original()?;
         Ok(writer)
     }
@@ -166,7 +168,13 @@ impl OfflineImport {
         recycle: HeldDir,
         mut data: Vec<DataRoot>,
         pool: Id,
+        recycle_token: [u8; 32],
     ) -> io::Result<Self> {
+        let role = RecycleRole { pool, token: recycle_token };
+        role.require()?;
+        if data.iter().any(|volume| volume.token == recycle_token) {
+            return Err(invalid("DATA and recycle cannot share an enrolled token"));
+        }
         qualify_roster(&mut data)?;
         let owner = system.existing_opaque_owner(c"container-owner")?;
         let routes = Routes::open_existing(&system)?
@@ -175,7 +183,7 @@ impl OfflineImport {
             .into_iter()
             .map(DataVolume::open_existing)
             .collect::<io::Result<Vec<_>>>()?;
-        let archive = Recycle::open_existing(system, recycle, pool)?;
+        let archive = Recycle::open_existing(system, recycle, role)?;
         let mut store = Store::from_roster(volumes, routes, owner);
         store.archive = Some(archive);
         Ok(Self { store, pool })

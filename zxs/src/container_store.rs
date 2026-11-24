@@ -8,6 +8,7 @@ mod operation;
 mod payload;
 mod recycle;
 mod recycle_material;
+mod recycle_receipt;
 mod routes;
 mod stage;
 mod volume;
@@ -264,11 +265,17 @@ impl Store {
         data: Vec<DataRoot>,
         recycled: HeldDir,
         pool: Id,
+        recycle_token: [u8; 32],
     ) -> io::Result<Self> {
+        let role = recycle_receipt::RecycleRole { pool, token: recycle_token };
+        role.require()?;
+        if data.iter().any(|volume| volume.token == recycle_token) {
+            return Err(invalid("DATA and recycle cannot share an enrolled token"));
+        }
         recycle::Recycle::require_roles(&system, &recycled, &data)?;
         let owner = system.opaque_owner(c"container-owner")?;
         let mut store = Self::open_roster(&system, data, owner)?;
-        store.archive = Some(recycle::Recycle::open(system, recycled, pool)?);
+        store.archive = Some(recycle::Recycle::open(system, recycled, role)?);
         Ok(store)
     }
 
@@ -350,9 +357,23 @@ impl Store {
     }
 
     fn recycled(&self, id: Id) -> io::Result<Option<(RecycleReceipt, HeldDir)>> {
-        self.archive
-            .as_ref()
-            .map_or(Ok(None), |archive| archive.selected(id))
+        let Some(archive) = self.archive.as_ref() else {
+            return Ok(None);
+        };
+        let selected = archive.selected(id)?;
+        if let Some((receipt, _)) = &selected
+            && receipt.is_enrolled()
+        {
+            let token = self.routes.get(id)?
+                .ok_or_else(|| invalid("selected recycle record has no original DATA route"))?;
+            receipt.require_data(token)?;
+            // A configured DATA token is valid even if its held mount is now offline.
+            // A token no longer in the roster requires an exact durable retirement.
+            if self.enrolled(token).is_none() && !archive.retired_data(token)? {
+                return Err(unenrolled_data());
+            }
+        }
+        Ok(selected)
     }
 
     fn object(&self, id: Id) -> io::Result<Arc<Mutex<Option<State>>>> {
@@ -649,11 +670,11 @@ impl Store {
             .lock()
             .map_err(|_| invalid("container selection unavailable"))?;
         authorize()?;
-        if let Some((done, at)) = archive.selected(mutation.container)? {
+        if let Some((done, at)) = self.recycled(mutation.container)? {
             if (done.mutation, done.original_sequence) != (mutation, expected_sequence) {
                 return Err(Conflict::RequestReused.into());
             }
-            if let Err(error) = self.finish_recycle(archive, done, &at) {
+            if let Err(error) = self.finish_recycle(archive, done, &at, &authorize) {
                 return Err(Error::CleanupPending {
                     receipt: done,
                     error,
@@ -675,10 +696,11 @@ impl Store {
             return Err(Conflict::SequenceChanged(state.sequence).into());
         }
         let mut incoming = self.flat_stage_at(archive.staging()?)?;
-        let done = archive.prepare(mutation, volume, state, &mut incoming, || {
+        let prepared = archive.prepare(mutation, volume, state, &mut incoming, || {
             authorize()?;
             volume.require_named()
         })?;
+        let done = prepared.receipt;
         let mut selector = self.flat_stage_at(archive.moves()?)?;
         // Only one small SYSTEM rename switches logical visibility. The
         // ordinary namespace guard contains no streaming/hash work.
@@ -687,12 +709,24 @@ impl Store {
                 .names
                 .lock()
                 .map_err(|_| invalid("container name selection unavailable"))?;
-            archive.choose(done, &mut selector, || {
+            archive.choose(&prepared, &mut selector, || {
                 volume.require_named()?;
+                let token = self.routes.get(mutation.container)?
+                    .ok_or_else(|| invalid("selected recycle record has no original DATA route"))?;
+                done.require_data(token)?;
                 authorize()
             })?;
         }
-        if let Err(error) = archive.retire(done, volume, state) {
+        if let Err(error) = archive.retire(
+            done,
+            volume,
+            state,
+            || Ok(()),
+            || {
+                prepared.at.require_named()?;
+                authorize()
+            },
+        ) {
             return Err(Error::CleanupPending {
                 receipt: done,
                 error,
@@ -707,19 +741,40 @@ impl Store {
         archive: &recycle::Recycle,
         done: RecycleReceipt,
         at: &HeldDir,
+        authorize: &impl Fn() -> io::Result<()>,
     ) -> io::Result<()> {
         let id = done.mutation.container;
         let token = self
             .routes
             .get(id)?
             .ok_or_else(|| invalid("selected container route is absent"))?;
+        done.require_data(token)?;
+        let known = read_state(at, id)?;
+        archive.require_selected(done, &known)?;
         if let Some(volume) = self.enrolled(token) {
-            return archive.retire(done, volume, &read_state(at, id)?);
+            return archive.retire(
+                done,
+                volume,
+                &known,
+                || {
+                    if done.is_enrolled() {
+                        recycle_material::verify_recovered(&known.receipts, at, || {
+                            authorize()?;
+                            volume.require_named()
+                        })?;
+                    }
+                    Ok(())
+                },
+                || {
+                    at.require_named()?;
+                    authorize()
+                },
+            );
         }
         if !archive.retired_data(token)? {
             return Err(unenrolled_data());
         }
-        archive.require_selected(done, &read_state(at, id)?)
+        authorize()
     }
 
     /// Verify the incoming continuation by walking back from this branch's

@@ -109,6 +109,7 @@ pub(crate) struct SelectedStart {
     system: HeldDir,
     data: Vec<DataRoot>,
     recycle: HeldDir,
+    recycle_token: [u8; 32],
 }
 
 impl SelectedStart {
@@ -178,6 +179,7 @@ impl SelectedStart {
             system,
             data,
             recycle,
+            recycle_token: roots.recycle.token,
         };
         start.require_named()?;
         Ok(start)
@@ -187,10 +189,12 @@ impl SelectedStart {
         &self,
         require_state: impl Fn(&HeldDir) -> io::Result<()>,
     ) -> io::Result<BTreeSet<String>> {
-        offline_catalog::live_names(&self.system, &self.recycle, &self.data, self.pool, || {
-            require_state(&self.state)?;
-            self.require_named()
-        })
+        offline_catalog::live_names(
+            &self.system, &self.recycle, &self.data, self.pool, self.recycle_token, || {
+                require_state(&self.state)?;
+                self.require_named()
+            },
+        )
     }
 
     fn require_named(&self) -> io::Result<()> {
@@ -276,9 +280,10 @@ impl SelectedStart {
             system,
             data,
             recycle,
+            recycle_token,
             ..
         } = self;
-        let writer = OfflineImport::open(system, recycle, data, pool, || require_state(&state))?;
+        let writer = OfflineImport::open(system, recycle, data, pool, recycle_token, || require_state(&state))?;
         Ok((writer, state))
     }
 
@@ -293,8 +298,9 @@ impl SelectedStart {
             system,
             data,
             recycle,
+            recycle_token,
         } = self;
-        let store = Store::open_with_recycle(system, data, recycle, pool)?;
+        let store = Store::open_with_recycle(system, data, recycle, pool, recycle_token)?;
         state.require_named()?;
         Ok(Bound {
             store,
