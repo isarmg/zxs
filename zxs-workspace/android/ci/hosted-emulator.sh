@@ -81,8 +81,29 @@ imageRoot="$ANDROID_HOME/system-images/android-35/default"
 mkdir -p "$imageRoot"
 unzip -q "$scratch/image.zip" -d "$imageRoot"
 unzip -q "$scratch/gradle.zip" -d "$scratch"
-grep -Eq '^Pkg.Revision[[:space:]]*=[[:space:]]*37[.]3[.]10[[:space:]]*$' \
-    "$ANDROID_HOME/emulator/source.properties"
+emulatorRoot="$ANDROID_HOME/emulator"
+[[ -x "$emulatorRoot/emulator" && -r "$emulatorRoot/lib/hardware-properties.ini" ]]
+for property in Pkg.Path=emulator Pkg.Revision=37.3.10 Pkg.BuildId=16970787; do
+    grep -Fxq "$property" "$emulatorRoot/source.properties"
+done
+# Google’s standalone ZIP has no installed SDK package descriptor. Register
+# only this verified version in the private SDK so avdmanager can load its
+# hardware defaults. Do not use sdkmanager to fetch or replace the emulator.
+(
+    set -o noclobber
+    cat > "$emulatorRoot/package.xml" <<'PACKAGE'
+<?xml version="1.0" encoding="UTF-8"?>
+<repo:repository xmlns:repo="http://schemas.android.com/repository/android/common/02"
+                 xmlns:generic="http://schemas.android.com/repository/android/generic/02"
+                 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <localPackage path="emulator">
+    <type-details xsi:type="generic:genericDetailsType"/>
+    <revision><major>37</major><minor>3</minor><micro>10</micro></revision>
+    <display-name>Android Emulator</display-name>
+  </localPackage>
+</repo:repository>
+PACKAGE
+)
 grep -Eq '^Pkg.Revision[[:space:]]*=[[:space:]]*2[[:space:]]*$' \
     "$imageRoot/x86_64/source.properties"
 for property in AndroidVersion.ApiLevel=35 SystemImage.TagId=default SystemImage.Abi=x86_64; do
